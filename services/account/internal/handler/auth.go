@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -191,9 +192,13 @@ func (h *AuthHandler) OIDCCallback(c *gin.Context) {
 	}
 
 	if h.appRedirectURL != "" {
-		redirect := fmt.Sprintf("%s?access_token=%s&username=%s&email=%s&avatar_url=%s&needs_registration=%t",
+		appLink := fmt.Sprintf("%s?access_token=%s&username=%s&email=%s&avatar_url=%s&needs_registration=%t",
 			h.appRedirectURL, accessToken, url.QueryEscape(user.Username), url.QueryEscape(user.Email), url.QueryEscape(user.AvatarURL), user.NeedsRegistration)
-		c.Redirect(http.StatusFound, redirect)
+		if strings.HasPrefix(h.appRedirectURL, "openfield://") || !strings.HasPrefix(h.appRedirectURL, "http") {
+			c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(loginResultPage(appLink)))
+			return
+		}
+		c.Redirect(http.StatusFound, appLink)
 		return
 	}
 
@@ -267,19 +272,38 @@ func bindResultPage(result, reason, accountName, appLink string) string {
 		btnHref = hmmAppFallback
 	}
 
+	iconClass := "ok"
+	iconGlyph := "&#10003;"
+	if !ok {
+		iconClass = "err"
+		iconGlyph = "&#10005;"
+	}
+
+	return renderResultPage(iconClass, iconGlyph, title, desc, btnLabel, btnHref)
+}
+
+// loginResultPage renders a small HTML page shown after a successful OIDC login.
+func loginResultPage(appLink string) string {
+	return renderResultPage("ok", "&#10003;", "登录成功",
+		"你的账号已登录成功。点击下方按钮打开 OpenField。",
+		"打开 OpenField", appLink)
+}
+
+// renderResultPage is the shared HTML template for OIDC result pages.
+func renderResultPage(iconClass, iconGlyph, title, desc, btnLabel, btnHref string) string {
 	return fmt.Sprintf(`<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>OpenField 账号绑定</title>
+<title>OpenField</title>
 <style>
   body { margin:0; font-family: -apple-system, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
          background:#f4f6f8; display:flex; align-items:center; justify-content:center; min-height:100vh; }
   .card { background:#fff; border-radius:16px; padding:40px 48px; text-align:center; max-width:420px;
-          box-shadow:0 4px 24px rgba(0,0,0,.08); }
+           box-shadow:0 4px 24px rgba(0,0,0,.08); }
   .icon { width:64px; height:64px; border-radius:50%%; margin:0 auto 20px; display:flex; align-items:center;
-          justify-content:center; font-size:34px; color:#fff; }
+           justify-content:center; font-size:34px; color:#fff; }
   .ok { background:#22c55e; } .err { background:#ef4444; }
   h1 { font-size:22px; margin:0 0 8px; color:#111827; }
   p { color:#6b7280; font-size:14px; line-height:1.6; margin:0 0 24px; }
@@ -294,10 +318,13 @@ func bindResultPage(result, reason, accountName, appLink string) string {
     <h1>%s</h1>
     <p>%s</p>
     <a class="button" href="%s">%s</a>
+    <script>
+      setTimeout(function() { window.location.href = "%s"; }, 1500);
+    </script>
   </div>
 </body>
 </html>`,
-		iconClass(ok), iconGlyph(ok), title, desc, btnHref, btnLabel)
+		iconClass, iconGlyph, title, desc, btnHref, btnLabel, btnHref)
 }
 
 // hmmAppFallback is a safe placeholder when no app redirect URL is configured.
