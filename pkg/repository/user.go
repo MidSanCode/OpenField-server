@@ -17,11 +17,11 @@ func NewUserRepository() *UserRepository {
 	return &UserRepository{}
 }
 
-const userColumns = "id, username, nickname, email, avatar_url, banner_url, role, password_hash, needs_registration, storage_quota, oauth2_provider, oauth2_id, created_at, updated_at"
+const userColumns = "id, username, nickname, email, avatar_url, banner_url, role, password_hash, needs_registration, bio, is_verified, storage_quota, oauth2_provider, oauth2_id, created_at, updated_at"
 
 func scanUser(row interface{ Scan(...any) error }) (*model.User, error) {
 	user := &model.User{}
-	err := row.Scan(&user.ID, &user.Username, &user.Nickname, &user.Email, &user.AvatarURL, &user.BannerURL, &user.Role, &user.PasswordHash, &user.NeedsRegistration, &user.StorageQuota, &user.OAuth2Provider, &user.OAuth2ID, &user.CreatedAt, &user.UpdatedAt)
+	err := row.Scan(&user.ID, &user.Username, &user.Nickname, &user.Email, &user.AvatarURL, &user.BannerURL, &user.Role, &user.PasswordHash, &user.NeedsRegistration, &user.Bio, &user.IsVerified, &user.StorageQuota, &user.OAuth2Provider, &user.OAuth2ID, &user.CreatedAt, &user.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -64,12 +64,12 @@ func (r *UserRepository) GetByEmail(email string) (*model.User, error) {
 	return user, nil
 }
 
-// UpdateProfile updates a user's registration profile (username, nickname).
+// UpdateProfile updates a user's registration profile (username, nickname, bio).
 // Returns the updated user or a conflict error if username is taken.
-func (r *UserRepository) UpdateProfile(userID int64, username, nickname string) (*model.User, error) {
+func (r *UserRepository) UpdateProfile(userID int64, username, nickname, bio string) (*model.User, error) {
 	user, err := scanUser(database.DB.QueryRow(
-		"UPDATE users SET username = $2, nickname = $3, needs_registration = FALSE, updated_at = NOW() WHERE id = $1 RETURNING "+userColumns,
-		userID, username, nickname,
+		"UPDATE users SET username = $2, nickname = $3, bio = $4, needs_registration = FALSE, updated_at = NOW() WHERE id = $1 RETURNING "+userColumns,
+		userID, username, nickname, bio,
 	))
 	if err != nil {
 		if isUniqueViolation(err) {

@@ -52,12 +52,12 @@ func (r *PostRepository) Create(userID int64, content string, attachmentIDs []in
 func (r *PostRepository) GetByID(id int64) (*model.Post, error) {
 	post := &model.Post{}
 	err := database.DB.QueryRow(
-		`SELECT p.id, p.user_id, p.content, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url
+		`SELECT p.id, p.user_id, p.content, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url, u.is_verified
 		 FROM posts p
 		 JOIN users u ON p.user_id = u.id
 		 WHERE p.id = $1`,
 		id,
-	).Scan(&post.ID, &post.UserID, &post.Content, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL)
+	).Scan(&post.ID, &post.UserID, &post.Content, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -87,7 +87,7 @@ func (r *PostRepository) List(page, limit int) ([]model.Post, error) {
 	offset := (page - 1) * limit
 
 	rows, err := database.DB.Query(
-		`SELECT p.id, p.user_id, p.content, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url,
+		`SELECT p.id, p.user_id, p.content, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url, u.is_verified,
 		        (SELECT COUNT(*) FROM post_replies pr WHERE pr.post_id = p.id AND pr.deleted_at IS NULL) AS reply_count
 		 FROM posts p
 		 JOIN users u ON p.user_id = u.id
@@ -104,7 +104,7 @@ func (r *PostRepository) List(page, limit int) ([]model.Post, error) {
 	var postIDs []int64
 	for rows.Next() {
 		var post model.Post
-		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.ReplyCount); err != nil {
+		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.ReplyCount); err != nil {
 			return nil, fmt.Errorf("failed to scan post: %w", err)
 		}
 		posts = append(posts, post)
@@ -131,7 +131,7 @@ func (r *PostRepository) ListByUser(userID int64, page, limit int) ([]model.Post
 	offset := (page - 1) * limit
 
 	rows, err := database.DB.Query(
-		`SELECT p.id, p.user_id, p.content, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url,
+		`SELECT p.id, p.user_id, p.content, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url, u.is_verified,
 		        (SELECT COUNT(*) FROM post_replies pr WHERE pr.post_id = p.id AND pr.deleted_at IS NULL) AS reply_count
 		 FROM posts p
 		 JOIN users u ON p.user_id = u.id
@@ -149,7 +149,7 @@ func (r *PostRepository) ListByUser(userID int64, page, limit int) ([]model.Post
 	var postIDs []int64
 	for rows.Next() {
 		var post model.Post
-		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.ReplyCount); err != nil {
+		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.ReplyCount); err != nil {
 			return nil, fmt.Errorf("failed to scan post: %w", err)
 		}
 		posts = append(posts, post)

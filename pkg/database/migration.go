@@ -32,6 +32,8 @@ func RunMigrations() error {
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255) NOT NULL DEFAULT ''`,
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS needs_registration BOOLEAN NOT NULL DEFAULT TRUE`,
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS storage_quota BIGINT NOT NULL DEFAULT 104857600`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS bio TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS is_verified BOOLEAN NOT NULL DEFAULT FALSE`,
 		`ALTER TABLE users ALTER COLUMN email TYPE VARCHAR(255)`,
 		`ALTER TABLE users ALTER COLUMN email SET DEFAULT ''`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username)`,
@@ -152,6 +154,13 @@ func RunMigrations() error {
 		`ALTER TABLE messages ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, created_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_sender_receiver ON messages(sender_id)`,
+
+		`CREATE TABLE IF NOT EXISTS message_attachments (
+			message_id BIGINT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+			attachment_id BIGINT NOT NULL REFERENCES attachments(id) ON DELETE CASCADE,
+			PRIMARY KEY (message_id, attachment_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_message_attachments_attachment ON message_attachments(attachment_id)`,
 
 		`CREATE TABLE IF NOT EXISTS refresh_tokens (
 			id BIGSERIAL PRIMARY KEY,

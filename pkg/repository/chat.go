@@ -112,12 +112,12 @@ func (r *ConversationRepository) GetMember(conversationID, userID int64) (*model
 	member := &model.ConversationMember{}
 	err := database.DB.QueryRow(
 		`SELECT cm.conversation_id, cm.user_id, cm.role, cm.note, cm.group_nickname, cm.status, cm.added_by, cm.created_at,
-		        u.username, u.nickname, u.avatar_url
+		        u.username, u.nickname, u.avatar_url, u.is_verified
 		 FROM conversation_members cm
 		 JOIN users u ON cm.user_id = u.id
 		 WHERE cm.conversation_id = $1 AND cm.user_id = $2`,
 		conversationID, userID,
-	).Scan(&member.ConversationID, &member.UserID, &member.Role, &member.Note, &member.GroupNickname, &member.Status, &member.AddedBy, &member.CreatedAt, &member.Username, &member.Nickname, &member.AvatarURL)
+	).Scan(&member.ConversationID, &member.UserID, &member.Role, &member.Note, &member.GroupNickname, &member.Status, &member.AddedBy, &member.CreatedAt, &member.Username, &member.Nickname, &member.AvatarURL, &member.IsVerified)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -131,7 +131,7 @@ func (r *ConversationRepository) GetMember(conversationID, userID int64) (*model
 func (r *ConversationRepository) ListMembers(conversationID int64) ([]model.ConversationMember, error) {
 	rows, err := database.DB.Query(
 		`SELECT cm.conversation_id, cm.user_id, cm.role, cm.note, cm.group_nickname, cm.status, cm.added_by, cm.created_at,
-		        u.username, u.nickname, u.avatar_url
+		        u.username, u.nickname, u.avatar_url, u.is_verified
 		 FROM conversation_members cm
 		 JOIN users u ON cm.user_id = u.id
 		 WHERE cm.conversation_id = $1 AND cm.status = 'active'
@@ -146,7 +146,7 @@ func (r *ConversationRepository) ListMembers(conversationID int64) ([]model.Conv
 	members := make([]model.ConversationMember, 0)
 	for rows.Next() {
 		var member model.ConversationMember
-		if err := rows.Scan(&member.ConversationID, &member.UserID, &member.Role, &member.Note, &member.GroupNickname, &member.Status, &member.AddedBy, &member.CreatedAt, &member.Username, &member.Nickname, &member.AvatarURL); err != nil {
+		if err := rows.Scan(&member.ConversationID, &member.UserID, &member.Role, &member.Note, &member.GroupNickname, &member.Status, &member.AddedBy, &member.CreatedAt, &member.Username, &member.Nickname, &member.AvatarURL, &member.IsVerified); err != nil {
 			return nil, fmt.Errorf("failed to scan member: %w", err)
 		}
 		members = append(members, member)
@@ -237,7 +237,7 @@ func (r *ConversationRepository) lastMessages(convIDs []int64) (map[int64]model.
 	}
 	rows, err := database.DB.Query(
 		`SELECT m.conversation_id, m.id, m.sender_id, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at,
-		        u.username, u.nickname, u.avatar_url
+		        u.username, u.nickname, u.avatar_url, u.is_verified
 		 FROM messages m
 		 JOIN users u ON m.sender_id = u.id
 		 WHERE m.conversation_id = ANY($1) AND m.deleted_at IS NULL
@@ -251,7 +251,7 @@ func (r *ConversationRepository) lastMessages(convIDs []int64) (map[int64]model.
 
 	for rows.Next() {
 		var m model.Message
-		if err := rows.Scan(&m.ConversationID, &m.ID, &m.SenderID, &m.Content, &m.ReplyToID, &m.EditedAt, &m.DeletedAt, &m.CreatedAt, &m.SenderName, &m.SenderAvatar); err != nil {
+		if err := rows.Scan(&m.ConversationID, &m.ID, &m.SenderID, &m.Content, &m.ReplyToID, &m.EditedAt, &m.DeletedAt, &m.CreatedAt, &m.SenderName, &m.SenderAvatar, &m.SenderVerified); err != nil {
 			return nil, fmt.Errorf("failed to scan message: %w", err)
 		}
 		if _, exists := result[m.ConversationID]; !exists {
@@ -304,7 +304,7 @@ func (r *ConversationRepository) privateDisplay(userID int64, convIDs []int64) (
 	}
 	rows, err := database.DB.Query(
 		`SELECT cm.conversation_id, cm.user_id, cm.role, cm.note, cm.group_nickname, cm.status, cm.added_by, cm.created_at,
-		        u.username, u.nickname, u.avatar_url
+		        u.username, u.nickname, u.avatar_url, u.is_verified
 		 FROM conversation_members cm
 		 JOIN users u ON cm.user_id = u.id
 		 WHERE cm.conversation_id = ANY($1) AND cm.user_id <> $2 AND cm.status = 'active'`,
@@ -317,7 +317,7 @@ func (r *ConversationRepository) privateDisplay(userID int64, convIDs []int64) (
 
 	for rows.Next() {
 		var member model.ConversationMember
-		if err := rows.Scan(&member.ConversationID, &member.UserID, &member.Role, &member.Note, &member.GroupNickname, &member.Status, &member.AddedBy, &member.CreatedAt, &member.Username, &member.Nickname, &member.AvatarURL); err != nil {
+		if err := rows.Scan(&member.ConversationID, &member.UserID, &member.Role, &member.Note, &member.GroupNickname, &member.Status, &member.AddedBy, &member.CreatedAt, &member.Username, &member.Nickname, &member.AvatarURL, &member.IsVerified); err != nil {
 			return nil, fmt.Errorf("failed to scan member: %w", err)
 		}
 		// only keep members from private conversations (a group will return many rows)

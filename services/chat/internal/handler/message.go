@@ -78,19 +78,24 @@ func (h *MessageHandler) Send(c *gin.Context) {
 	}
 
 	var req struct {
-		Content   string `json:"content" binding:"required"`
-		ReplyToID *int64 `json:"reply_to_id"`
+		Content       string  `json:"content" binding:"required"`
+		ReplyToID     *int64  `json:"reply_to_id"`
+		AttachmentIDs []int64 `json:"attachment_ids"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
 		return
 	}
-	if req.Content == "" {
+	if req.Content == "" && len(req.AttachmentIDs) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "message cannot be empty"})
 		return
 	}
 	if len(req.Content) > 5000 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "message too long (max 5000)"})
+		return
+	}
+	if len(req.AttachmentIDs) > 9 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "too many attachments (max 9)"})
 		return
 	}
 
@@ -105,7 +110,7 @@ func (h *MessageHandler) Send(c *gin.Context) {
 		return
 	}
 
-	msg, err := h.msgRepo.Create(convID, userID, req.Content, req.ReplyToID)
+	msg, err := h.msgRepo.Create(convID, userID, req.Content, req.ReplyToID, req.AttachmentIDs)
 	if err != nil {
 		logger.Log.Error("failed to send message", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to send message"})

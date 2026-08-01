@@ -12,6 +12,8 @@ type User struct {
 	BannerURL         string    `json:"banner_url"`
 	Role              string    `json:"role"`
 	NeedsRegistration bool      `json:"needs_registration"`
+	Bio               string    `json:"bio"`
+	IsVerified        bool      `json:"is_verified"`
 	StorageQuota      int64     `json:"storage_quota"`
 	StorageUsed       int64     `json:"storage_used"`
 	PasswordHash      string    `json:"-"`
@@ -34,6 +36,7 @@ type Post struct {
 	Username    string       `json:"username,omitempty"`
 	Nickname    string       `json:"nickname,omitempty"`
 	AvatarURL   string       `json:"avatar_url,omitempty"`
+	IsVerified  bool         `json:"is_verified,omitempty"`
 	Attachments []Attachment `json:"attachments,omitempty"`
 }
 
@@ -50,6 +53,7 @@ type PostReply struct {
 	Username  string     `json:"username,omitempty"`
 	Nickname  string     `json:"nickname,omitempty"`
 	AvatarURL string     `json:"avatar_url,omitempty"`
+	IsVerified bool      `json:"is_verified,omitempty"`
 }
 
 // Attachment represents a file stored in RustFS.
@@ -91,6 +95,7 @@ type ConversationMember struct {
 	Username       string    `json:"username,omitempty"`
 	Nickname       string    `json:"nickname,omitempty"`
 	AvatarURL      string    `json:"avatar_url,omitempty"`
+	IsVerified     bool      `json:"is_verified,omitempty"`
 }
 
 // ConsentRequest represents a pending consent request for a private chat or group invite.
@@ -122,6 +127,8 @@ type Message struct {
 	CreatedAt      time.Time  `json:"created_at"`
 	SenderName     string     `json:"sender_name,omitempty"`
 	SenderAvatar   string     `json:"sender_avatar,omitempty"`
+	SenderVerified bool       `json:"sender_verified,omitempty"`
+	Attachments    []Attachment `json:"attachments,omitempty"`
 }
 
 // Group represents a user group used for permission management.

@@ -108,6 +108,7 @@ func (h *UserHandler) UpdateProfile(c *gin.Context) {
 	var req struct {
 		Username string `json:"username"`
 		Nickname string `json:"nickname"`
+		Bio      string `json:"bio"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -115,7 +116,7 @@ func (h *UserHandler) UpdateProfile(c *gin.Context) {
 		return
 	}
 
-	if req.Username == "" && req.Nickname == "" {
+	if req.Username == "" && req.Nickname == "" && req.Bio == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "nothing to update"})
 		return
 	}
@@ -135,8 +136,12 @@ func (h *UserHandler) UpdateProfile(c *gin.Context) {
 	if nickname == "" {
 		nickname = current.Nickname
 	}
+	bio := req.Bio
+	if bio == "" {
+		bio = current.Bio
+	}
 
-	user, err := h.userRepo.UpdateProfile(userID, username, nickname)
+	user, err := h.userRepo.UpdateProfile(userID, username, nickname, bio)
 	if err != nil {
 		logger.Log.Error("failed to update profile", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

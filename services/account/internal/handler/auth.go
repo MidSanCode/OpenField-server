@@ -192,29 +192,98 @@ func (h *AuthHandler) OIDCCallback(c *gin.Context) {
 	})
 }
 
-// handleOIDCBind completes the account-binding flow and redirects the browser
-// back to the app with a bind result, or returns JSON when no app redirect is set.
+// handleOIDCBind completes the account-binding flow. The browser is shown an
+// HTML result page that also links back into the app via the app redirect URL.
 func (h *AuthHandler) handleOIDCBind(c *gin.Context, code string, userID int64) {
-	user, err := h.authManager.Bind(c.Request.Context(), code, userID)
+	_, err := h.authManager.Bind(c.Request.Context(), code, userID)
 	if err != nil {
 		logger.Log.Error("oidc bind failed", "error", err, "user_id", userID)
 		reason := "unknown"
 		if errors.Is(err, auth.ErrOAuth2AlreadyBound) {
 			reason = "taken"
 		}
+		appLink := ""
 		if h.appRedirectURL != "" {
-			c.Redirect(http.StatusFound, fmt.Sprintf("%s?bind=error&reason=%s", h.appRedirectURL, reason))
-			return
+			appLink = fmt.Sprintf("%s?bind=error&reason=%s", h.appRedirectURL, url.QueryEscape(reason))
 		}
-		c.JSON(http.StatusConflict, gin.H{"error": "failed to bind oauth identity", "reason": reason})
+		c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(bindResultPage("error", reason, appLink)))
 		return
 	}
 
+	appLink := ""
 	if h.appRedirectURL != "" {
-		c.Redirect(http.StatusFound, fmt.Sprintf("%s?bind=success", h.appRedirectURL))
-		return
+		appLink = fmt.Sprintf("%s?bind=success", h.appRedirectURL)
 	}
-	c.JSON(http.StatusOK, gin.H{"bind": "success", "user": user})
+	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(bindResultPage("success", "", appLink)))
+}
+
+// bindResultPage renders a small HTML page shown in the browser after an OIDC
+// account-binding attempt. It displays the outcome and offers a button that
+// deep-links back into the desktop/mobile app.
+func bindResultPage(result, reason, appLink string) string {
+	ok := result == "success"
+	title := "绑定成功"
+	desc := "你的账号已成功关联 OIDC 身份，可以关闭此页面。"
+	btnLabel := "打开 OpenField"
+	btnHref := appLink
+	if !ok {
+		title = "绑定失败"
+		desc = "无法完成账号绑定，请回到应用内重试。"
+		if reason == "taken" {
+			desc = "该 OIDC 身份已被其他账号绑定，请回到应用内重试。"
+		}
+		btnLabel = "返回应用"
+		btnHref = hmmAppFallback
+	}
+
+	return fmt.Sprintf(`<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenField 账号绑定</title>
+<style>
+  body { margin:0; font-family: -apple-system, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+         background:#f4f6f8; display:flex; align-items:center; justify-content:center; min-height:100vh; }
+  .card { background:#fff; border-radius:16px; padding:40px 48px; text-align:center; max-width:420px;
+          box-shadow:0 4px 24px rgba(0,0,0,.08); }
+  .icon { width:64px; height:64px; border-radius:50%%; margin:0 auto 20px; display:flex; align-items:center;
+          justify-content:center; font-size:34px; color:#fff; }
+  .ok { background:#22c55e; } .err { background:#ef4444; }
+  h1 { font-size:22px; margin:0 0 8px; color:#111827; }
+  p { color:#6b7280; font-size:14px; line-height:1.6; margin:0 0 24px; }
+  a.button { display:inline-block; background:#2563eb; color:#fff; text-decoration:none; padding:10px 22px;
+             border-radius:8px; font-size:14px; font-weight:500; }
+  a.button:hover { background:#1d4ed8; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon %s">%s</div>
+    <h1>%s</h1>
+    <p>%s</p>
+    <a class="button" href="%s">%s</a>
+  </div>
+</body>
+</html>`,
+		iconClass(ok), iconGlyph(ok), title, desc, btnHref, btnLabel)
+}
+
+// hmmAppFallback is a safe placeholder when no app redirect URL is configured.
+const hmmAppFallback = "#"
+
+func iconClass(ok bool) string {
+	if ok {
+		return "ok"
+	}
+	return "err"
+}
+
+func iconGlyph(ok bool) string {
+	if ok {
+		return "&#10003;"
+	}
+	return "&#10005;"
 }
 
 // RefreshToken exchanges a refresh token for a new access token.
