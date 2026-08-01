@@ -63,3 +63,40 @@ func (m *Manager) Authenticate(ctx context.Context, code string) (*model.User, e
 
 	return user, nil
 }
+
+// Bind handles the OIDC callback for an account-binding flow: exchange code,
+// get user info, then link the OAuth2 identity to the given user account.
+func (m *Manager) Bind(ctx context.Context, code string, userID int64) (*model.User, error) {
+	token, err := m.provider.ExchangeToken(ctx, code)
+	if err != nil {
+		return nil, fmt.Errorf("failed to exchange token: %w", err)
+	}
+
+	userInfo, err := m.provider.GetUserInfo(ctx, token)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user info: %w", err)
+	}
+
+	logger.Log.Info("oidc bind user info received", "email", userInfo.Email)
+
+	existing, err := findUserByOAuth2(m.provider.Name(), userInfo.OAuth2ID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find user: %w", err)
+	}
+
+	if existing != nil {
+		if existing.ID != userID {
+			return nil, ErrOAuth2AlreadyBound
+		}
+		// Identity already bound to this account.
+		logger.Log.Info("oauth identity already bound", "user_id", userID)
+		return existing, nil
+	}
+
+	user, err := repository.NewUserRepository().BindOAuth(userID, m.provider.Name(), userInfo.OAuth2ID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to bind oauth identity: %w", err)
+	}
+	logger.Log.Info("oauth identity bound", "user_id", user.ID)
+	return user, nil
+}

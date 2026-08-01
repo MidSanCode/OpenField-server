@@ -26,6 +26,7 @@ type Claims struct {
 	UserID   int64  `json:"user_id"`
 	Email    string `json:"email"`
 	Username string `json:"username"`
+	Purpose  string `json:"purpose,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -45,6 +46,50 @@ func (tm *TokenManager) GenerateToken(userID int64, email, username string) (str
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString(tm.secretKey)
+}
+
+// GeneratePurposeToken creates a short-lived JWT token for a specific purpose,
+// e.g. to sign the OAuth state parameter during an OIDC account-binding flow.
+func (tm *TokenManager) GeneratePurposeToken(userID int64, purpose string) (string, error) {
+	claims := &Claims{
+		UserID:  userID,
+		Purpose: purpose,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(10 * time.Minute)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			NotBefore: jwt.NewNumericDate(time.Now()),
+			Subject:   purpose,
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString(tm.secretKey)
+}
+
+// Parse validates a JWT and returns the user ID it carries.
+func (tm *TokenManager) Parse(tokenStr string) (int64, error) {
+	return ParseToken(tokenStr, string(tm.secretKey))
+}
+
+// ParsePurposeToken validates a purpose token and returns its user ID.
+func (tm *TokenManager) ParsePurposeToken(tokenStr, purpose string) (int64, error) {
+	token, err := jwt.ParseWithClaims(tokenStr, &Claims{}, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		return tm.secretKey, nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	claims, ok := token.Claims.(*Claims)
+	if !ok || !token.Valid {
+		return 0, fmt.Errorf("invalid token claims")
+	}
+	if claims.Purpose != purpose {
+		return 0, fmt.Errorf("unexpected token purpose %q", claims.Purpose)
+	}
+	return claims.UserID, nil
 }
 
 // ParseToken validates and parses a JWT token.

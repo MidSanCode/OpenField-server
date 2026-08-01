@@ -50,7 +50,9 @@ the gateway (`:8080`).
    preserving the full `/api/v1` path.
 
 Internal services run `GatewayAuthMiddleware()`, which trusts the `X-User-ID`
-header set by the gateway. Internal services are not exposed directly.
+header set by the gateway. Internal services are **not exposed directly**: they
+bind to `127.0.0.1` only, so the sole externally reachable entry point is the
+gateway on `:8080`.
 
 ## Route Matching Rules
 
