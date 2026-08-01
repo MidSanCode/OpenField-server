@@ -156,7 +156,7 @@ func (h *AuthHandler) OIDCCallback(c *gin.Context) {
 	// Accept code from both query string (GET redirect) and form body (POST).
 	code := c.Query("code")
 	if code == "" {
-		code = c.PostFormValue("code")
+		code = c.PostForm("code")
 	}
 	if code == "" {
 		logger.Log.Warn("oidc callback missing code", "query", c.Request.URL.Query(), "method", c.Request.Method)
