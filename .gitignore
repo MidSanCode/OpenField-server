@@ -1,0 +1,24 @@
+﻿# Local configuration files (secrets, environment-specific settings)
+*.env
+*.local
+*.secret
+
+# Local server config (contains secrets, do NOT commit)
+config/config.local.yaml
+
+# Database
+db/
+*.sqlite
+*.db
+
+# Redis
+redis/
+
+# Logs
+logs/
+*.log
+
+# Build artifacts
+bin/
+dist/
+build/

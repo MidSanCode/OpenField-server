@@ -1,0 +1,54 @@
+﻿# Server configuration
+# Copy this file to config.local.yaml for local development
+# DO NOT commit config.local.yaml to version control
+
+server:
+  port: "8080"
+  mode: "debug" # debug, release, test
+
+database:
+  host: "localhost"
+  port: 5432
+  user: "postgres"
+  password: "postgres"
+  dbname: "openfield"
+  sslmode: "disable"
+  max_open_conns: 25
+  max_idle_conns: 5
+
+redis:
+  addr: "localhost:6379"
+  password: ""
+  db: 0
+  enabled: false # Set to true to enable Redis
+
+oidc:
+  issuer_url: "https://auth.yun/oidc"
+  client_id: ""
+  client_secret: ""
+  redirect_url: "http://localhost:8080/api/v1/auth/oidc/callback"
+  # Deep link used to return to the desktop/mobile app after authentication.
+  # The server redirects the browser to this URL with access_token & user info.
+  app_redirect_url: "openfield://oauth/callback"
+  scopes:
+    - "openid"
+    - "profile"
+    - "email"
+
+jwt:
+  secret_key: "your-secret-key-change-this-in-production"
+  expiry_hours: 24
+
+storage:
+  # RustFS (S3-compatible) local object storage
+  endpoint: "localhost:9000"
+  access_key: "minioadmin"
+  secret_key: "minioadmin"
+  bucket: "openfield"
+  use_ssl: false
+  # Public base URL used to build file URLs returned by the API
+  public_base_url: "http://localhost:9000/openfield"
+  # 10 MB default upload limit
+  max_upload_bytes: 10485760
+  # Max attachments per post
+  max_attachments_per_post: 9
