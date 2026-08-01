@@ -36,6 +36,10 @@ func main() {
 	}
 	defer database.Close()
 
+	if err := database.RunMigrations(); err != nil {
+		log.Fatalf("failed to run database migrations: %v", err)
+	}
+
 	store, err := storage.New(cfg.Storage)
 	if err != nil {
 		log.Fatalf("failed to initialize storage: %v", err)

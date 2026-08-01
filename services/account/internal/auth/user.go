@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"database/sql"
 	"fmt"
 
 	"github.com/openfield/server/pkg/database"
@@ -18,12 +19,16 @@ const (
 var ErrOAuth2AlreadyBound = fmt.Errorf("oauth2 identity already bound to another account")
 
 // findUserByOAuth2 finds a user by OAuth2 provider and provider-specific user ID.
+// Returns (nil, nil) when no matching user exists.
 func findUserByOAuth2(provider, oauth2ID string) (*model.User, error) {
 	user := &model.User{}
 	err := database.DB.QueryRow(
 		"SELECT id, username, nickname, email, avatar_url, banner_url, role, needs_registration, oauth2_provider, oauth2_id, created_at, updated_at FROM users WHERE oauth2_provider = $1 AND oauth2_id = $2",
 		provider, oauth2ID,
 	).Scan(&user.ID, &user.Username, &user.Nickname, &user.Email, &user.AvatarURL, &user.BannerURL, &user.Role, &user.NeedsRegistration, &user.OAuth2Provider, &user.OAuth2ID, &user.CreatedAt, &user.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to query user: %w", err)
 	}

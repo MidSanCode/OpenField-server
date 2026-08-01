@@ -111,6 +111,10 @@ func main() {
 	}
 	defer database.Close()
 
+	if err := database.RunMigrations(); err != nil {
+		log.Fatalf("failed to run database migrations: %v", err)
+	}
+
 	permFactory := middleware.NewPermissionMiddlewareFactory()
 
 	// Routes: HTTP method + API path pattern -> target service + auth requirement.
