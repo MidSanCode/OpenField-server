@@ -1,10 +1,11 @@
 go 1.25.0
 
 use (
+	.
 	./pkg
-	./services/gateway
 	./services/account
-	./services/storage
 	./services/chat
+	./services/gateway
 	./services/posts
+	./services/storage
 )
