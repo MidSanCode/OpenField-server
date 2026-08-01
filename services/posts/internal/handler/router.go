@@ -8,20 +8,22 @@ import (
 // RegisterRoutes registers all posts service routes.
 func RegisterRoutes(r *gin.Engine, postHandler *PostHandler) {
 	api := r.Group("/api/v1")
-	api.Use(middleware.GatewayAuthMiddleware())
 	{
-		posts := api.Group("/posts")
-		{
-			posts.GET("", postHandler.ListPosts)
-			posts.POST("", postHandler.CreatePost)
-			posts.GET("/:id", postHandler.GetPost)
-			posts.PUT("/:id", postHandler.UpdatePost)
-			posts.DELETE("/:id", postHandler.DeletePost)
-			posts.GET("/:id/replies", postHandler.ListReplies)
-			posts.POST("/:id/replies", postHandler.CreateReply)
-			posts.PUT("/:id/replies/:reply_id", postHandler.UpdateReply)
-			posts.DELETE("/:id/replies/:reply_id", postHandler.DeleteReply)
-		}
+		// Public reads: posts and replies are viewable without authentication.
+		api.GET("/posts", postHandler.ListPosts)
+		api.GET("/posts/:id", postHandler.GetPost)
+		api.GET("/posts/:id/replies", postHandler.ListReplies)
 		api.GET("/users/:user_id/posts", postHandler.ListPostsByUser)
+
+		auth := api.Group("")
+		auth.Use(middleware.GatewayAuthMiddleware())
+		{
+			auth.POST("/posts", postHandler.CreatePost)
+			auth.PUT("/posts/:id", postHandler.UpdatePost)
+			auth.DELETE("/posts/:id", postHandler.DeletePost)
+			auth.POST("/posts/:id/replies", postHandler.CreateReply)
+			auth.PUT("/posts/:id/replies/:reply_id", postHandler.UpdateReply)
+			auth.DELETE("/posts/:id/replies/:reply_id", postHandler.DeleteReply)
+		}
 	}
 }

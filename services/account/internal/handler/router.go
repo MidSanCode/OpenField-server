@@ -30,7 +30,8 @@ func RegisterRoutes(r *gin.Engine, authHandler *AuthHandler, userHandler *UserHa
 			users.POST("/me/banner", userHandler.UploadBanner)
 			users.GET("/me/permissions", userHandler.GetMyPermissions)
 			users.GET("/search", userHandler.SearchUsers)
-			users.GET("/:id", userHandler.GetUser)
 		}
+		// Public profile lookup (used to view other users' public profiles).
+		api.GET("/users/:id", userHandler.GetUser)
 	}
 }

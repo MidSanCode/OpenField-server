@@ -17,11 +17,11 @@ func NewUserRepository() *UserRepository {
 	return &UserRepository{}
 }
 
-const userColumns = "id, username, nickname, email, avatar_url, banner_url, role, password_hash, needs_registration, bio, is_verified, storage_quota, oauth2_provider, oauth2_id, created_at, updated_at"
+const userColumns = "id, username, nickname, email, avatar_url, banner_url, role, password_hash, needs_registration, bio, is_verified, storage_quota, oauth2_provider, oauth2_id, oauth2_username, created_at, updated_at"
 
 func scanUser(row interface{ Scan(...any) error }) (*model.User, error) {
 	user := &model.User{}
-	err := row.Scan(&user.ID, &user.Username, &user.Nickname, &user.Email, &user.AvatarURL, &user.BannerURL, &user.Role, &user.PasswordHash, &user.NeedsRegistration, &user.Bio, &user.IsVerified, &user.StorageQuota, &user.OAuth2Provider, &user.OAuth2ID, &user.CreatedAt, &user.UpdatedAt)
+	err := row.Scan(&user.ID, &user.Username, &user.Nickname, &user.Email, &user.AvatarURL, &user.BannerURL, &user.Role, &user.PasswordHash, &user.NeedsRegistration, &user.Bio, &user.IsVerified, &user.StorageQuota, &user.OAuth2Provider, &user.OAuth2ID, &user.OAuth2Username, &user.CreatedAt, &user.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -117,10 +117,10 @@ func (r *UserRepository) SetStorageQuota(userID int64, quota int64) error {
 }
 
 // BindOAuth links an OAuth2 identity to an existing user account.
-func (r *UserRepository) BindOAuth(userID int64, provider, oauth2ID string) (*model.User, error) {
+func (r *UserRepository) BindOAuth(userID int64, provider, oauth2ID, oauth2Username string) (*model.User, error) {
 	user, err := scanUser(database.DB.QueryRow(
-		"UPDATE users SET oauth2_provider = $2, oauth2_id = $3, updated_at = NOW() WHERE id = $1 RETURNING "+userColumns,
-		userID, provider, oauth2ID,
+		"UPDATE users SET oauth2_provider = $2, oauth2_id = $3, oauth2_username = $4, updated_at = NOW() WHERE id = $1 RETURNING "+userColumns,
+		userID, provider, oauth2ID, oauth2Username,
 	))
 	if err != nil {
 		return nil, fmt.Errorf("failed to bind oauth identity: %w", err)

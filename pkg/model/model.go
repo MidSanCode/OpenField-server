@@ -19,6 +19,7 @@ type User struct {
 	PasswordHash      string    `json:"-"`
 	OAuth2Provider    string    `json:"oauth2_provider"`
 	OAuth2ID          string    `json:"oauth2_id"`
+	OAuth2Username    string    `json:"oauth2_username"`
 	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt         time.Time `json:"updated_at"`
 	// Permissions are populated on /users/me when requested.

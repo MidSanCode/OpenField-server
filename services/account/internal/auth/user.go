@@ -23,9 +23,9 @@ var ErrOAuth2AlreadyBound = fmt.Errorf("oauth2 identity already bound to another
 func findUserByOAuth2(provider, oauth2ID string) (*model.User, error) {
 	user := &model.User{}
 	err := database.DB.QueryRow(
-		"SELECT id, username, nickname, email, avatar_url, banner_url, role, needs_registration, oauth2_provider, oauth2_id, created_at, updated_at FROM users WHERE oauth2_provider = $1 AND oauth2_id = $2",
+		"SELECT id, username, nickname, email, avatar_url, banner_url, role, needs_registration, oauth2_provider, oauth2_id, oauth2_username, created_at, updated_at FROM users WHERE oauth2_provider = $1 AND oauth2_id = $2",
 		provider, oauth2ID,
-	).Scan(&user.ID, &user.Username, &user.Nickname, &user.Email, &user.AvatarURL, &user.BannerURL, &user.Role, &user.NeedsRegistration, &user.OAuth2Provider, &user.OAuth2ID, &user.CreatedAt, &user.UpdatedAt)
+	).Scan(&user.ID, &user.Username, &user.Nickname, &user.Email, &user.AvatarURL, &user.BannerURL, &user.Role, &user.NeedsRegistration, &user.OAuth2Provider, &user.OAuth2ID, &user.OAuth2Username, &user.CreatedAt, &user.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -59,9 +59,9 @@ func createUserFromOAuth2(info *UserInfo) (*model.User, error) {
 
 	var user model.User
 	err = database.DB.QueryRow(
-		"INSERT INTO users (username, nickname, email, avatar_url, role, needs_registration, oauth2_provider, oauth2_id) VALUES ($1, $2, $3, $4, $5, TRUE, $6, $7) RETURNING id, username, nickname, email, avatar_url, banner_url, role, needs_registration, oauth2_provider, oauth2_id, created_at, updated_at",
-		username, info.Username, info.Email, info.AvatarURL, role, "oidc", info.OAuth2ID,
-	).Scan(&user.ID, &user.Username, &user.Nickname, &user.Email, &user.AvatarURL, &user.BannerURL, &user.Role, &user.NeedsRegistration, &user.OAuth2Provider, &user.OAuth2ID, &user.CreatedAt, &user.UpdatedAt)
+		"INSERT INTO users (username, nickname, email, avatar_url, role, needs_registration, oauth2_provider, oauth2_id, oauth2_username) VALUES ($1, $2, $3, $4, $5, TRUE, $6, $7, $8) RETURNING id, username, nickname, email, avatar_url, banner_url, role, needs_registration, oauth2_provider, oauth2_id, oauth2_username, created_at, updated_at",
+		username, info.Username, info.Email, info.AvatarURL, role, "oidc", info.OAuth2ID, info.Username,
+	).Scan(&user.ID, &user.Username, &user.Nickname, &user.Email, &user.AvatarURL, &user.BannerURL, &user.Role, &user.NeedsRegistration, &user.OAuth2Provider, &user.OAuth2ID, &user.OAuth2Username, &user.CreatedAt, &user.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create user: %w", err)
 	}

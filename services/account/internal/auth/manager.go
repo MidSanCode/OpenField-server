@@ -94,7 +94,7 @@ func (m *Manager) Bind(ctx context.Context, code string, userID int64) (*model.U
 		return existing, nil
 	}
 
-	user, err := repository.NewUserRepository().BindOAuth(userID, m.provider.Name(), userInfo.OAuth2ID)
+	user, err := repository.NewUserRepository().BindOAuth(userID, m.provider.Name(), userInfo.OAuth2ID, userInfo.Username)
 	if err != nil {
 		return nil, fmt.Errorf("failed to bind oauth identity: %w", err)
 	}

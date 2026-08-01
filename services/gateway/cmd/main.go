@@ -136,7 +136,7 @@ func main() {
 		{http.MethodPost, "/api/v1/users/me/avatar", cfg.Services.Account, authPermission, "account.avatar.edit"},
 		{http.MethodPost, "/api/v1/users/me/banner", cfg.Services.Account, authPermission, "account.banner.edit"},
 		{http.MethodGet, "/api/v1/users/search", cfg.Services.Account, authRequired, ""},
-		{http.MethodGet, "/api/v1/users/:user_id", cfg.Services.Account, authRequired, "account.view"},
+		{http.MethodGet, "/api/v1/users/:user_id", cfg.Services.Account, authPublic, ""},
 
 		// ---- storage ----
 		{http.MethodPost, "/api/v1/attachments", cfg.Services.Storage, authPermission, "storage.upload"},
@@ -147,15 +147,15 @@ func main() {
 
 		// ---- posts ----
 		{http.MethodPost, "/api/v1/posts", cfg.Services.Posts, authPermission, "posts.create"},
-		{http.MethodGet, "/api/v1/posts", cfg.Services.Posts, authPermission, "posts.view"},
-		{http.MethodGet, "/api/v1/posts/:id", cfg.Services.Posts, authPermission, "posts.view"},
+		{http.MethodGet, "/api/v1/posts", cfg.Services.Posts, authPublic, ""},
+		{http.MethodGet, "/api/v1/posts/:id", cfg.Services.Posts, authPublic, ""},
 		{http.MethodPut, "/api/v1/posts/:id", cfg.Services.Posts, authPermission, "posts.edit"},
 		{http.MethodDelete, "/api/v1/posts/:id", cfg.Services.Posts, authPermission, "posts.delete"},
-		{http.MethodGet, "/api/v1/posts/:id/replies", cfg.Services.Posts, authPermission, "posts.view"},
+		{http.MethodGet, "/api/v1/posts/:id/replies", cfg.Services.Posts, authPublic, ""},
 		{http.MethodPost, "/api/v1/posts/:id/replies", cfg.Services.Posts, authPermission, "posts.reply.create"},
 		{http.MethodPut, "/api/v1/posts/:id/replies/:reply_id", cfg.Services.Posts, authPermission, "posts.reply.edit"},
 		{http.MethodDelete, "/api/v1/posts/:id/replies/:reply_id", cfg.Services.Posts, authPermission, "posts.reply.delete"},
-		{http.MethodGet, "/api/v1/users/:user_id/posts", cfg.Services.Posts, authPermission, "posts.view"},
+		{http.MethodGet, "/api/v1/users/:user_id/posts", cfg.Services.Posts, authPublic, ""},
 
 		// ---- chat ----
 		{http.MethodGet, "/api/v1/consent-requests", cfg.Services.Chat, authPermission, "chat.request.approve"},

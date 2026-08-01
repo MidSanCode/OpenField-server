@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/openfield/server/pkg/logger"
 	"github.com/openfield/server/pkg/middleware"
+	"github.com/openfield/server/pkg/model"
 	"github.com/openfield/server/pkg/repository"
 	"github.com/openfield/server/services/account/internal/auth"
 	"golang.org/x/crypto/bcrypt"
@@ -195,7 +196,7 @@ func (h *AuthHandler) OIDCCallback(c *gin.Context) {
 // handleOIDCBind completes the account-binding flow. The browser is shown an
 // HTML result page that also links back into the app via the app redirect URL.
 func (h *AuthHandler) handleOIDCBind(c *gin.Context, code string, userID int64) {
-	_, err := h.authManager.Bind(c.Request.Context(), code, userID)
+	user, err := h.authManager.Bind(c.Request.Context(), code, userID)
 	if err != nil {
 		logger.Log.Error("oidc bind failed", "error", err, "user_id", userID)
 		reason := "unknown"
@@ -206,24 +207,41 @@ func (h *AuthHandler) handleOIDCBind(c *gin.Context, code string, userID int64) 
 		if h.appRedirectURL != "" {
 			appLink = fmt.Sprintf("%s?bind=error&reason=%s", h.appRedirectURL, url.QueryEscape(reason))
 		}
-		c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(bindResultPage("error", reason, appLink)))
+		c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(bindResultPage("error", reason, "", appLink)))
 		return
 	}
 
 	appLink := ""
 	if h.appRedirectURL != "" {
-		appLink = fmt.Sprintf("%s?bind=success", h.appRedirectURL)
+		appLink = fmt.Sprintf("%s?bind=success&name=%s", h.appRedirectURL, url.QueryEscape(boundName(user)))
 	}
-	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(bindResultPage("success", "", appLink)))
+	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(bindResultPage("success", "", boundName(user), appLink)))
+}
+
+// boundName returns the human-readable OAuth identity label for display.
+func boundName(user *model.User) string {
+	if user == nil {
+		return ""
+	}
+	if user.OAuth2Username != "" {
+		return user.OAuth2Username
+	}
+	if user.Email != "" {
+		return user.Email
+	}
+	return user.OAuth2ID
 }
 
 // bindResultPage renders a small HTML page shown in the browser after an OIDC
 // account-binding attempt. It displays the outcome and offers a button that
 // deep-links back into the desktop/mobile app.
-func bindResultPage(result, reason, appLink string) string {
+func bindResultPage(result, reason, accountName, appLink string) string {
 	ok := result == "success"
 	title := "绑定成功"
 	desc := "你的账号已成功关联 OIDC 身份，可以关闭此页面。"
+	if accountName != "" {
+		desc = fmt.Sprintf("已绑定账号：%s。下次可直接使用该账号登录 OpenField。", accountName)
+	}
 	btnLabel := "打开 OpenField"
 	btnHref := appLink
 	if !ok {
