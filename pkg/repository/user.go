@@ -116,6 +116,18 @@ func (r *UserRepository) SetStorageQuota(userID int64, quota int64) error {
 	return nil
 }
 
+// BindOAuth links an OAuth2 identity to an existing user account.
+func (r *UserRepository) BindOAuth(userID int64, provider, oauth2ID string) (*model.User, error) {
+	user, err := scanUser(database.DB.QueryRow(
+		"UPDATE users SET oauth2_provider = $2, oauth2_id = $3, updated_at = NOW() WHERE id = $1 RETURNING "+userColumns,
+		userID, provider, oauth2ID,
+	))
+	if err != nil {
+		return nil, fmt.Errorf("failed to bind oauth identity: %w", err)
+	}
+	return user, nil
+}
+
 // GetUsersByIDs retrieves multiple users by their IDs.
 func (r *UserRepository) GetUsersByIDs(ids []int64) (map[int64]*model.User, error) {	if len(ids) == 0 {
 		return map[int64]*model.User{}, nil

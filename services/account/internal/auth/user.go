@@ -13,6 +13,10 @@ const (
 	RoleAdmin = "admin"
 )
 
+// ErrOAuth2AlreadyBound is returned when an OAuth2 identity is already linked
+// to a different user account.
+var ErrOAuth2AlreadyBound = fmt.Errorf("oauth2 identity already bound to another account")
+
 // findUserByOAuth2 finds a user by OAuth2 provider and provider-specific user ID.
 func findUserByOAuth2(provider, oauth2ID string) (*model.User, error) {
 	user := &model.User{}

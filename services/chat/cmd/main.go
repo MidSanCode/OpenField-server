@@ -43,7 +43,7 @@ func main() {
 
 	handler.RegisterRoutes(r, convHandler, consentHandler, msgHandler)
 
-	addr := ":" + cfg.ServicePort("CHAT")
+	addr := "127.0.0.1:" + cfg.ServicePort("CHAT")
 	logger.Log.Info("chat service starting", "address", addr)
 	if err := r.Run(addr); err != nil {
 		log.Fatalf("failed to start chat service: %v", err)

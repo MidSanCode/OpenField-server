@@ -48,6 +48,30 @@ func (h *AuthHandler) OIDCLogin(c *gin.Context) {
 	})
 }
 
+// OIDCBind starts the OIDC account-binding flow for the authenticated user.
+// It returns an authorization URL whose state carries the user's identity.
+func (h *AuthHandler) OIDCBind(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	state, err := h.tokenMgr.GeneratePurposeToken(userID, "bind")
+	if err != nil {
+		logger.Log.Error("failed to generate bind state", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to start binding"})
+		return
+	}
+
+	provider := h.authManager.GetProvider()
+	authURL := provider.Config().AuthCodeURL(state)
+	c.JSON(http.StatusOK, gin.H{
+		"auth_url": authURL,
+		"provider": "oidc",
+	})
+}
+
 // Login handles password-based login for local accounts.
 func (h *AuthHandler) Login(c *gin.Context) {
 	var req struct {
@@ -124,10 +148,18 @@ func (h *AuthHandler) Register(c *gin.Context) {
 }
 
 // OIDCCallback handles the OIDC callback and returns JWT tokens.
+// If the state parameter is a valid "bind" purpose token, the callback instead
+// links the OAuth identity to the account referenced by the token.
 func (h *AuthHandler) OIDCCallback(c *gin.Context) {
 	code := c.Query("code")
 	if code == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "missing authorization code"})
+		return
+	}
+
+	state := c.Query("state")
+	if bindUserID, err := h.tokenMgr.ParsePurposeToken(state, "bind"); err == nil {
+		h.handleOIDCBind(c, code, bindUserID)
 		return
 	}
 
@@ -158,6 +190,31 @@ func (h *AuthHandler) OIDCCallback(c *gin.Context) {
 		"expires_in":    86400,
 		"user":          user,
 	})
+}
+
+// handleOIDCBind completes the account-binding flow and redirects the browser
+// back to the app with a bind result, or returns JSON when no app redirect is set.
+func (h *AuthHandler) handleOIDCBind(c *gin.Context, code string, userID int64) {
+	user, err := h.authManager.Bind(c.Request.Context(), code, userID)
+	if err != nil {
+		logger.Log.Error("oidc bind failed", "error", err, "user_id", userID)
+		reason := "unknown"
+		if errors.Is(err, auth.ErrOAuth2AlreadyBound) {
+			reason = "taken"
+		}
+		if h.appRedirectURL != "" {
+			c.Redirect(http.StatusFound, fmt.Sprintf("%s?bind=error&reason=%s", h.appRedirectURL, reason))
+			return
+		}
+		c.JSON(http.StatusConflict, gin.H{"error": "failed to bind oauth identity", "reason": reason})
+		return
+	}
+
+	if h.appRedirectURL != "" {
+		c.Redirect(http.StatusFound, fmt.Sprintf("%s?bind=success", h.appRedirectURL))
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"bind": "success", "user": user})
 }
 
 // RefreshToken exchanges a refresh token for a new access token.

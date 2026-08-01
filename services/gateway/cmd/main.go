@@ -119,6 +119,7 @@ func main() {
 		// ---- auth (public) ----
 		{http.MethodGet, "/api/v1/auth/providers", cfg.Services.Account, authPublic, ""},
 		{http.MethodGet, "/api/v1/auth/oidc/login", cfg.Services.Account, authPublic, ""},
+		{http.MethodPost, "/api/v1/auth/oidc/bind", cfg.Services.Account, authRequired, ""},
 		{http.MethodGet, "/api/v1/auth/oidc/callback", cfg.Services.Account, authPublic, ""},
 		{http.MethodPost, "/api/v1/auth/login", cfg.Services.Account, authPublic, ""},
 		{http.MethodPost, "/api/v1/auth/refresh", cfg.Services.Account, authPublic, ""},

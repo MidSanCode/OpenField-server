@@ -41,7 +41,7 @@ func main() {
 
 	handler.RegisterRoutes(r, postHandler)
 
-	addr := ":" + cfg.ServicePort("POSTS")
+	addr := "127.0.0.1:" + cfg.ServicePort("POSTS")
 	logger.Log.Info("posts service starting", "address", addr)
 	if err := r.Run(addr); err != nil {
 		log.Fatalf("failed to start posts service: %v", err)

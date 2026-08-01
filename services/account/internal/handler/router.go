@@ -14,6 +14,7 @@ func RegisterRoutes(r *gin.Engine, authHandler *AuthHandler, userHandler *UserHa
 		{
 			auth.GET("/providers", authHandler.GetProviders)
 			auth.GET("/oidc/login", authHandler.OIDCLogin)
+			auth.POST("/oidc/bind", middleware.GatewayAuthMiddleware(), authHandler.OIDCBind)
 			auth.GET("/oidc/callback", authHandler.OIDCCallback)
 			auth.POST("/login", authHandler.Login)
 			auth.POST("/register", middleware.GatewayAuthMiddleware(), authHandler.Register)

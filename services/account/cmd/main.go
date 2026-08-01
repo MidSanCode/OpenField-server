@@ -53,7 +53,7 @@ func main() {
 
 	handler.RegisterRoutes(r, authHandler, userHandler)
 
-	addr := ":" + cfg.ServicePort("ACCOUNT")
+	addr := "127.0.0.1:" + cfg.ServicePort("ACCOUNT")
 	logger.Log.Info("account service starting", "address", addr)
 	if err := r.Run(addr); err != nil {
 		log.Fatalf("failed to start account service: %v", err)

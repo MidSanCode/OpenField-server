@@ -47,7 +47,7 @@ func main() {
 
 	handler.RegisterRoutes(r, attHandler)
 
-	addr := ":" + cfg.ServicePort("STORAGE")
+	addr := "127.0.0.1:" + cfg.ServicePort("STORAGE")
 	logger.Log.Info("storage service starting", "address", addr)
 	if err := r.Run(addr); err != nil {
 		log.Fatalf("failed to start storage service: %v", err)
