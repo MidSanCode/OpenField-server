@@ -153,9 +153,21 @@ func (h *AuthHandler) Register(c *gin.Context) {
 // If the state parameter is a valid "bind" purpose token, the callback instead
 // links the OAuth identity to the account referenced by the token.
 func (h *AuthHandler) OIDCCallback(c *gin.Context) {
+	// Accept code from both query string (GET redirect) and form body (POST).
 	code := c.Query("code")
 	if code == "" {
+		code = c.PostFormValue("code")
+	}
+	if code == "" {
+		logger.Log.Warn("oidc callback missing code", "query", c.Request.URL.Query(), "method", c.Request.Method)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "missing authorization code"})
+		return
+	}
+
+	// Surface OIDC provider errors (e.g. access_denied, invalid_request).
+	if oidcErr := c.Query("error"); oidcErr != "" {
+		logger.Log.Warn("oidc provider error", "error", oidcErr, "desc", c.Query("error_description"))
+		c.JSON(http.StatusBadRequest, gin.H{"error": oidcErr, "description": c.Query("error_description")})
 		return
 	}
 
