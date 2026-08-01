@@ -82,7 +82,7 @@ func (h *AttachmentHandler) Upload(c *gin.Context) {
 		contentType = "application/octet-stream"
 	}
 
-	visibility := c.PostFormValue("visibility")
+	visibility := c.PostForm("visibility")
 	if visibility == "" {
 		visibility = "public"
 	}
