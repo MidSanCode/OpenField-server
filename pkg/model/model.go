@@ -68,6 +68,7 @@ type Attachment struct {
 	MimeType     string    `json:"mime_type"`
 	SizeBytes    int64     `json:"size_bytes"`
 	URL          string    `json:"url"`
+	Visibility   string    `json:"visibility"`
 	CreatedAt    time.Time `json:"created_at"`
 }
 

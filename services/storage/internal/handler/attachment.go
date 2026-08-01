@@ -82,6 +82,11 @@ func (h *AttachmentHandler) Upload(c *gin.Context) {
 		contentType = "application/octet-stream"
 	}
 
+	visibility := c.PostFormValue("visibility")
+	if visibility == "" {
+		visibility = "public"
+	}
+
 	objectKey, url, err := h.store.Upload(c.Request.Context(), file, header.Size, contentType, header.Filename)
 	if err != nil {
 		logger.Log.Error("failed to upload file", "error", err)
@@ -89,7 +94,7 @@ func (h *AttachmentHandler) Upload(c *gin.Context) {
 		return
 	}
 
-	att, err := h.attRepo.Create(userID, objectKey, header.Filename, contentType, header.Size, url)
+	att, err := h.attRepo.Create(userID, objectKey, header.Filename, contentType, header.Size, url, visibility)
 	if err != nil {
 		logger.Log.Error("failed to save attachment", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save attachment"})
