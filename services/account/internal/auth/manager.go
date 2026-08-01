@@ -7,6 +7,7 @@ import (
 	"github.com/openfield/server/pkg/config"
 	"github.com/openfield/server/pkg/logger"
 	"github.com/openfield/server/pkg/model"
+	"github.com/openfield/server/pkg/repository"
 )
 
 // Manager manages the OIDC provider and authentication logic.
