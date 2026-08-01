@@ -6,6 +6,14 @@ server:
   port: "8080"
   mode: "debug" # debug, release, test
 
+# Internal microservice addresses (used by the gateway to route requests)
+services:
+  account: "http://127.0.0.1:8081"
+  storage: "http://127.0.0.1:8082"
+  chat: "http://127.0.0.1:8083"
+  posts: "http://127.0.0.1:8084"
+
+
 database:
   host: "localhost"
   port: 5432

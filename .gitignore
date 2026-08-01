@@ -22,3 +22,6 @@ logs/
 bin/
 dist/
 build/
+
+# Compiled binaries
+*.exe

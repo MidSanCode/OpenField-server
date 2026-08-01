@@ -5,6 +5,9 @@
 http://localhost:8080/api/v1
 ```
 
+All requests are proxied through the **gateway**, which validates JWTs and enforces
+permissions before forwarding to the internal services.
+
 ## Authentication
 
 OpenField uses OIDC (OpenID Connect) for authentication, plus password login for
@@ -12,11 +15,13 @@ admin-created local accounts. **Self-registration is not allowed.** New OAuth us
 are created with `needs_registration = true` and must call `POST /auth/register`
 to set a unique username and a nickname before using the app.
 
-### Roles
+### Roles & Permissions
 
-- `user` - regular user (default)
-- `admin` - administrator; the **first** user created in the system (via OAuth) is
-  automatically granted the `admin` role. The Flask admin panel can promote/demote users.
+- Roles are granted via **groups**; the first user created in the system (via OAuth)
+  is automatically granted the `admin` role.
+- Permissions are checked at the gateway. A permission is granted either by the
+  user's role or by an explicit permission grant. Permission keys are dot-namespaced,
+  e.g. `posts.view`, `chat.send`.
 
 ### Get Available Providers
 ```
@@ -98,41 +103,6 @@ POST /auth/refresh
 Body: { "refresh_token": "..." }
 ```
 
-## Posts
-
-### List Posts (Public)
-```
-GET /posts?page=1&limit=20
-```
-
-### Get Single Post (Public)
-```
-GET /posts/:id
-```
-
-### Create Post (Authenticated)
-```
-POST /posts
-Authorization: Bearer <access_token>
-Body: { "content": "Hello World!", "attachment_ids": [1, 2] }
-```
-`attachment_ids` is optional (max 9 per post). Attachments must be uploaded first via
-`POST /attachments`.
-
-### Delete Post (Authenticated, Owner Only)
-```
-DELETE /posts/:id
-Authorization: Bearer <access_token>
-```
-
-### Update Post (Authenticated, Owner Only)
-```
-PUT /posts/:id
-Authorization: Bearer <access_token>
-Body: { "content": "Updated text!", "attachment_ids": [1, 3] }
-```
-`attachment_ids` is optional (max 9 per post) and **replaces** the post's attachments.
-
 ## Users
 
 ### Get Current User (Authenticated)
@@ -149,6 +119,33 @@ Response includes the current storage usage and quota:
   "avatar_url": "https://...",
   "storage_quota": 104857600,
   "storage_used": 2048000
+}
+```
+
+### Get My Permissions (Authenticated)
+```
+GET /users/me/permissions
+Authorization: Bearer <access_token>
+```
+Response:
+```json
+{
+  "permissions": ["posts.view", "posts.create", "chat.send"],
+  "groups": ["admin", "beta-users"]
+}
+```
+
+### Search Users (Authenticated)
+```
+GET /users/search?q=alice&limit=20
+Authorization: Bearer <access_token>
+```
+Searches by username or nickname (substring match). Response:
+```json
+{
+  "users": [
+    { "id": 2, "username": "alice", "nickname": "Alice", "avatar_url": null }
+  ]
 }
 ```
 
@@ -177,9 +174,82 @@ Content-Type: multipart/form-data
 Form field: file=<image>
 ```
 
-### Get User by ID (Public)
+### Get User by ID (Authenticated)
 ```
-GET /users/:id
+GET /users/:user_id
+Authorization: Bearer <access_token>
+```
+
+## Posts
+
+All posts endpoints require the `posts.*` permissions.
+
+### List Posts
+```
+GET /posts?page=1&limit=20
+Authorization: Bearer <access_token>
+```
+
+### Get Single Post
+```
+GET /posts/:id
+Authorization: Bearer <access_token>
+```
+
+### Create Post
+```
+POST /posts
+Authorization: Bearer <access_token>
+Body: { "content": "Hello World!", "attachment_ids": [1, 2] }
+```
+`attachment_ids` is optional (max 9 per post). Attachments must be uploaded first via
+`POST /attachments`.
+
+### Update Post (Owner Only)
+```
+PUT /posts/:id
+Authorization: Bearer <access_token>
+Body: { "content": "Updated text!", "attachment_ids": [1, 3] }
+```
+`attachment_ids` is optional (max 9 per post) and **replaces** the post's attachments.
+
+### Delete Post (Owner Only)
+```
+DELETE /posts/:id
+Authorization: Bearer <access_token>
+```
+
+### List Replies
+```
+GET /posts/:id/replies?limit=50
+Authorization: Bearer <access_token>
+```
+Response: `{ "replies": [...] }`
+
+### Create Reply
+```
+POST /posts/:id/replies
+Authorization: Bearer <access_token>
+Body: { "content": "Nice post!" }
+```
+
+### Update Reply (Owner Only)
+```
+PUT /posts/:id/replies/:reply_id
+Authorization: Bearer <access_token>
+Body: { "content": "Updated reply!" }
+```
+
+### Delete Reply (Owner Only)
+```
+DELETE /posts/:id/replies/:reply_id
+Authorization: Bearer <access_token>
+```
+
+### List User Posts
+```
+GET /users/:user_id/posts?page=1&limit=20
+Authorization: Bearer <access_token>
 ```
 
 ## Attachments
@@ -211,38 +281,175 @@ Response:
 }
 ```
 
-### List My Attachments (Authenticated)
+### List My Attachments
 ```
 GET /attachments?limit=50
 Authorization: Bearer <access_token>
 ```
+Response: `{ "attachments": [...] }`
 
-### Get Attachment (Authenticated)
+### Get Attachment
 ```
 GET /attachments/:id
 Authorization: Bearer <access_token>
 ```
 
-### Delete Attachment (Authenticated, Owner Only)
+### Delete Attachment (Owner Only)
 ```
 DELETE /attachments/:id
 Authorization: Bearer <access_token>
 ```
 
-## Messages
-
-### Send Message (Authenticated)
+### Storage Usage
 ```
-POST /messages
-Authorization: Bearer <access_token>
-Body: { "receiver_id": 2, "content": "Hello!" }
-```
-
-### Get Conversation (Authenticated)
-```
-GET /messages/:user_id?limit=50
+GET /storage/usage
 Authorization: Bearer <access_token>
 ```
+
+## Chat
+
+The chat feature is consent-based: starting a private chat or inviting to a group
+creates a **consent request** that the target user must accept.
+
+### List Consent Requests
+```
+GET /consent-requests
+Authorization: Bearer <access_token>
+```
+Lists requests targeting the current user. Response: `{ "requests": [...] }`
+
+### Accept Consent Request
+```
+POST /consent-requests/:id/accept
+Authorization: Bearer <access_token>
+```
+Response:
+```json
+{
+  "message": "request accepted",
+  "conversation": { "id": 5, "type": "private", "title": null }
+}
+```
+
+### Decline Consent Request
+```
+POST /consent-requests/:id/decline
+Authorization: Bearer <access_token>
+```
+Responds `204 No Content`.
+
+### List Conversations
+```
+GET /conversations
+Authorization: Bearer <access_token>
+```
+Response: `{ "conversations": [...] }` (each includes `last_message` and `unread_count`).
+
+### Create Group
+```
+POST /conversations
+Authorization: Bearer <access_token>
+Body: { "title": "Family" }
+```
+Creates a group with the caller as owner. Responds `201 Created` with the conversation.
+
+### Start Private Chat (sends a consent request)
+```
+POST /conversations/start
+Authorization: Bearer <access_token>
+Body: { "user_id": 2, "message": "Hi!" }
+```
+Responds `201 Created` with `{ "message": "chat request sent" }`. Errors:
+`409` if a request is already pending, `400` if `user_id` is the caller.
+
+### Get Conversation
+```
+GET /conversations/:id
+Authorization: Bearer <access_token>
+```
+Response:
+```json
+{
+  "conversation": { "id": 5, "type": "private", "title": null },
+  "members": [...],
+  "my_membership": { "user_id": 1, "role": "member", "group_nickname": null, "note": null, "last_read_message_id": 0 }
+}
+```
+
+### Invite to Group (sends a consent request)
+```
+POST /conversations/:id/invite
+Authorization: Bearer <access_token>
+Body: { "user_id": 3, "message": "Join us!" }
+```
+Responds `201 Created` with `{ "message": "invite sent" }`.
+
+### Update Note (private chat remark)
+```
+PUT /conversations/:id/note
+Authorization: Bearer <access_token>
+Body: { "note": "my boss" }
+```
+
+### Update Group Nickname
+```
+PUT /conversations/:id/group-nickname
+Authorization: Bearer <access_token>
+Body: { "group_nickname": "Bob (work)" }
+```
+
+### Mark Conversation Read
+```
+POST /conversations/:id/read
+Authorization: Bearer <access_token>
+Body: { "last_message_id": 42 }
+```
+Responds `204 No Content`.
+
+### Leave Group
+```
+POST /conversations/:id/leave
+Authorization: Bearer <access_token>
+```
+The owner cannot leave. Responds `204 No Content`.
+
+### Remove Group Member (owner/admin only)
+```
+DELETE /conversations/:id/members/:user_id
+Authorization: Bearer <access_token>
+```
+Responds `204 No Content`.
+
+### List Messages
+```
+GET /conversations/:id/messages?before=0&limit=50
+Authorization: Bearer <access_token>
+```
+`before` is a message ID (paginate backwards); `limit` defaults to 50.
+Returns newest-to-oldest from the cursor; response: `{ "messages": [...] }`.
+Each message may include `reply_to_id`, `edited_at`, `deleted_at`.
+
+### Send Message
+```
+POST /conversations/:id/messages
+Authorization: Bearer <access_token>
+Body: { "content": "Hello!", "reply_to_id": 12 }
+```
+`reply_to_id` is optional. Responds `201 Created` with the message.
+
+### Edit Message (Owner Only)
+```
+PUT /conversations/:id/messages/:message_id
+Authorization: Bearer <access_token>
+Body: { "content": "Edited text!" }
+```
+
+### Delete Message (Owner Only, soft delete)
+```
+DELETE /conversations/:id/messages/:message_id
+Authorization: Bearer <access_token>
+```
+Responds `204 No Content`.
 
 ## Health Check
 ```

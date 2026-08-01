@@ -2,6 +2,7 @@
 setlocal enabledelayedexpansion
 rem ============================================================
 rem  OpenField Server - One-click launcher (Windows)
+rem  Starts: gateway(8080) account(8081) storage(8082) chat(8083) posts(8084)
 rem ============================================================
 
 set "SCRIPT_DIR=%~dp0"
@@ -30,7 +31,7 @@ if not exist "config\config.local.yaml" (
 )
 
 rem ---- Download dependencies ----
-echo [1/3] Downloading dependencies...
+echo [1/4] Downloading dependencies...
 call go mod download
 if errorlevel 1 (
     echo [ERROR] Failed to download dependencies. Check network access.
@@ -38,17 +39,40 @@ if errorlevel 1 (
     exit /b 1
 )
 
-rem ---- Build server binary ----
-echo [2/3] Building server...
+rem ---- Build services ----
+echo [2/4] Building services...
 if not exist "bin" mkdir "bin"
-call go build -o bin\openfield-server.exe .\cmd
-if errorlevel 1 (
-    echo [ERROR] Build failed.
+set "BUILD_FAILED=0"
+for %%S in (gateway account storage chat posts) do (
+    echo   - building %%S...
+    pushd "services\%%S"
+    call go build -o "..\..\bin\openfield-%%S.exe" .\cmd
+    if errorlevel 1 (
+        echo [ERROR] Build failed for %%S.
+        set "BUILD_FAILED=1"
+    )
+    popd
+)
+if "%BUILD_FAILED%"=="1" (
     pause
     exit /b 1
 )
 
-rem ---- Start server ----
-echo [3/3] Starting server...
+rem ---- Start services ----
+echo [3/4] Starting services...
 set "OPENFIELD_CONFIG=config\config.local.yaml"
-bin\openfield-server.exe
+start "openfield-account" bin\openfield-account.exe
+start "openfield-storage" bin\openfield-storage.exe
+start "openfield-chat" bin\openfield-chat.exe
+start "openfield-posts" bin\openfield-posts.exe
+start "openfield-gateway" bin\openfield-gateway.exe
+
+echo [4/4] All services started.
+echo   gateway:  http://localhost:8080
+echo   account:  http://localhost:8081
+echo   storage:  http://localhost:8082
+echo   chat:     http://localhost:8083
+echo   posts:    http://localhost:8084
+echo.
+echo Close this window to keep the services running (press any key).
+pause >nul
