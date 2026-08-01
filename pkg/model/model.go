@@ -20,6 +20,8 @@ type User struct {
 	OAuth2Provider    string    `json:"oauth2_provider"`
 	OAuth2ID          string    `json:"oauth2_id"`
 	OAuth2Username    string    `json:"oauth2_username"`
+	VerifiedNote      string    `json:"verified_note"`
+	VerifiedBy        string    `json:"verified_by"`
 	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt         time.Time `json:"updated_at"`
 	// Permissions are populated on /users/me when requested.

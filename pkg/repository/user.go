@@ -17,11 +17,11 @@ func NewUserRepository() *UserRepository {
 	return &UserRepository{}
 }
 
-const userColumns = "id, username, nickname, email, avatar_url, banner_url, role, password_hash, needs_registration, bio, is_verified, storage_quota, oauth2_provider, oauth2_id, oauth2_username, created_at, updated_at"
+const userColumns = "id, username, nickname, email, avatar_url, banner_url, role, password_hash, needs_registration, bio, is_verified, storage_quota, oauth2_provider, oauth2_id, oauth2_username, verified_note, verified_by, created_at, updated_at"
 
 func scanUser(row interface{ Scan(...any) error }) (*model.User, error) {
 	user := &model.User{}
-	err := row.Scan(&user.ID, &user.Username, &user.Nickname, &user.Email, &user.AvatarURL, &user.BannerURL, &user.Role, &user.PasswordHash, &user.NeedsRegistration, &user.Bio, &user.IsVerified, &user.StorageQuota, &user.OAuth2Provider, &user.OAuth2ID, &user.OAuth2Username, &user.CreatedAt, &user.UpdatedAt)
+	err := row.Scan(&user.ID, &user.Username, &user.Nickname, &user.Email, &user.AvatarURL, &user.BannerURL, &user.Role, &user.PasswordHash, &user.NeedsRegistration, &user.Bio, &user.IsVerified, &user.StorageQuota, &user.OAuth2Provider, &user.OAuth2ID, &user.OAuth2Username, &user.VerifiedNote, &user.VerifiedBy, &user.CreatedAt, &user.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
