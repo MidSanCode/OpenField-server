@@ -7,6 +7,7 @@ const (
 	AccountProfileEdit = "account.profile.edit"
 	AccountAvatarEdit  = "account.avatar.edit"
 	AccountBannerEdit  = "account.banner.edit"
+	AccountVerify      = "account.verify"
 
 	// Storage
 	StorageUpload  = "storage.upload"
@@ -40,7 +41,7 @@ const (
 // All returns every known permission key.
 func All() []string {
 	return []string{
-		AccountView, AccountProfileEdit, AccountAvatarEdit, AccountBannerEdit,
+		AccountView, AccountProfileEdit, AccountAvatarEdit, AccountBannerEdit, AccountVerify,
 		StorageUpload, StorageList, StorageGet, StorageDelete,
 		ChatView, ChatSend, ChatEdit, ChatDelete, ChatRequestSend, ChatRequestApprove,
 		ChatGroupCreate, ChatGroupInvite, ChatGroupManage, ChatNoteEdit, ChatGroupNickname,

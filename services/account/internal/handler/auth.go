@@ -127,6 +127,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	var req struct {
 		Username string `json:"username" binding:"required"`
 		Nickname string `json:"nickname" binding:"required"`
+		Bio      string `json:"bio"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -134,7 +135,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		return
 	}
 
-	user, err := h.userRepo.UpdateProfile(userID, req.Username, req.Nickname)
+	user, err := h.userRepo.UpdateProfile(userID, req.Username, req.Nickname, req.Bio)
 	if err != nil {
 		if errors.Is(err, repository.ErrUsernameTaken) {
 			c.JSON(http.StatusConflict, gin.H{"error": "username already taken"})
