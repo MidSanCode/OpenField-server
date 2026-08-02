@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"bytes"
+	"io"
 	"mime"
 	"net/http"
 	"path/filepath"
@@ -14,6 +16,9 @@ import (
 	"github.com/openfield/server/pkg/repository"
 	"github.com/openfield/server/pkg/storage"
 )
+
+// maxThumbReadBytes caps the size of an image that gets a generated thumbnail.
+const maxThumbReadBytes = 40 * 1024 * 1024
 
 // AttachmentHandler handles file upload/download.
 type AttachmentHandler struct {
@@ -94,14 +99,35 @@ func (h *AttachmentHandler) Upload(c *gin.Context) {
 		visibility = "public"
 	}
 
-	objectKey, url, err := h.store.Upload(c.Request.Context(), file, header.Size, contentType, header.Filename)
+	data, err := io.ReadAll(file)
+	if err != nil {
+		logger.Log.Error("failed to read upload", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read upload"})
+		return
+	}
+
+	objectKey, url, err := h.store.Upload(c.Request.Context(), bytes.NewReader(data), int64(len(data)), contentType, header.Filename)
 	if err != nil {
 		logger.Log.Error("failed to upload file", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upload file"})
 		return
 	}
 
-	att, err := h.attRepo.Create(userID, objectKey, header.Filename, contentType, header.Size, url, visibility)
+	// Generate a compressed thumbnail for images so feeds never download the full
+	// original. Failures are non-fatal: the attachment still works without one.
+	thumbURL := ""
+	if isImageMime(contentType) && len(data) <= maxThumbReadBytes {
+		if thumb, terr := generateThumbnail(data, contentType); terr == nil && len(thumb) > 0 {
+			thumbURL, err = h.store.UploadThumb(c.Request.Context(), objectKey, bytes.NewReader(thumb), int64(len(thumb)))
+			if err != nil {
+				logger.Log.Warn("failed to upload thumbnail", "error", err)
+			}
+		} else if terr != nil {
+			logger.Log.Debug("skipped thumbnail generation", "error", terr)
+		}
+	}
+
+	att, err := h.attRepo.Create(userID, objectKey, header.Filename, contentType, int64(len(data)), url, thumbURL, visibility)
 	if err != nil {
 		logger.Log.Error("failed to save attachment", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save attachment"})
@@ -164,6 +190,9 @@ func (h *AttachmentHandler) Delete(c *gin.Context) {
 
 	if err := h.store.Delete(c.Request.Context(), att.ObjectKey); err != nil {
 		logger.Log.Error("failed to delete storage object", "error", err)
+	}
+	if err := h.store.DeleteThumb(c.Request.Context(), att.ObjectKey); err != nil {
+		logger.Log.Error("failed to delete storage thumbnail", "error", err)
 	}
 	if err := h.attRepo.Delete(id); err != nil {
 		logger.Log.Error("failed to delete attachment record", "error", err)

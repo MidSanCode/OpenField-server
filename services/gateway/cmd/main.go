@@ -157,6 +157,14 @@ func main() {
 		{http.MethodPut, "/api/v1/posts/:id/replies/:reply_id", cfg.Services.Posts, authPermission, "posts.reply.edit"},
 		{http.MethodDelete, "/api/v1/posts/:id/replies/:reply_id", cfg.Services.Posts, authPermission, "posts.reply.delete"},
 		{http.MethodGet, "/api/v1/users/:user_id/posts", cfg.Services.Posts, authPublic, ""},
+		{http.MethodPut, "/api/v1/posts/:id/reactions", cfg.Services.Posts, authPermission, "posts.react"},
+		{http.MethodDelete, "/api/v1/posts/:id/reactions", cfg.Services.Posts, authPermission, "posts.react"},
+
+		// ---- follows ----
+		{http.MethodPost, "/api/v1/users/:user_id/follow", cfg.Services.Account, authPermission, "account.follow"},
+		{http.MethodDelete, "/api/v1/users/:user_id/follow", cfg.Services.Account, authPermission, "account.follow"},
+		{http.MethodGet, "/api/v1/users/:user_id/followers", cfg.Services.Account, authPublic, ""},
+		{http.MethodGet, "/api/v1/users/:user_id/following", cfg.Services.Account, authPublic, ""},
 
 		// ---- chat ----
 		{http.MethodGet, "/api/v1/consent-requests", cfg.Services.Chat, authPermission, "chat.request.approve"},
@@ -176,6 +184,9 @@ func main() {
 		{http.MethodPost, "/api/v1/conversations/:id/messages", cfg.Services.Chat, authPermission, "chat.send"},
 		{http.MethodPut, "/api/v1/conversations/:id/messages/:message_id", cfg.Services.Chat, authPermission, "chat.edit"},
 		{http.MethodDelete, "/api/v1/conversations/:id/messages/:message_id", cfg.Services.Chat, authPermission, "chat.delete"},
+
+		// ---- push (realtime) ----
+		{http.MethodGet, "/api/v1/ws", cfg.Services.Push, authRequired, ""},
 	}
 
 	// Build reverse proxies per service.
@@ -209,6 +220,20 @@ func main() {
 
 		// Auth handling.
 		userID, authenticated := middleware.GetUserID(c)
+
+		// On public routes, still honor a valid Bearer token so downstream
+		// services can personalize reads (e.g. my_reaction, is_following,
+		// authenticated view tracking). An invalid/absent token simply leaves
+		// the request anonymous.
+		if !authenticated {
+			if header := c.GetHeader("Authorization"); strings.HasPrefix(header, "Bearer ") {
+				if id, err := middleware.ParseToken(strings.TrimPrefix(header, "Bearer "), cfg.JWT.SecretKey); err == nil {
+					userID = id
+					authenticated = true
+				}
+			}
+		}
+
 		if rt.level != authPublic {
 			// Validate JWT.
 			header := c.GetHeader("Authorization")

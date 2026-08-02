@@ -7,5 +7,6 @@ use (
 	./services/chat
 	./services/gateway
 	./services/posts
+	./services/push
 	./services/storage
 )

@@ -1,11 +1,13 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"github.com/openfield/server/pkg/events"
 	"github.com/openfield/server/pkg/logger"
 	"github.com/openfield/server/pkg/middleware"
 	"github.com/openfield/server/pkg/repository"
@@ -117,7 +119,27 @@ func (h *MessageHandler) Send(c *gin.Context) {
 		return
 	}
 
+	h.publishMessageEvent(c.Request.Context(), events.ChatMessageCreated, convID, msg)
+
 	c.JSON(http.StatusCreated, msg)
+}
+
+// publishMessageEvent notifies all conversation members (via the push service)
+// about a message change.
+func (h *MessageHandler) publishMessageEvent(ctx context.Context, typ string, convID int64, msg interface{}) {
+	members, err := h.convRepo.ListMembers(convID)
+	if err != nil {
+		logger.Log.Warn("failed to list conversation members for push", "error", err, "conversation_id", convID)
+		return
+	}
+	recipients := make([]int64, 0, len(members))
+	for _, m := range members {
+		if m.Status != "active" {
+			continue
+		}
+		recipients = append(recipients, m.UserID)
+	}
+	events.Publish(ctx, typ, recipients, msg)
 }
 
 // Update edits a message's content (owner only).
@@ -165,6 +187,8 @@ func (h *MessageHandler) Update(c *gin.Context) {
 		return
 	}
 
+	h.publishMessageEvent(c.Request.Context(), events.ChatMessageUpdated, msg.ConversationID, msg)
+
 	c.JSON(http.StatusOK, msg)
 }
 
@@ -182,6 +206,11 @@ func (h *MessageHandler) Delete(c *gin.Context) {
 		return
 	}
 
+	msg, err := h.msgRepo.GetByID(msgID)
+	if err != nil {
+		logger.Log.Error("failed to get message for delete event", "error", err)
+	}
+
 	err = h.msgRepo.Delete(msgID, userID)
 	if err != nil {
 		if errors.Is(err, repository.ErrDeletedMessage) {
@@ -195,6 +224,10 @@ func (h *MessageHandler) Delete(c *gin.Context) {
 		logger.Log.Error("failed to delete message", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete message"})
 		return
+	}
+
+	if msg != nil {
+		h.publishMessageEvent(c.Request.Context(), events.ChatMessageDeleted, msg.ConversationID, msg)
 	}
 
 	c.Status(http.StatusNoContent)

@@ -71,6 +71,37 @@ func (s *Store) Upload(ctx context.Context, reader io.Reader, size int64, conten
 	return objectKey, url, nil
 }
 
+// UploadThumb stores a thumbnail image next to an object and returns its public URL.
+// The thumbnail key is derived from the parent object key with a ".thumb.jpg" suffix.
+func (s *Store) UploadThumb(ctx context.Context, parentObjectKey string, reader io.Reader, size int64) (string, error) {
+	thumbKey := parentObjectKey + ".thumb.jpg"
+	_, err := s.client.PutObject(ctx, s.bucket, thumbKey, reader, size, minio.PutObjectOptions{
+		ContentType: "image/jpeg",
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to upload thumbnail: %w", err)
+	}
+	return s.publicBaseURL + "/" + thumbKey, nil
+}
+
+// GetBytes downloads the full contents of an object into memory. It is meant
+// for small objects only (e.g. thumbnail generation after chunk assembly).
+func (s *Store) GetBytes(ctx context.Context, objectKey string, max int64) ([]byte, error) {
+	obj, err := s.client.GetObject(ctx, s.bucket, objectKey, minio.GetObjectOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to open object: %w", err)
+	}
+	defer obj.Close()
+	stat, err := obj.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat object: %w", err)
+	}
+	if stat.Size > max {
+		return nil, fmt.Errorf("object too large: %d > %d", stat.Size, max)
+	}
+	return io.ReadAll(obj)
+}
+
 // Delete removes an object from storage.
 func (s *Store) Delete(ctx context.Context, objectKey string) error {
 	err := s.client.RemoveObject(ctx, s.bucket, objectKey, minio.RemoveObjectOptions{})
@@ -78,4 +109,112 @@ func (s *Store) Delete(ctx context.Context, objectKey string) error {
 		return fmt.Errorf("failed to delete object: %w", err)
 	}
 	return nil
+}
+
+// DeleteThumb removes the thumbnail derived from a parent object key.
+func (s *Store) DeleteThumb(ctx context.Context, parentObjectKey string) error {
+	return s.Delete(ctx, parentObjectKey+".thumb.jpg")
+}
+
+// ChunkKey returns the object key for a chunk of an in-progress upload.
+func ChunkKey(uploadID string, index int) string {
+	return fmt.Sprintf("chunks/%s/%08d", uploadID, index)
+}
+
+// UploadChunk stores a single chunk of a large-file upload. Chunks are kept
+// as independent objects so interrupted uploads can resume.
+func (s *Store) UploadChunk(ctx context.Context, uploadID string, index int, reader io.Reader, size int64) error {
+	key := ChunkKey(uploadID, index)
+	_, err := s.client.PutObject(ctx, s.bucket, key, reader, size, minio.PutObjectOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to upload chunk: %w", err)
+	}
+	return nil
+}
+
+// ListChunks returns the set of chunk indexes already uploaded for an upload.
+// The result is a list of contiguous indexes 1..N, where N is the number of
+// contiguous chunks present starting from chunk 1.
+func (s *Store) ListChunks(ctx context.Context, uploadID string) (map[int]int64, error) {
+	prefix := fmt.Sprintf("chunks/%s/", uploadID)
+	existing := make(map[int]int64)
+	for obj := range s.client.ListObjects(ctx, s.bucket, minio.ListObjectsOptions{
+		Prefix: prefix,
+	}) {
+		if obj.Err != nil {
+			return nil, obj.Err
+		}
+		var index int
+		if _, err := fmt.Sscanf(obj.Key, prefix+"%08d", &index); err == nil {
+			existing[index] = obj.Size
+		}
+	}
+	return existing, nil
+}
+
+// AssembleChunks concatenates uploaded chunks into a single object. It reads
+// chunks back from storage, so it must only be called with the full set of
+// chunk indexes (1..total).
+func (s *Store) AssembleChunks(ctx context.Context, uploadID string, totalChunks int, contentType, originalName string) (string, string, error) {
+	ext := filepath.Ext(originalName)
+	objectKey := fmt.Sprintf("%s/%s%s", time.Now().Format("2006/01/02"), uuid.NewString(), ext)
+
+	var readers []io.ReadCloser
+	total := int64(0)
+	for i := 1; i <= totalChunks; i++ {
+		obj, err := s.client.GetObject(ctx, s.bucket, ChunkKey(uploadID, i), minio.GetObjectOptions{})
+		if err != nil {
+			closeAll(readers)
+			return "", "", fmt.Errorf("failed to open chunk %d: %w", i, err)
+		}
+		if _, err := obj.Stat(); err != nil {
+			obj.Close()
+			closeAll(readers)
+			return "", "", fmt.Errorf("failed to stat chunk %d: %w", i, err)
+		}
+		readers = append(readers, obj)
+		total += 0 // size is irrelevant for a streaming reader
+	}
+
+	multi := io.MultiReader(toReaders(readers)...)
+	_, err := s.client.PutObject(ctx, s.bucket, objectKey, multi, -1, minio.PutObjectOptions{
+		ContentType: contentType,
+	})
+	closeAll(readers)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to assemble chunks: %w", err)
+	}
+
+	url := s.publicBaseURL + "/" + objectKey
+	return objectKey, url, nil
+}
+
+// DeleteChunks removes all chunk objects for an upload.
+func (s *Store) DeleteChunks(ctx context.Context, uploadID string) error {
+	prefix := fmt.Sprintf("chunks/%s/", uploadID)
+	for obj := range s.client.ListObjects(ctx, s.bucket, minio.ListObjectsOptions{
+		Prefix: prefix,
+	}) {
+		if obj.Err != nil {
+			return obj.Err
+		}
+		if err := s.client.RemoveObject(ctx, s.bucket, obj.Key, minio.RemoveObjectOptions{}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func toReaders(readers []io.ReadCloser) []io.Reader {
+	out := make([]io.Reader, 0, len(readers))
+	for _, r := range readers {
+		out = append(out, r)
+	}
+	return out
+}
+
+func closeAll(readers []io.ReadCloser) {
+	for _, r := range readers {
+		r.Close()
+	}
 }

@@ -68,6 +68,7 @@ type ServicesConfig struct {
 	Storage string `yaml:"storage"`
 	Chat    string `yaml:"chat"`
 	Posts   string `yaml:"posts"`
+	Push    string `yaml:"push"`
 }
 
 // Config holds all configuration for the server.
@@ -161,6 +162,9 @@ func (c *Config) overrideFromEnv() {
 	if v := os.Getenv("SERVICE_POSTS"); v != "" {
 		c.Services.Posts = v
 	}
+	if v := os.Getenv("SERVICE_PUSH"); v != "" {
+		c.Services.Push = v
+	}
 }
 
 // ServicePort returns the listen port for a named internal service.
@@ -181,6 +185,8 @@ func (c *Config) ServicePort(name string) string {
 		base = c.Services.Chat
 	case "POSTS":
 		base = c.Services.Posts
+	case "PUSH":
+		base = c.Services.Push
 	}
 	if base != "" {
 		if u, err := url.Parse(base); err == nil {

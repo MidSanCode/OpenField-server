@@ -8,27 +8,64 @@ import (
 	"github.com/openfield/server/pkg/config"
 	"github.com/openfield/server/pkg/logger"
 	"github.com/openfield/server/pkg/middleware"
+	"github.com/openfield/server/pkg/model"
 	"github.com/openfield/server/pkg/repository"
 	"github.com/openfield/server/pkg/storage"
 )
 
 // UserHandler handles user-related requests.
 type UserHandler struct {
-	userRepo *repository.UserRepository
-	permRepo *repository.PermissionRepository
-	attRepo  *repository.AttachmentRepository
-	store    *storage.Store
-	cfg      config.StorageConfig
+	userRepo  *repository.UserRepository
+	followRepo *repository.FollowRepository
+	permRepo  *repository.PermissionRepository
+	attRepo   *repository.AttachmentRepository
+	store     *storage.Store
+	cfg       config.StorageConfig
 }
 
 // NewUserHandler creates a new UserHandler.
 func NewUserHandler(store *storage.Store, cfg config.StorageConfig) *UserHandler {
 	return &UserHandler{
-		userRepo: repository.NewUserRepository(),
-		permRepo: repository.NewPermissionRepository(),
-		attRepo:  repository.NewAttachmentRepository(),
-		store:    store,
-		cfg:      cfg,
+		userRepo:   repository.NewUserRepository(),
+		followRepo: repository.NewFollowRepository(),
+		permRepo:   repository.NewPermissionRepository(),
+		attRepo:    repository.NewAttachmentRepository(),
+		store:      store,
+		cfg:        cfg,
+	}
+}
+
+// requesterID returns the authenticated user id forwarded by the gateway, or 0
+// when the request is anonymous. Works for both protected (context) and public
+// (header) routes.
+func requesterID(c *gin.Context) int64 {
+	if id, ok := middleware.GetUserID(c); ok {
+		return id
+	}
+	if v := c.GetHeader(middleware.UserIDHeader); v != "" {
+		if id, err := strconv.ParseInt(v, 10, 64); err == nil {
+			return id
+		}
+	}
+	return 0
+}
+
+// populateFollowStats fills follower/following counts and, for profile reads by
+// an authenticated requester, whether the requester follows the target.
+func (h *UserHandler) populateFollowStats(user *model.User, requester int64) {
+	if user == nil {
+		return
+	}
+	if count, err := h.followRepo.CountFollowers(user.ID); err == nil {
+		user.FollowerCount = count
+	}
+	if count, err := h.followRepo.CountFollowing(user.ID); err == nil {
+		user.FollowingCount = count
+	}
+	if requester > 0 && requester != user.ID {
+		if following, err := h.followRepo.IsFollowing(requester, user.ID); err == nil {
+			user.IsFollowing = following
+		}
 	}
 }
 
@@ -54,6 +91,8 @@ func (h *UserHandler) GetCurrentUser(c *gin.Context) {
 	if used, err := h.attRepo.SumSizeByUser(userID); err == nil {
 		user.StorageUsed = used
 	}
+
+	h.populateFollowStats(user, userID)
 
 	c.JSON(http.StatusOK, user)
 }
@@ -211,7 +250,7 @@ func (h *UserHandler) uploadImage(c *gin.Context, kind string) {
 		return
 	}
 
-	if _, err := h.attRepo.Create(userID, objectKey, header.Filename, contentType, header.Size, url, "public"); err != nil {
+	if _, err := h.attRepo.Create(userID, objectKey, header.Filename, contentType, header.Size, url, "", "public"); err != nil {
 		logger.Log.Error("failed to save image attachment", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save image"})
 		return
@@ -258,5 +297,121 @@ func (h *UserHandler) GetUser(c *gin.Context) {
 		return
 	}
 
+	h.populateFollowStats(user, requesterID(c))
+
 	c.JSON(http.StatusOK, user)
+}
+
+// FollowUser makes the current user follow the target user.
+func (h *UserHandler) FollowUser(c *gin.Context) {
+	followerID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	followeeID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user ID"})
+		return
+	}
+	if followerID == followeeID {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "you cannot follow yourself"})
+		return
+	}
+
+	target, err := h.userRepo.GetByID(followeeID)
+	if err != nil {
+		logger.Log.Error("failed to get user", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to follow user"})
+		return
+	}
+	if target == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+		return
+	}
+
+	if err := h.followRepo.Follow(followerID, followeeID); err != nil {
+		logger.Log.Error("failed to follow user", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to follow user"})
+		return
+	}
+
+	h.populateFollowStats(target, followerID)
+	c.JSON(http.StatusOK, target)
+}
+
+// UnfollowUser makes the current user stop following the target user.
+func (h *UserHandler) UnfollowUser(c *gin.Context) {
+	followerID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	followeeID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user ID"})
+		return
+	}
+
+	if err := h.followRepo.Unfollow(followerID, followeeID); err != nil {
+		logger.Log.Error("failed to unfollow user", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to unfollow user"})
+		return
+	}
+
+	c.Status(http.StatusNoContent)
+}
+
+// ListFollowers returns the users who follow the given user.
+func (h *UserHandler) ListFollowers(c *gin.Context) {
+	userID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user ID"})
+		return
+	}
+
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+
+	users, err := h.followRepo.ListFollowers(userID, page, limit)
+	if err != nil {
+		logger.Log.Error("failed to list followers", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list followers"})
+		return
+	}
+
+	requester := requesterID(c)
+	for i := range users {
+		h.populateFollowStats(&users[i], requester)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"users": users, "page": page, "limit": limit})
+}
+
+// ListFollowing returns the users the given user follows.
+func (h *UserHandler) ListFollowing(c *gin.Context) {
+	userID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user ID"})
+		return
+	}
+
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+
+	users, err := h.followRepo.ListFollowing(userID, page, limit)
+	if err != nil {
+		logger.Log.Error("failed to list following", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list following"})
+		return
+	}
+
+	requester := requesterID(c)
+	for i := range users {
+		h.populateFollowStats(&users[i], requester)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"users": users, "page": page, "limit": limit})
 }

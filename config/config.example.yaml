@@ -12,6 +12,7 @@ services:
   storage: "http://127.0.0.1:8082"
   chat: "http://127.0.0.1:8083"
   posts: "http://127.0.0.1:8084"
+  push: "http://127.0.0.1:8085"
 
 
 database:

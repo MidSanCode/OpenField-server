@@ -17,6 +17,14 @@ func RegisterRoutes(r *gin.Engine, attHandler *AttachmentHandler) {
 			att.GET("", attHandler.ListByUser)
 			att.GET("/:id", attHandler.Get)
 			att.DELETE("/:id", attHandler.Delete)
+
+			chunk := att.Group("/chunk")
+			{
+				chunk.POST("/init", attHandler.ChunkInit)
+				chunk.GET("/:upload_id", attHandler.ChunkStatus)
+				chunk.POST("/:upload_id/:index", attHandler.ChunkUpload)
+				chunk.POST("/:upload_id/complete", attHandler.ChunkComplete)
+			}
 		}
 		api.GET("/storage/usage", attHandler.ListByUser)
 	}

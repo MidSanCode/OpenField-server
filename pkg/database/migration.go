@@ -38,6 +38,7 @@ func RunMigrations() error {
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS verified_note TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS verified_by VARCHAR(255) NOT NULL DEFAULT ''`,
 		`ALTER TABLE attachments ADD COLUMN IF NOT EXISTS visibility VARCHAR(20) NOT NULL DEFAULT 'public'`,
+		`ALTER TABLE attachments ADD COLUMN IF NOT EXISTS thumb_url TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE users ALTER COLUMN email TYPE VARCHAR(255)`,
 		`ALTER TABLE users ALTER COLUMN email SET DEFAULT ''`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username)`,
@@ -75,6 +76,12 @@ func RunMigrations() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_post_replies_post ON post_replies(post_id, created_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_post_replies_parent ON post_replies(parent_id)`,
+		`CREATE TABLE IF NOT EXISTS reply_attachments (
+			reply_id BIGINT NOT NULL REFERENCES post_replies(id) ON DELETE CASCADE,
+			attachment_id BIGINT NOT NULL REFERENCES attachments(id) ON DELETE CASCADE,
+			PRIMARY KEY (reply_id, attachment_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_reply_attachments_attachment ON reply_attachments(attachment_id)`,
 
 		// ---- permission system ----
 		`CREATE TABLE IF NOT EXISTS permissions (
@@ -181,6 +188,37 @@ func RunMigrations() error {
 		`CREATE INDEX IF NOT EXISTS idx_attachments_user_id ON attachments(user_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_attachments_object_key ON attachments(object_key)`,
 		`CREATE INDEX IF NOT EXISTS idx_post_attachments_attachment ON post_attachments(attachment_id)`,
+
+		// ---- post analytics: views ----
+		`ALTER TABLE posts ADD COLUMN IF NOT EXISTS view_count BIGINT NOT NULL DEFAULT 0`,
+		`CREATE TABLE IF NOT EXISTS post_views (
+			id BIGSERIAL PRIMARY KEY,
+			post_id BIGINT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+			viewer_key TEXT NOT NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			UNIQUE (post_id, viewer_key)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_post_views_post ON post_views(post_id)`,
+
+		// ---- post reactions ----
+		`CREATE TABLE IF NOT EXISTS post_reactions (
+			post_id BIGINT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+			user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			reaction VARCHAR(32) NOT NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			PRIMARY KEY (post_id, user_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_post_reactions_reaction ON post_reactions(reaction)`,
+
+		// ---- follows ----
+		`CREATE TABLE IF NOT EXISTS user_follows (
+			follower_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			followee_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			PRIMARY KEY (follower_id, followee_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_user_follows_followee ON user_follows(followee_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_user_follows_follower ON user_follows(follower_id)`,
 	}
 
 	for _, m := range migrations {

@@ -43,7 +43,7 @@ rem ---- Build services ----
 echo [2/4] Building services...
 if not exist "bin" mkdir "bin"
 set "BUILD_FAILED=0"
-for %%S in (gateway account storage chat posts) do (
+for %%S in (gateway account storage chat posts push) do (
     echo   - building %%S...
     pushd "services\%%S"
     call go build -o "..\..\bin\openfield-%%S.exe" .\cmd
@@ -65,6 +65,7 @@ start "openfield-account" bin\openfield-account.exe
 start "openfield-storage" bin\openfield-storage.exe
 start "openfield-chat" bin\openfield-chat.exe
 start "openfield-posts" bin\openfield-posts.exe
+start "openfield-push" bin\openfield-push.exe
 start "openfield-gateway" bin\openfield-gateway.exe
 
 echo [4/4] All services started.
@@ -73,6 +74,7 @@ echo   account:  http://localhost:8081
 echo   storage:  http://localhost:8082
 echo   chat:     http://localhost:8083
 echo   posts:    http://localhost:8084
+echo   push:     http://localhost:8085
 echo.
 echo Close this window to keep the services running (press any key).
 pause >nul

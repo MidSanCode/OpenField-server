@@ -24,6 +24,11 @@ type User struct {
 	VerifiedBy        string    `json:"verified_by"`
 	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt         time.Time `json:"updated_at"`
+	// FollowerCount/FollowingCount are populated on profile reads.
+	FollowerCount  int64 `json:"follower_count,omitempty"`
+	FollowingCount int64 `json:"following_count,omitempty"`
+	// IsFollowing is whether the requesting user follows this user.
+	IsFollowing bool `json:"is_following,omitempty"`
 	// Permissions are populated on /users/me when requested.
 	Permissions []string `json:"permissions,omitempty"`
 }
@@ -36,6 +41,12 @@ type Post struct {
 	CreatedAt   time.Time    `json:"created_at"`
 	UpdatedAt   time.Time    `json:"updated_at"`
 	ReplyCount  int64        `json:"reply_count,omitempty"`
+	ViewCount   int64        `json:"view_count,omitempty"`
+	UniqueViews int64        `json:"unique_views,omitempty"`
+	// Reactions holds reaction counts keyed by reaction type (e.g. like).
+	Reactions map[string]int64 `json:"reactions,omitempty"`
+	// MyReaction is the authenticated viewer's own reaction, when present.
+	MyReaction  string       `json:"my_reaction,omitempty"`
 	Username    string       `json:"username,omitempty"`
 	Nickname    string       `json:"nickname,omitempty"`
 	AvatarURL   string       `json:"avatar_url,omitempty"`
@@ -57,6 +68,11 @@ type PostReply struct {
 	Nickname  string     `json:"nickname,omitempty"`
 	AvatarURL string     `json:"avatar_url,omitempty"`
 	IsVerified bool      `json:"is_verified,omitempty"`
+	// ParentContent is a preview of the parent reply's content (for nested threads).
+	ParentContent string       `json:"parent_content,omitempty"`
+	// ParentName is the parent reply author's display name.
+	ParentName  string       `json:"parent_name,omitempty"`
+	Attachments []Attachment `json:"attachments,omitempty"`
 }
 
 // Attachment represents a file stored in RustFS.
@@ -68,6 +84,7 @@ type Attachment struct {
 	MimeType     string    `json:"mime_type"`
 	SizeBytes    int64     `json:"size_bytes"`
 	URL          string    `json:"url"`
+	ThumbURL     string    `json:"thumb_url,omitempty"`
 	Visibility   string    `json:"visibility"`
 	CreatedAt    time.Time `json:"created_at"`
 }

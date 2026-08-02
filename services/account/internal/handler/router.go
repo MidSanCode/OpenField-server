@@ -33,5 +33,14 @@ func RegisterRoutes(r *gin.Engine, authHandler *AuthHandler, userHandler *UserHa
 		}
 		// Public profile lookup (used to view other users' public profiles).
 		api.GET("/users/:id", userHandler.GetUser)
+
+		// Follow relationships: mutations require auth; lists are public reads.
+		follow := api.Group("/users/:id")
+		{
+			follow.POST("/follow", middleware.GatewayAuthMiddleware(), userHandler.FollowUser)
+			follow.DELETE("/follow", middleware.GatewayAuthMiddleware(), userHandler.UnfollowUser)
+			follow.GET("/followers", userHandler.ListFollowers)
+			follow.GET("/following", userHandler.ListFollowing)
+		}
 	}
 }

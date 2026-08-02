@@ -1,15 +1,24 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"github.com/openfield/server/pkg/events"
 	"github.com/openfield/server/pkg/logger"
 	"github.com/openfield/server/pkg/middleware"
+	"github.com/openfield/server/pkg/model"
 	"github.com/openfield/server/pkg/repository"
 )
+
+// allowedReactions is the fixed set of post reactions clients may use.
+var allowedReactions = map[string]bool{
+	"like": true, "dislike": true, "love": true,
+	"haha": true, "wow": true, "sad": true, "angry": true,
+}
 
 // PostHandler handles post and reply requests.
 type PostHandler struct {
@@ -63,10 +72,13 @@ func (h *PostHandler) CreatePost(c *gin.Context) {
 		return
 	}
 
+	// New posts are broadcast to all connected clients (public feed).
+	events.Publish(c.Request.Context(), events.PostCreated, nil, post)
+
 	c.JSON(http.StatusCreated, post)
 }
 
-// GetPost retrieves a single post by ID.
+// GetPost retrieves a single post by ID, recording a view.
 func (h *PostHandler) GetPost(c *gin.Context) {
 	postID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
@@ -74,7 +86,8 @@ func (h *PostHandler) GetPost(c *gin.Context) {
 		return
 	}
 
-	post, err := h.postRepo.GetByID(postID)
+	viewer := requesterID(c)
+	post, err := h.postRepo.GetByIDWithViewer(postID, viewer)
 	if err != nil {
 		logger.Log.Error("failed to get post", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get post"})
@@ -85,7 +98,35 @@ func (h *PostHandler) GetPost(c *gin.Context) {
 		return
 	}
 
+	// Fire-and-forget view tracking: the read succeeds regardless.
+	if err := h.postRepo.RecordView(postID, viewerKey(c)); err != nil {
+		logger.Log.Warn("failed to record post view", "error", err, "post_id", postID)
+	}
+
 	c.JSON(http.StatusOK, post)
+}
+
+// requesterID returns the authenticated user id forwarded by the gateway, or 0
+// for anonymous reads.
+func requesterID(c *gin.Context) int64 {
+	if id, ok := middleware.GetUserID(c); ok {
+		return id
+	}
+	if v := c.GetHeader(middleware.UserIDHeader); v != "" {
+		if id, err := strconv.ParseInt(v, 10, 64); err == nil {
+			return id
+		}
+	}
+	return 0
+}
+
+// viewerKey builds a stable per-viewer key: "u:<id>" for authenticated users,
+// otherwise "ip:<client ip>" for anonymous visitors.
+func viewerKey(c *gin.Context) string {
+	if id := requesterID(c); id > 0 {
+		return "u:" + strconv.FormatInt(id, 10)
+	}
+	return "ip:" + c.ClientIP()
 }
 
 // ListPosts retrieves paginated posts.
@@ -237,8 +278,9 @@ func (h *PostHandler) CreateReply(c *gin.Context) {
 	}
 
 	var req struct {
-		Content  string `json:"content" binding:"required"`
-		ParentID *int64 `json:"parent_id"`
+		Content       string  `json:"content" binding:"required"`
+		ParentID      *int64  `json:"parent_id"`
+		AttachmentIDs []int64 `json:"attachment_ids"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -253,15 +295,36 @@ func (h *PostHandler) CreateReply(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "content exceeds maximum length of 5000"})
 		return
 	}
+	if len(req.AttachmentIDs) > 9 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "too many attachments (max 9)"})
+		return
+	}
 
-	reply, err := h.replyRepo.Create(postID, userID, req.Content, req.ParentID)
+	reply, err := h.replyRepo.Create(postID, userID, req.Content, req.ParentID, req.AttachmentIDs)
 	if err != nil {
 		logger.Log.Error("failed to create reply", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create reply"})
 		return
 	}
 
+	h.notifyReplyCreated(c.Request.Context(), reply, post.UserID)
+
 	c.JSON(http.StatusCreated, reply)
+}
+
+// notifyReplyCreated pushes a new-reply event to the post author and, for
+// nested replies, the author of the parent reply (excluding the replier).
+func (h *PostHandler) notifyReplyCreated(ctx context.Context, reply interface{}, postAuthorID int64) {
+	recipients := []int64{postAuthorID}
+	if r, ok := reply.(*model.PostReply); ok {
+		if r.ParentID != nil {
+			parent, err := h.replyRepo.GetByID(*r.ParentID)
+			if err == nil && parent != nil && parent.UserID != postAuthorID {
+				recipients = append(recipients, parent.UserID)
+			}
+		}
+	}
+	events.Publish(ctx, events.ReplyCreated, recipients, reply)
 }
 
 // ListReplies retrieves replies for a post.
@@ -304,7 +367,8 @@ func (h *PostHandler) UpdateReply(c *gin.Context) {
 	}
 
 	var req struct {
-		Content string `json:"content" binding:"required"`
+		Content       string  `json:"content" binding:"required"`
+		AttachmentIDs []int64 `json:"attachment_ids"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
@@ -314,8 +378,16 @@ func (h *PostHandler) UpdateReply(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "content cannot be empty"})
 		return
 	}
+	if len(req.Content) > 5000 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "content exceeds maximum length of 5000"})
+		return
+	}
+	if len(req.AttachmentIDs) > 9 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "too many attachments (max 9)"})
+		return
+	}
 
-	reply, err := h.replyRepo.Update(replyID, userID, req.Content)
+	reply, err := h.replyRepo.Update(replyID, userID, req.Content, req.AttachmentIDs)
 	if err != nil {
 		if errors.Is(err, repository.ErrNoSuchRow) {
 			c.JSON(http.StatusForbidden, gin.H{"error": "reply not found or you don't have permission to edit it"})
@@ -355,4 +427,72 @@ func (h *PostHandler) DeleteReply(c *gin.Context) {
 	}
 
 	c.Status(http.StatusNoContent)
+}
+
+// SetPostReaction upserts the current user's reaction on a post.
+func (h *PostHandler) SetPostReaction(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	postID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid post ID"})
+		return
+	}
+
+	var req struct {
+		Reaction string `json:"reaction" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+	if !allowedReactions[req.Reaction] {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unknown reaction"})
+		return
+	}
+
+	if err := h.postRepo.SetReaction(postID, userID, req.Reaction); err != nil {
+		logger.Log.Error("failed to set reaction", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to set reaction"})
+		return
+	}
+
+	post, err := h.postRepo.GetByIDWithViewer(postID, userID)
+	if err != nil || post == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load post"})
+		return
+	}
+	c.JSON(http.StatusOK, post)
+}
+
+// RemovePostReaction clears the current user's reaction on a post.
+func (h *PostHandler) RemovePostReaction(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	postID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid post ID"})
+		return
+	}
+
+	if err := h.postRepo.RemoveReaction(postID, userID); err != nil {
+		logger.Log.Error("failed to remove reaction", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to remove reaction"})
+		return
+	}
+
+	post, err := h.postRepo.GetByIDWithViewer(postID, userID)
+	if err != nil || post == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load post"})
+		return
+	}
+	c.JSON(http.StatusOK, post)
 }

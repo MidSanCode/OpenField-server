@@ -35,7 +35,7 @@ go mod download
 # ---- Build services ----
 echo "[2/4] Building services..."
 mkdir -p bin
-for S in gateway account storage chat posts; do
+for S in gateway account storage chat posts push; do
     echo "  - building $S..."
     (cd "services/$S" && go build -o "../../bin/openfield-$S" ./cmd)
 done
@@ -44,7 +44,7 @@ done
 echo "[3/4] Starting services..."
 export OPENFIELD_CONFIG="config/config.local.yaml"
 pids=""
-for S in account storage chat posts gateway; do
+for S in account storage chat posts push gateway; do
     "bin/openfield-$S" &
     pids="$pids $!"
 done
@@ -55,6 +55,7 @@ echo "  account: http://localhost:8081"
 echo "  storage: http://localhost:8082"
 echo "  chat:    http://localhost:8083"
 echo "  posts:   http://localhost:8084"
+echo "  push:    http://localhost:8085"
 echo
 
 # trap to kill all services on exit

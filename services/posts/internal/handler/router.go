@@ -24,6 +24,8 @@ func RegisterRoutes(r *gin.Engine, postHandler *PostHandler) {
 			auth.POST("/posts/:id/replies", postHandler.CreateReply)
 			auth.PUT("/posts/:id/replies/:reply_id", postHandler.UpdateReply)
 			auth.DELETE("/posts/:id/replies/:reply_id", postHandler.DeleteReply)
+			auth.PUT("/posts/:id/reactions", postHandler.SetPostReaction)
+			auth.DELETE("/posts/:id/reactions", postHandler.RemovePostReaction)
 		}
 	}
 }
