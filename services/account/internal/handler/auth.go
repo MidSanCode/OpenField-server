@@ -195,7 +195,7 @@ func (h *AuthHandler) OIDCCallback(c *gin.Context) {
 		appLink := fmt.Sprintf("%s?access_token=%s&username=%s&email=%s&avatar_url=%s&needs_registration=%t",
 			h.appRedirectURL, accessToken, url.QueryEscape(user.Username), url.QueryEscape(user.Email), url.QueryEscape(user.AvatarURL), user.NeedsRegistration)
 		if strings.HasPrefix(h.appRedirectURL, "openfield://") || !strings.HasPrefix(h.appRedirectURL, "http") {
-			c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(loginResultPage(appLink)))
+			c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(loginResultPage(appLink, accessToken)))
 			return
 		}
 		c.Redirect(http.StatusFound, appLink)
@@ -279,18 +279,33 @@ func bindResultPage(result, reason, accountName, appLink string) string {
 		iconGlyph = "&#10005;"
 	}
 
-	return renderResultPage(iconClass, iconGlyph, title, desc, btnLabel, btnHref)
+	return renderResultPage(iconClass, iconGlyph, title, desc, btnLabel, btnHref, "")
 }
 
 // loginResultPage renders a small HTML page shown after a successful OIDC login.
-func loginResultPage(appLink string) string {
+// It offers a deep-link button into the app plus a copyable access token as a
+// fallback when the app's custom protocol cannot be opened (e.g. deep links are
+// blocked on the current OS). Users can paste the token into the app's token
+// login to sign in.
+func loginResultPage(appLink, accessToken string) string {
 	return renderResultPage("ok", "&#10003;", "登录成功",
-		"你的账号已登录成功。点击下方按钮打开 OpenField。",
-		"打开 OpenField", appLink)
+		"你的账号已登录成功。点击下方按钮打开 OpenField；若无法打开，请复制下方令牌并粘贴到应用的「令牌登录」中完成登录。",
+		"打开 OpenField", appLink, accessToken)
 }
 
-// renderResultPage is the shared HTML template for OIDC result pages.
-func renderResultPage(iconClass, iconGlyph, title, desc, btnLabel, btnHref string) string {
+// renderResultPage is the shared HTML template for OIDC result pages. When token
+// is non-empty, a copyable token block is rendered as a deep-link fallback.
+func renderResultPage(iconClass, iconGlyph, title, desc, btnLabel, btnHref, token string) string {
+	tokenBlock := ""
+	if token != "" {
+		tokenBlock = fmt.Sprintf(`<div class="token-wrap">
+    <div class="token-box">
+      <code id="openfield-token">%s</code>
+      <button class="copy-btn" onclick="copyToken()">复制令牌</button>
+    </div>
+    <p class="token-hint">若按钮无法打开 OpenField，请点击「复制令牌」，然后在应用的「令牌登录」中粘贴登录。</p>
+  </div>`, token)
+	}
 	return fmt.Sprintf(`<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -300,7 +315,7 @@ func renderResultPage(iconClass, iconGlyph, title, desc, btnLabel, btnHref strin
 <style>
   body { margin:0; font-family: -apple-system, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
          background:#f4f6f8; display:flex; align-items:center; justify-content:center; min-height:100vh; }
-  .card { background:#fff; border-radius:16px; padding:40px 48px; text-align:center; max-width:420px;
+  .card { background:#fff; border-radius:16px; padding:40px 48px; text-align:center; max-width:460px;
            box-shadow:0 4px 24px rgba(0,0,0,.08); }
   .icon { width:64px; height:64px; border-radius:50%%; margin:0 auto 20px; display:flex; align-items:center;
            justify-content:center; font-size:34px; color:#fff; }
@@ -310,6 +325,16 @@ func renderResultPage(iconClass, iconGlyph, title, desc, btnLabel, btnHref strin
   a.button { display:inline-block; background:#2563eb; color:#fff; text-decoration:none; padding:10px 22px;
              border-radius:8px; font-size:14px; font-weight:500; }
   a.button:hover { background:#1d4ed8; }
+  .token-wrap { margin-top:20px; text-align:left; }
+  .token-box { display:flex; align-items:stretch; gap:8px; background:#f9fafb; border:1px solid #e5e7eb;
+               border-radius:8px; padding:8px; }
+  .token-box code { flex:1; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+                    font-size:12px; color:#111827; word-break:break-all; background:transparent;
+                    border:none; resize:none; padding:8px; min-height:64px; }
+  .copy-btn { flex-shrink:0; align-self:stretch; background:#2563eb; color:#fff; border:none; border-radius:6px;
+              padding:0 16px; font-size:13px; font-weight:500; cursor:pointer; }
+  .copy-btn:hover { background:#1d4ed8; }
+  .token-hint { font-size:12px; color:#6b7280; margin:8px 0 0; }
 </style>
 </head>
 <body>
@@ -318,13 +343,32 @@ func renderResultPage(iconClass, iconGlyph, title, desc, btnLabel, btnHref strin
     <h1>%s</h1>
     <p>%s</p>
     <a class="button" href="%s">%s</a>
+    %s
     <script>
+      function copyToken() {
+        var code = document.getElementById('openfield-token');
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(code.textContent).then(function() {
+            var btn = document.querySelector('.copy-btn');
+            btn.textContent = '已复制';
+          });
+        } else {
+          var range = document.createRange();
+          range.selectNodeContents(code);
+          var sel = window.getSelection();
+          sel.removeAllRanges();
+          sel.addRange(range);
+          document.execCommand('copy');
+          var btn = document.querySelector('.copy-btn');
+          btn.textContent = '已复制';
+        }
+      }
       setTimeout(function() { window.location.href = "%s"; }, 1500);
     </script>
   </div>
 </body>
 </html>`,
-		iconClass, iconGlyph, title, desc, btnHref, btnLabel, btnHref)
+		iconClass, iconGlyph, title, desc, btnHref, btnLabel, tokenBlock, btnHref)
 }
 
 // hmmAppFallback is a safe placeholder when no app redirect URL is configured.
