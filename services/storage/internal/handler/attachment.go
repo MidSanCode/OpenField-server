@@ -1,8 +1,11 @@
 package handler
 
 import (
+	"mime"
 	"net/http"
+	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/openfield/server/pkg/config"
@@ -78,8 +81,12 @@ func (h *AttachmentHandler) Upload(c *gin.Context) {
 	}
 
 	contentType := header.Header.Get("Content-Type")
-	if contentType == "" {
-		contentType = "application/octet-stream"
+	if contentType == "" || strings.HasPrefix(contentType, "application/octet-stream") {
+		if guessed := mime.TypeByExtension(filepath.Ext(header.Filename)); guessed != "" {
+			contentType = guessed
+		} else if contentType == "" {
+			contentType = "application/octet-stream"
+		}
 	}
 
 	visibility := c.PostForm("visibility")
