@@ -50,3 +50,44 @@ func StoreRefreshToken(userID int64, token string, expiresInSeconds int) error {
 	return nil
 }
 
+// RotateRefreshToken invalidates an old refresh token and persists a new one,
+// atomically. Returns ErrNotFound when the old token was invalid or expired.
+func RotateRefreshToken(oldToken, newToken string, userID int64, expiresInSeconds int) error {
+	tx, err := database.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	res, err := tx.Exec(
+		"DELETE FROM refresh_tokens WHERE token = $1 AND user_id = $2 AND expires_at > NOW()",
+		oldToken, userID,
+	)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return ErrNotFound
+	}
+
+	if _, err := tx.Exec(
+		"INSERT INTO refresh_tokens (user_id, token, expires_at) VALUES ($1, $2, NOW() + ($3 || ' seconds')::interval)",
+		userID, newToken, expiresInSeconds,
+	); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
+// RevokeRefreshToken deletes all refresh tokens belonging to a user, e.g. on
+// logout or password change.
+func RevokeRefreshTokens(userID int64) error {
+	_, err := database.DB.Exec("DELETE FROM refresh_tokens WHERE user_id = $1", userID)
+	return err
+}
+

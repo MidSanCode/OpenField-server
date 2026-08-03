@@ -21,6 +21,11 @@ func NewTokenManager(secretKey string, expiryHours int) *TokenManager {
 	}
 }
 
+// ExpirySeconds returns the access token lifetime in seconds.
+func (tm *TokenManager) ExpirySeconds() int {
+	return int(tm.expiry.Seconds())
+}
+
 // Claims represents JWT claims.
 type Claims struct {
 	UserID   int64  `json:"user_id"`

@@ -102,6 +102,51 @@ Otherwise (e.g. API-only or web clients) it returns JSON:
 POST /auth/refresh
 Body: { "refresh_token": "..." }
 ```
+Returns a new access token and a rotated refresh token (single-use):
+```json
+{
+  "access_token": "jwt",
+  "refresh_token": "rotated",
+  "expires_in": 3600,
+  "refresh_expires_in": 2592000,
+  "user": { ... }
+}
+```
+`401` when the refresh token is missing, revoked, expired, or unknown. See
+`docs/token-refresh.md` for the full flow.
+
+## Wallet
+
+### Get My Wallet (Authenticated, `wallet.view`)
+```
+GET /wallet
+Authorization: Bearer <access_token>
+```
+```json
+{
+  "balance": 10000,
+  "transactions": [
+    {
+      "id": 1,
+      "amount": 10000,
+      "balance_after": 10000,
+      "type": "recharge",
+      "description": "Admin top-up",
+      "created_at": "2026-08-03T10:00:00Z"
+    }
+  ]
+}
+```
+Amounts are in cents. See `docs/wallet.md` for details.
+
+### Adjust Wallet (Authenticated, `wallet.manage`)
+```
+POST /wallet/adjust
+Authorization: Bearer <access_token>
+Body: { "user_id": 42, "amount": -500, "type": "deduct", "description": "..." }
+```
+Positive `amount` recharges, negative deducts; a deduction below zero balance
+is rejected. `type` is `recharge` / `deduct`.
 
 ## Users
 

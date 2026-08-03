@@ -48,14 +48,15 @@ func main() {
 	authManager := auth.NewManager(cfg)
 	tokenMgr := middleware.NewTokenManager(cfg.JWT.SecretKey, cfg.JWT.ExpiryHours)
 
-	authHandler := handler.NewAuthHandler(authManager, tokenMgr, cfg.OIDC.AppRedirectURL)
+	authHandler := handler.NewAuthHandler(authManager, tokenMgr, cfg.OIDC.AppRedirectURL, cfg.JWT.RefreshExpiryDays)
 	userHandler := handler.NewUserHandler(store, cfg.Storage)
+	walletHandler := handler.NewWalletHandler()
 
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(logger.GinLogger())
 
-	handler.RegisterRoutes(r, authHandler, userHandler)
+	handler.RegisterRoutes(r, authHandler, userHandler, walletHandler)
 
 	addr := "127.0.0.1:" + cfg.ServicePort("ACCOUNT")
 	logger.Log.Info("account service starting", "address", addr)

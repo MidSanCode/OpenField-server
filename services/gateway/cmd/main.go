@@ -166,6 +166,10 @@ func main() {
 		{http.MethodGet, "/api/v1/users/:user_id/followers", cfg.Services.Account, authPublic, ""},
 		{http.MethodGet, "/api/v1/users/:user_id/following", cfg.Services.Account, authPublic, ""},
 
+		// ---- wallet ----
+		{http.MethodGet, "/api/v1/wallet", cfg.Services.Account, authPermission, "wallet.view"},
+		{http.MethodPost, "/api/v1/wallet/adjust", cfg.Services.Account, authPermission, "wallet.manage"},
+
 		// ---- chat ----
 		{http.MethodGet, "/api/v1/consent-requests", cfg.Services.Chat, authPermission, "chat.request.approve"},
 		{http.MethodPost, "/api/v1/consent-requests/:id/accept", cfg.Services.Chat, authPermission, "chat.request.approve"},

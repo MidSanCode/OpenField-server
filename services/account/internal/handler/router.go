@@ -7,7 +7,7 @@ import (
 
 // RegisterRoutes registers all account service routes.
 // Public auth endpoints and protected user endpoints.
-func RegisterRoutes(r *gin.Engine, authHandler *AuthHandler, userHandler *UserHandler) {
+func RegisterRoutes(r *gin.Engine, authHandler *AuthHandler, userHandler *UserHandler, walletHandler *WalletHandler) {
 	api := r.Group("/api/v1")
 	{
 		auth := api.Group("/auth")
@@ -41,6 +41,14 @@ func RegisterRoutes(r *gin.Engine, authHandler *AuthHandler, userHandler *UserHa
 			follow.DELETE("/follow", middleware.GatewayAuthMiddleware(), userHandler.UnfollowUser)
 			follow.GET("/followers", userHandler.ListFollowers)
 			follow.GET("/following", userHandler.ListFollowing)
+		}
+
+		// Wallet: read requires auth; balance adjustments require the
+		// wallet.manage permission (checked by the gateway).
+		wallet := api.Group("/wallet")
+		{
+			wallet.GET("", middleware.GatewayAuthMiddleware(), walletHandler.GetMyWallet)
+			wallet.POST("/adjust", middleware.GatewayAuthMiddleware(), walletHandler.AdjustWallet)
 		}
 	}
 }

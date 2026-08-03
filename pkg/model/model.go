@@ -168,3 +168,23 @@ type Permission struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 }
+
+// Wallet represents a user's balance.
+type Wallet struct {
+	UserID    int64     `json:"user_id"`
+	Balance   int64     `json:"balance"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// WalletTransaction represents a single balance change on a user's wallet.
+type WalletTransaction struct {
+	ID          int64     `json:"id"`
+	UserID      int64     `json:"user_id"`
+	Amount      int64     `json:"amount"`
+	BalanceAfter int64    `json:"balance_after"`
+	Type        string    `json:"type"`
+	Description string    `json:"description"`
+	OperatorID  int64     `json:"operator_id"`
+	CreatedAt   time.Time `json:"created_at"`
+}

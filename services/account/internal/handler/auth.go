@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"net/http"
@@ -19,20 +20,36 @@ import (
 
 // AuthHandler handles authentication-related requests.
 type AuthHandler struct {
-	authManager    *auth.Manager
-	tokenMgr       *middleware.TokenManager
-	userRepo       *repository.UserRepository
-	appRedirectURL string
+	authManager       *auth.Manager
+	tokenMgr          *middleware.TokenManager
+	userRepo          *repository.UserRepository
+	appRedirectURL    string
+	refreshExpiryDays int
 }
 
 // NewAuthHandler creates a new AuthHandler.
-func NewAuthHandler(manager *auth.Manager, tokenMgr *middleware.TokenManager, appRedirectURL string) *AuthHandler {
+func NewAuthHandler(manager *auth.Manager, tokenMgr *middleware.TokenManager, appRedirectURL string, refreshExpiryDays int) *AuthHandler {
 	return &AuthHandler{
-		authManager:    manager,
-		tokenMgr:       tokenMgr,
-		userRepo:       repository.NewUserRepository(),
-		appRedirectURL: appRedirectURL,
+		authManager:       manager,
+		tokenMgr:          tokenMgr,
+		userRepo:          repository.NewUserRepository(),
+		appRedirectURL:    appRedirectURL,
+		refreshExpiryDays: refreshExpiryDays,
 	}
+}
+
+// accessExpiresIn returns the access token lifetime in seconds.
+func (h *AuthHandler) accessExpiresIn() int {
+	return h.tokenMgr.ExpirySeconds()
+}
+
+// refreshExpiresIn returns the refresh token lifetime in seconds.
+func (h *AuthHandler) refreshExpiresIn() int {
+	days := h.refreshExpiryDays
+	if days <= 0 {
+		days = 30
+	}
+	return days * 24 * 60 * 60
 }
 
 // GetProviders returns available OAuth2/OIDC providers.
@@ -108,12 +125,24 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
+	refreshToken, err := generateRefreshToken()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate refresh token"})
+		return
+	}
+	if err := repository.StoreRefreshToken(user.ID, refreshToken, h.refreshExpiresIn()); err != nil {
+		logger.Log.Error("failed to store refresh token", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to login"})
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"access_token":  accessToken,
-		"refresh_token": generateRefreshToken(),
-		"token_type":    "Bearer",
-		"expires_in":    86400,
-		"user":          user,
+		"access_token":       accessToken,
+		"refresh_token":      refreshToken,
+		"token_type":         "Bearer",
+		"expires_in":         h.accessExpiresIn(),
+		"refresh_expires_in": h.refreshExpiresIn(),
+		"user":               user,
 	})
 }
 
@@ -191,9 +220,20 @@ func (h *AuthHandler) OIDCCallback(c *gin.Context) {
 		return
 	}
 
+	refreshToken, err := generateRefreshToken()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate refresh token"})
+		return
+	}
+	if err := repository.StoreRefreshToken(user.ID, refreshToken, h.refreshExpiresIn()); err != nil {
+		logger.Log.Error("failed to store refresh token", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "authentication failed"})
+		return
+	}
+
 	if h.appRedirectURL != "" {
-		appLink := fmt.Sprintf("%s?access_token=%s&username=%s&email=%s&avatar_url=%s&needs_registration=%t",
-			h.appRedirectURL, accessToken, url.QueryEscape(user.Username), url.QueryEscape(user.Email), url.QueryEscape(user.AvatarURL), user.NeedsRegistration)
+		appLink := fmt.Sprintf("%s?access_token=%s&refresh_token=%s&username=%s&email=%s&avatar_url=%s&needs_registration=%t",
+			h.appRedirectURL, accessToken, refreshToken, url.QueryEscape(user.Username), url.QueryEscape(user.Email), url.QueryEscape(user.AvatarURL), user.NeedsRegistration)
 		if strings.HasPrefix(h.appRedirectURL, "openfield://") || !strings.HasPrefix(h.appRedirectURL, "http") {
 			c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(loginResultPage(appLink, accessToken)))
 			return
@@ -203,11 +243,12 @@ func (h *AuthHandler) OIDCCallback(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"access_token":  accessToken,
-		"refresh_token": generateRefreshToken(),
-		"token_type":    "Bearer",
-		"expires_in":    86400,
-		"user":          user,
+		"access_token":       accessToken,
+		"refresh_token":      refreshToken,
+		"token_type":         "Bearer",
+		"expires_in":         h.accessExpiresIn(),
+		"refresh_expires_in": h.refreshExpiresIn(),
+		"user":               user,
 	})
 }
 
@@ -388,7 +429,8 @@ func iconGlyph(ok bool) string {
 	return "&#10005;"
 }
 
-// RefreshToken exchanges a refresh token for a new access token.
+// RefreshToken exchanges a refresh token for a new access token, rotating the
+// refresh token so each refresh token is single-use.
 func (h *AuthHandler) RefreshToken(c *gin.Context) {
 	var req struct {
 		RefreshToken string `json:"refresh_token" binding:"required"`
@@ -417,25 +459,43 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 		return
 	}
 
+	newRefreshToken, err := generateRefreshToken()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate refresh token"})
+		return
+	}
+
+	// Rotate: invalidate the old refresh token and persist the new one.
+	if err := repository.RotateRefreshToken(req.RefreshToken, newRefreshToken, user.ID, h.refreshExpiresIn()); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid refresh token"})
+			return
+		}
+		logger.Log.Error("failed to rotate refresh token", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to refresh token"})
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"access_token": accessToken,
-		"token_type":   "Bearer",
-		"expires_in":   86400,
+		"access_token":       accessToken,
+		"refresh_token":      newRefreshToken,
+		"token_type":         "Bearer",
+		"expires_in":         h.accessExpiresIn(),
+		"refresh_expires_in": h.refreshExpiresIn(),
 	})
 }
 
-// generateRefreshToken creates a random refresh token string.
-func generateRefreshToken() string {
-	return time.Now().Format(time.RFC3339Nano) + "-" + randomString(32)
-}
-
-func randomString(n int) string {
+// generateRefreshToken creates a cryptographically random refresh token string.
+func generateRefreshToken() (string, error) {
 	const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	b := make([]byte, n)
-	for i := range b {
-		b[i] = chars[time.Now().UnixNano()%int64(len(chars))]
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
 	}
-	return string(b)
+	for i := range b {
+		b[i] = chars[int(b[i])%len(chars)]
+	}
+	return time.Now().Format(time.RFC3339Nano) + "-" + string(b), nil
 }
 
 // validateRefreshToken checks if the refresh token is valid.

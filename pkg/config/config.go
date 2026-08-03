@@ -46,8 +46,9 @@ type OIDCConfig struct {
 
 // JWTConfig holds JWT configuration.
 type JWTConfig struct {
-	SecretKey   string `yaml:"secret_key"`
-	ExpiryHours int    `yaml:"expiry_hours"`
+	SecretKey         string `yaml:"secret_key"`
+	ExpiryHours       int    `yaml:"expiry_hours"`
+	RefreshExpiryDays int    `yaml:"refresh_expiry_days"`
 }
 
 // StorageConfig holds RustFS (S3-compatible) storage configuration.
@@ -134,6 +135,9 @@ func (c *Config) overrideFromEnv() {
 	}
 	if v := os.Getenv("JWT_SECRET_KEY"); v != "" {
 		c.JWT.SecretKey = v
+	}
+	if v := os.Getenv("JWT_REFRESH_EXPIRY_DAYS"); v != "" {
+		fmt.Sscanf(v, "%d", &c.JWT.RefreshExpiryDays)
 	}
 	if v := os.Getenv("STORAGE_ENDPOINT"); v != "" {
 		c.Storage.Endpoint = v

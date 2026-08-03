@@ -38,6 +38,10 @@ const (
 	PostsReplyEdit   = "posts.reply.edit"
 	PostsReplyDelete = "posts.reply.delete"
 	PostsReact       = "posts.react"
+
+	// Wallet
+	WalletView   = "wallet.view"
+	WalletManage = "wallet.manage"
 )
 
 // All returns every known permission key.
@@ -48,6 +52,7 @@ func All() []string {
 		ChatView, ChatSend, ChatEdit, ChatDelete, ChatRequestSend, ChatRequestApprove,
 		ChatGroupCreate, ChatGroupInvite, ChatGroupManage, ChatNoteEdit, ChatGroupNickname,
 		PostsView, PostsCreate, PostsEdit, PostsDelete, PostsReplyCreate, PostsReplyEdit, PostsReplyDelete, PostsReact,
+		WalletView, WalletManage,
 	}
 }
 

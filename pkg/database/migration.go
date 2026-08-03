@@ -219,6 +219,26 @@ func RunMigrations() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_user_follows_followee ON user_follows(followee_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_user_follows_follower ON user_follows(follower_id)`,
+
+		// ---- wallet ----
+		`CREATE TABLE IF NOT EXISTS wallets (
+			user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			balance BIGINT NOT NULL DEFAULT 0,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			PRIMARY KEY (user_id)
+		)`,
+		`CREATE TABLE IF NOT EXISTS wallet_transactions (
+			id BIGSERIAL PRIMARY KEY,
+			user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			amount BIGINT NOT NULL,
+			balance_after BIGINT NOT NULL,
+			type VARCHAR(32) NOT NULL,
+			description TEXT NOT NULL DEFAULT '',
+			operator_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_wallet_transactions_user ON wallet_transactions(user_id, id DESC)`,
 	}
 
 	for _, m := range migrations {
