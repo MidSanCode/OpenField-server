@@ -278,21 +278,20 @@ func seedDefaultGroup() error {
 		`SELECT id FROM groups WHERE is_default = TRUE LIMIT 1`,
 	).Scan(&groupID)
 	if err != nil {
-		err = DB.QueryRow(
-			`INSERT INTO groups (name, description, is_default) VALUES ($1, $2, TRUE) RETURNING id`,
-			permission.DefaultGroupName, "内置默认用户组，默认拥有全部权限",
-		).Scan(&groupID)
+		groupID, err = createDefaultGroup()
 		if err != nil {
-			return fmt.Errorf("failed to seed default group: %w", err)
+			return err
 		}
+	}
 
-		for _, key := range permission.All() {
-			if _, err := DB.Exec(
-				`INSERT INTO group_permissions (group_id, permission_key) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
-				groupID, key,
-			); err != nil {
-				return fmt.Errorf("failed to seed group permission %s: %w", key, err)
-			}
+	// Backfill: keep the default group granted every permission (including new
+	// ones added after the group already existed).
+	for _, key := range permission.All() {
+		if _, err := DB.Exec(
+			`INSERT INTO group_permissions (group_id, permission_key) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+			groupID, key,
+		); err != nil {
+			return fmt.Errorf("failed to seed group permission %s: %w", key, err)
 		}
 	}
 
@@ -307,4 +306,16 @@ func seedDefaultGroup() error {
 		return fmt.Errorf("failed to backfill default group membership: %w", err)
 	}
 	return nil
+}
+
+func createDefaultGroup() (int64, error) {
+	var groupID int64
+	err := DB.QueryRow(
+		`INSERT INTO groups (name, description, is_default) VALUES ($1, $2, TRUE) RETURNING id`,
+		permission.DefaultGroupName, "内置默认用户组，默认拥有全部权限",
+	).Scan(&groupID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to seed default group: %w", err)
+	}
+	return groupID, nil
 }
