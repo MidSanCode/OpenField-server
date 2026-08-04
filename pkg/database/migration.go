@@ -37,8 +37,6 @@ func RunMigrations() error {
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS oauth2_username VARCHAR(255) NOT NULL DEFAULT ''`,
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS verified_note TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS verified_by VARCHAR(255) NOT NULL DEFAULT ''`,
-		`ALTER TABLE attachments ADD COLUMN IF NOT EXISTS visibility VARCHAR(20) NOT NULL DEFAULT 'public'`,
-		`ALTER TABLE attachments ADD COLUMN IF NOT EXISTS thumb_url TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE users ALTER COLUMN email TYPE VARCHAR(255)`,
 		`ALTER TABLE users ALTER COLUMN email SET DEFAULT ''`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username)`,
@@ -52,17 +50,19 @@ func RunMigrations() error {
 			url TEXT NOT NULL,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)`,
-		`CREATE TABLE IF NOT EXISTS post_attachments (
-			post_id BIGINT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
-			attachment_id BIGINT NOT NULL REFERENCES attachments(id) ON DELETE CASCADE,
-			PRIMARY KEY (post_id, attachment_id)
-		)`,
+		`ALTER TABLE attachments ADD COLUMN IF NOT EXISTS visibility VARCHAR(20) NOT NULL DEFAULT 'public'`,
+		`ALTER TABLE attachments ADD COLUMN IF NOT EXISTS thumb_url TEXT NOT NULL DEFAULT ''`,
 		`CREATE TABLE IF NOT EXISTS posts (
 			id BIGSERIAL PRIMARY KEY,
 			user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 			content TEXT NOT NULL,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE TABLE IF NOT EXISTS post_attachments (
+			post_id BIGINT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+			attachment_id BIGINT NOT NULL REFERENCES attachments(id) ON DELETE CASCADE,
+			PRIMARY KEY (post_id, attachment_id)
 		)`,
 		`CREATE TABLE IF NOT EXISTS post_replies (
 			id BIGSERIAL PRIMARY KEY,

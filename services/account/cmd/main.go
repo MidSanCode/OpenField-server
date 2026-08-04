@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"log"
 	"os"
 
@@ -15,6 +16,9 @@ import (
 )
 
 func main() {
+	migrateOnly := flag.Bool("migrate", false, "run database migrations and exit")
+	flag.Parse()
+
 	logger.Init()
 
 	configPath := os.Getenv("OPENFIELD_CONFIG")
@@ -38,6 +42,11 @@ func main() {
 
 	if err := database.RunMigrations(); err != nil {
 		log.Fatalf("failed to run database migrations: %v", err)
+	}
+
+	if *migrateOnly {
+		logger.Log.Info("database migrations completed (migrate-only mode)")
+		return
 	}
 
 	store, err := storage.New(cfg.Storage)
