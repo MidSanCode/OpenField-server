@@ -10,8 +10,10 @@ import (
 
 // ServerConfig holds server configuration.
 type ServerConfig struct {
-	Port string `yaml:"port"`
-	Mode string `yaml:"mode"`
+	Port            string   `yaml:"port"`
+	Mode            string   `yaml:"mode"`
+	AllowedOrigins  []string `yaml:"allowed_origins"`
+	AllowAllOrigins bool     `yaml:"allow_all_origins"`
 }
 
 // DatabaseConfig holds database configuration.

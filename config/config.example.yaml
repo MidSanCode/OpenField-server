@@ -5,6 +5,10 @@
 server:
   port: "8080"
   mode: "debug" # debug, release, test
+  # Cross-origin access for browser clients. Empty allowed_origins (or
+  # allow_all_origins: true) permits requests from any origin.
+  allowed_origins: []
+  allow_all_origins: true
 
 # Internal microservice addresses (used by the gateway to route requests)
 services:

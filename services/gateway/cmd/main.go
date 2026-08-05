@@ -211,6 +211,7 @@ func main() {
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(logger.GinLogger())
+	r.Use(middleware.CORS(cfg))
 
 	r.NoRoute(func(c *gin.Context) {
 		path := c.Request.URL.Path
