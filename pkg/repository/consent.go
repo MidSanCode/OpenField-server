@@ -57,7 +57,7 @@ func (r *ConsentRequestRepository) GetByID(id int64) (*model.ConsentRequest, err
 	err := database.DB.QueryRow(
 		`SELECT cr.id, cr.type, cr.requester_id, cr.target_user_id, cr.conversation_id, cr.message, cr.status, cr.created_at, cr.responded_at,
 		        ru.username, ru.avatar_url,
-		        c.title
+		        COALESCE(c.title, '')
 		 FROM consent_requests cr
 		 JOIN users ru ON cr.requester_id = ru.id
 		 LEFT JOIN conversations c ON c.id = cr.conversation_id
