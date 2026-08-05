@@ -138,6 +138,9 @@ func (c *Config) overrideFromEnv() {
 	if v := os.Getenv("JWT_SECRET_KEY"); v != "" {
 		c.JWT.SecretKey = v
 	}
+	if v := os.Getenv("JWT_EXPIRY_HOURS"); v != "" {
+		fmt.Sscanf(v, "%d", &c.JWT.ExpiryHours)
+	}
 	if v := os.Getenv("JWT_REFRESH_EXPIRY_DAYS"); v != "" {
 		fmt.Sscanf(v, "%d", &c.JWT.RefreshExpiryDays)
 	}

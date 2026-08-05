@@ -232,10 +232,10 @@ func (h *AuthHandler) OIDCCallback(c *gin.Context) {
 	}
 
 	if h.appRedirectURL != "" {
-		appLink := fmt.Sprintf("%s?access_token=%s&refresh_token=%s&username=%s&email=%s&avatar_url=%s&needs_registration=%t",
-			h.appRedirectURL, accessToken, refreshToken, url.QueryEscape(user.Username), url.QueryEscape(user.Email), url.QueryEscape(user.AvatarURL), user.NeedsRegistration)
+		appLink := fmt.Sprintf("%s?access_token=%s&refresh_token=%s&expires_in=%d&refresh_expires_in=%d&username=%s&email=%s&avatar_url=%s&needs_registration=%t",
+			h.appRedirectURL, accessToken, refreshToken, h.accessExpiresIn(), h.refreshExpiresIn(), url.QueryEscape(user.Username), url.QueryEscape(user.Email), url.QueryEscape(user.AvatarURL), user.NeedsRegistration)
 		if strings.HasPrefix(h.appRedirectURL, "openfield://") || !strings.HasPrefix(h.appRedirectURL, "http") {
-			c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(loginResultPage(appLink, accessToken)))
+			c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(loginResultPage(appLink, accessToken, refreshToken)))
 			return
 		}
 		c.Redirect(http.StatusFound, appLink)
@@ -320,32 +320,33 @@ func bindResultPage(result, reason, accountName, appLink string) string {
 		iconGlyph = "&#10005;"
 	}
 
-	return renderResultPage(iconClass, iconGlyph, title, desc, btnLabel, btnHref, "")
+	return renderResultPage(iconClass, iconGlyph, title, desc, btnLabel, btnHref, "", "")
 }
 
 // loginResultPage renders a small HTML page shown after a successful OIDC login.
-// It offers a deep-link button into the app plus a copyable access token as a
-// fallback when the app's custom protocol cannot be opened (e.g. deep links are
-// blocked on the current OS). Users can paste the token into the app's token
-// login to sign in.
-func loginResultPage(appLink, accessToken string) string {
+// It offers a deep-link button into the app plus copyable access and refresh
+// tokens as a fallback when the app's custom protocol cannot be opened (e.g.
+// deep links are blocked on the current OS). Users can paste the two tokens
+// into the app's token login to sign in with auto-refresh support.
+func loginResultPage(appLink, accessToken, refreshToken string) string {
 	return renderResultPage("ok", "&#10003;", "登录成功",
-		"你的账号已登录成功。点击下方按钮打开 OpenField；若无法打开，请复制下方令牌并粘贴到应用的「令牌登录」中完成登录。",
-		"打开 OpenField", appLink, accessToken)
+		"你的账号已登录成功。点击下方按钮打开 OpenField；若无法打开，请复制下方访问令牌和刷新令牌，并在应用的「令牌登录」中粘贴完成登录。",
+		"打开 OpenField", appLink, accessToken, refreshToken)
 }
 
-// renderResultPage is the shared HTML template for OIDC result pages. When token
-// is non-empty, a copyable token block is rendered as a deep-link fallback.
-func renderResultPage(iconClass, iconGlyph, title, desc, btnLabel, btnHref, token string) string {
+// renderResultPage is the shared HTML template for OIDC result pages. When a
+// token is non-empty, a copyable token block is rendered as a deep-link fallback.
+func renderResultPage(iconClass, iconGlyph, title, desc, btnLabel, btnHref, accessToken, refreshToken string) string {
 	tokenBlock := ""
-	if token != "" {
+	if accessToken != "" {
 		tokenBlock = fmt.Sprintf(`<div class="token-wrap">
     <div class="token-box">
       <code id="openfield-token">%s</code>
-      <button class="copy-btn" onclick="copyToken()">复制令牌</button>
+      <button class="copy-btn" onclick="copyToken('openfield-token', this)">复制访问令牌</button>
     </div>
-    <p class="token-hint">若按钮无法打开 OpenField，请点击「复制令牌」，然后在应用的「令牌登录」中粘贴登录。</p>
-  </div>`, token)
+    %s
+    <p class="token-hint">若按钮无法打开 OpenField，请依次点击「复制访问令牌」和「复制刷新令牌」，然后在应用的「令牌登录」中先粘贴访问令牌，再换行粘贴刷新令牌登录。</p>
+  </div>`, accessToken, refreshBlock(refreshToken))
 	}
 	return fmt.Sprintf(`<!DOCTYPE html>
 <html lang="zh-CN">
@@ -386,11 +387,10 @@ func renderResultPage(iconClass, iconGlyph, title, desc, btnLabel, btnHref, toke
     <a class="button" href="%s">%s</a>
     %s
     <script>
-      function copyToken() {
-        var code = document.getElementById('openfield-token');
+      function copyToken(id, btn) {
+        var code = document.getElementById(id);
         if (navigator.clipboard && navigator.clipboard.writeText) {
           navigator.clipboard.writeText(code.textContent).then(function() {
-            var btn = document.querySelector('.copy-btn');
             btn.textContent = '已复制';
           });
         } else {
@@ -400,8 +400,8 @@ func renderResultPage(iconClass, iconGlyph, title, desc, btnLabel, btnHref, toke
           sel.removeAllRanges();
           sel.addRange(range);
           document.execCommand('copy');
-          var btn = document.querySelector('.copy-btn');
-          btn.textContent = '已复制';
+          var btn2 = btn;
+          btn2.textContent = '已复制';
         }
       }
       setTimeout(function() { window.location.href = "%s"; }, 1500);
@@ -410,6 +410,17 @@ func renderResultPage(iconClass, iconGlyph, title, desc, btnLabel, btnHref, toke
 </body>
 </html>`,
 		iconClass, iconGlyph, title, desc, btnHref, btnLabel, tokenBlock, btnHref)
+}
+
+// refreshBlock returns the refresh-token copy block for the login result page.
+func refreshBlock(refreshToken string) string {
+	if refreshToken == "" {
+		return ""
+	}
+	return fmt.Sprintf(`<div class="token-box" style="margin-top:8px;">
+      <code id="openfield-refresh">%s</code>
+      <button class="copy-btn" onclick="copyToken('openfield-refresh', this)">复制刷新令牌</button>
+    </div>`, refreshToken)
 }
 
 // hmmAppFallback is a safe placeholder when no app redirect URL is configured.
