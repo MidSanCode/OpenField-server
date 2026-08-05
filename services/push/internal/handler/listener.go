@@ -71,14 +71,12 @@ func (l *listener) handleNotification(n *pq.Notification) {
 		logger.Log.Warn("failed to unmarshal push event", "error", err)
 		return
 	}
-	payload := env.Data
-	if len(payload) == 0 {
-		// Re-encode the whole envelope so clients still get the type field.
-		b, err := json.Marshal(env)
-		if err != nil {
-			return
-		}
-		payload = b
+	// Always re-encode the whole envelope so clients receive the type field
+	// alongside the data payload.
+	payload, err := json.Marshal(env)
+	if err != nil {
+		logger.Log.Warn("failed to marshal push event", "error", err)
+		return
 	}
 	switch {
 	case len(env.Recipients) == 0:

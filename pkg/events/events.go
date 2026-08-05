@@ -55,4 +55,5 @@ const (
 
 	ConversationUpdated = "chat.conversation.updated"
 	ConsentRequested    = "chat.consent.requested"
+	ChatTyping          = "chat.typing"
 )

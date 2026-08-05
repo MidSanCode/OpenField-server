@@ -238,7 +238,7 @@ func (r *ConversationRepository) lastMessages(convIDs []int64) (map[int64]model.
 	}
 	rows, err := database.DB.Query(
 		`SELECT m.conversation_id, m.id, m.sender_id, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at,
-		        u.username, u.nickname, u.avatar_url, u.is_verified
+		        u.username, u.avatar_url, u.is_verified
 		 FROM messages m
 		 JOIN users u ON m.sender_id = u.id
 		 WHERE m.conversation_id = ANY($1) AND m.deleted_at IS NULL

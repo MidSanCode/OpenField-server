@@ -182,6 +182,7 @@ func main() {
 		{http.MethodPut, "/api/v1/conversations/:id/note", cfg.Services.Chat, authPermission, "chat.note.edit"},
 		{http.MethodPut, "/api/v1/conversations/:id/group-nickname", cfg.Services.Chat, authPermission, "chat.group.nickname"},
 		{http.MethodPost, "/api/v1/conversations/:id/read", cfg.Services.Chat, authPermission, "chat.view"},
+		{http.MethodPost, "/api/v1/conversations/:id/typing", cfg.Services.Chat, authPermission, "chat.view"},
 		{http.MethodPost, "/api/v1/conversations/:id/leave", cfg.Services.Chat, authPermission, "chat.group.manage"},
 		{http.MethodDelete, "/api/v1/conversations/:id/members/:user_id", cfg.Services.Chat, authPermission, "chat.group.manage"},
 		{http.MethodGet, "/api/v1/conversations/:id/messages", cfg.Services.Chat, authPermission, "chat.view"},
@@ -240,13 +241,20 @@ func main() {
 		}
 
 		if rt.level != authPublic {
-			// Validate JWT.
-			header := c.GetHeader("Authorization")
-			if header == "" || !strings.HasPrefix(header, "Bearer ") {
-				c.JSON(http.StatusUnauthorized, gin.H{"error": "missing authorization header"})
+			// Validate JWT. The token normally arrives via the Authorization
+			// header, but browsers cannot set custom headers on WebSocket
+			// connections, so the realtime client also sends it as a "token"
+			// query parameter. Accept either form.
+			tokenStr := ""
+			if header := c.GetHeader("Authorization"); strings.HasPrefix(header, "Bearer ") {
+				tokenStr = strings.TrimPrefix(header, "Bearer ")
+			} else if q := c.Query("token"); q != "" {
+				tokenStr = q
+			}
+			if tokenStr == "" {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "missing authorization token"})
 				return
 			}
-			tokenStr := strings.TrimPrefix(header, "Bearer ")
 			id, err := middleware.ParseToken(tokenStr, cfg.JWT.SecretKey)
 			if err != nil {
 				c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired token"})

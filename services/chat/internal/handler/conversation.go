@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"github.com/openfield/server/pkg/events"
 	"github.com/openfield/server/pkg/logger"
 	"github.com/openfield/server/pkg/middleware"
 	"github.com/openfield/server/pkg/repository"
@@ -436,4 +437,51 @@ func (h *ConversationHandler) RemoveMember(c *gin.Context) {
 	}
 
 	c.Status(http.StatusNoContent)
+}
+
+// Typing broadcasts a "typing" indicator to the other members of the
+// conversation. It is fire-and-forget; clients throttle their own requests.
+func (h *ConversationHandler) Typing(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	convID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid conversation ID"})
+		return
+	}
+
+	isMember, err := h.convRepo.IsMember(convID, userID)
+	if err != nil {
+		logger.Log.Error("failed to check membership", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to publish typing indicator"})
+		return
+	}
+	if !isMember {
+		c.JSON(http.StatusForbidden, gin.H{"error": "you are not a member of this conversation"})
+		return
+	}
+
+	members, err := h.convRepo.ListMembers(convID)
+	if err != nil {
+		logger.Log.Warn("failed to list conversation members for typing", "error", err)
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+		return
+	}
+	recipients := make([]int64, 0, len(members))
+	for _, m := range members {
+		if m.Status != "active" || m.UserID == userID {
+			continue
+		}
+		recipients = append(recipients, m.UserID)
+	}
+	events.Publish(c.Request.Context(), events.ChatTyping, recipients, gin.H{
+		"conversation_id": convID,
+		"user_id":         userID,
+	})
+
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }

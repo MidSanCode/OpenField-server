@@ -27,6 +27,7 @@ func RegisterRoutes(r *gin.Engine, convHandler *ConversationHandler, consentHand
 			convs.PUT("/:id/note", convHandler.UpdateNote)
 			convs.PUT("/:id/group-nickname", convHandler.UpdateGroupNickname)
 			convs.POST("/:id/read", convHandler.MarkRead)
+			convs.POST("/:id/typing", convHandler.Typing)
 			convs.POST("/:id/leave", convHandler.Leave)
 			convs.DELETE("/:id/members/:user_id", convHandler.RemoveMember)
 		}

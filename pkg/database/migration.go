@@ -163,6 +163,7 @@ func RunMigrations() error {
 		`ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to_id BIGINT REFERENCES messages(id) ON DELETE SET NULL`,
 		`ALTER TABLE messages ADD COLUMN IF NOT EXISTS edited_at TIMESTAMPTZ`,
 		`ALTER TABLE messages ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ`,
+		`ALTER TABLE messages DROP COLUMN IF EXISTS receiver_id`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, created_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_sender_receiver ON messages(sender_id)`,
 
