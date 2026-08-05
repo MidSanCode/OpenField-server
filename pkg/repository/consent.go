@@ -56,7 +56,7 @@ func (r *ConsentRequestRepository) GetByID(id int64) (*model.ConsentRequest, err
 	req := &model.ConsentRequest{}
 	err := database.DB.QueryRow(
 		`SELECT cr.id, cr.type, cr.requester_id, cr.target_user_id, cr.conversation_id, cr.message, cr.status, cr.created_at, cr.responded_at,
-		        ru.username, ru.nickname, ru.avatar_url,
+		        ru.username, ru.avatar_url,
 		        c.title
 		 FROM consent_requests cr
 		 JOIN users ru ON cr.requester_id = ru.id
@@ -77,7 +77,7 @@ func (r *ConsentRequestRepository) GetByID(id int64) (*model.ConsentRequest, err
 func (r *ConsentRequestRepository) ListPendingForUser(userID int64) ([]model.ConsentRequest, error) {
 	rows, err := database.DB.Query(
 		`SELECT cr.id, cr.type, cr.requester_id, cr.target_user_id, cr.conversation_id, cr.message, cr.status, cr.created_at, cr.responded_at,
-		        ru.username, ru.nickname, ru.avatar_url,
+		        ru.username, ru.avatar_url,
 		        COALESCE(c.title, '')
 		 FROM consent_requests cr
 		 JOIN users ru ON cr.requester_id = ru.id
