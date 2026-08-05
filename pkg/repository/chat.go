@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/lib/pq"
 	"github.com/openfield/server/pkg/database"
 	"github.com/openfield/server/pkg/model"
 )
@@ -242,7 +243,7 @@ func (r *ConversationRepository) lastMessages(convIDs []int64) (map[int64]model.
 		 JOIN users u ON m.sender_id = u.id
 		 WHERE m.conversation_id = ANY($1) AND m.deleted_at IS NULL
 		 ORDER BY m.created_at DESC`,
-		convIDs,
+		pq.Array(convIDs),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query last messages: %w", err)
@@ -276,7 +277,7 @@ func (r *ConversationRepository) unreadCounts(userID int64, convIDs []int64) (ma
 		 LEFT JOIN messages m ON m.conversation_id = cm.conversation_id
 		 WHERE cm.user_id = $1 AND cm.conversation_id = ANY($2)
 		 GROUP BY cm.conversation_id`,
-		userID, convIDs,
+		userID, pq.Array(convIDs),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query unread counts: %w", err)
@@ -308,7 +309,7 @@ func (r *ConversationRepository) privateDisplay(userID int64, convIDs []int64) (
 		 FROM conversation_members cm
 		 JOIN users u ON cm.user_id = u.id
 		 WHERE cm.conversation_id = ANY($1) AND cm.user_id <> $2 AND cm.status = 'active'`,
-		convIDs, userID,
+		pq.Array(convIDs), userID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query private display: %w", err)
