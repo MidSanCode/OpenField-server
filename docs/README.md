@@ -45,11 +45,12 @@ You can override any config value using environment variables:
 | `OIDC_REDIRECT_URL` | OIDC redirect URL | `http://localhost:8080/api/v1/auth/oidc/callback` |
 | `OIDC_APP_REDIRECT_URL` | Deep link to return to the desktop/mobile app after login (e.g. `openfield://oauth/callback`) | empty (JSON response) |
 | `JWT_SECRET_KEY` | JWT signing secret | - |
-| `STORAGE_ENDPOINT` | RustFS (S3) endpoint | `localhost:9000` |
-| `STORAGE_ACCESS_KEY` | RustFS access key | `minioadmin` |
-| `STORAGE_SECRET_KEY` | RustFS secret key | `minioadmin` |
-| `STORAGE_BUCKET` | RustFS bucket name | `openfield` |
-| `STORAGE_PUBLIC_BASE_URL` | Public URL prefix for stored objects | `http://localhost:9000/openfield` |
+| `STORAGE_ENDPOINT` | S3-compatible endpoint (AWS S3, MinIO, RustFS) | `localhost:9000` |
+| `STORAGE_ACCESS_KEY` | S3 access key | `minioadmin` |
+| `STORAGE_SECRET_KEY` | S3 secret key | `minioadmin` |
+| `STORAGE_BUCKET` | S3 bucket name | `openfield` |
+| `STORAGE_REGION` | S3 region (required for AWS S3) | empty |
+| `STORAGE_PUBLIC_BASE_URL` | Public URL prefix for stored objects; auto-derived from endpoint+bucket when empty | `http://localhost:9000/openfield` |
 
 ## Database
 

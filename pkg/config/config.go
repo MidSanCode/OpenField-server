@@ -53,12 +53,13 @@ type JWTConfig struct {
 	RefreshExpiryDays int    `yaml:"refresh_expiry_days"`
 }
 
-// StorageConfig holds RustFS (S3-compatible) storage configuration.
+// StorageConfig holds S3-compatible object storage configuration.
 type StorageConfig struct {
 	Endpoint        string `yaml:"endpoint"`
 	AccessKey       string `yaml:"access_key"`
 	SecretKey       string `yaml:"secret_key"`
 	Bucket          string `yaml:"bucket"`
+	Region          string `yaml:"region"`
 	UseSSL          bool   `yaml:"use_ssl"`
 	PublicBaseURL   string `yaml:"public_base_url"`
 	MaxUploadBytes  int64  `yaml:"max_upload_bytes"`
@@ -155,6 +156,9 @@ func (c *Config) overrideFromEnv() {
 	}
 	if v := os.Getenv("STORAGE_BUCKET"); v != "" {
 		c.Storage.Bucket = v
+	}
+	if v := os.Getenv("STORAGE_REGION"); v != "" {
+		c.Storage.Region = v
 	}
 	if v := os.Getenv("STORAGE_PUBLIC_BASE_URL"); v != "" {
 		c.Storage.PublicBaseURL = v

@@ -53,13 +53,16 @@ jwt:
   expiry_hours: 24
 
 storage:
-  # RustFS (S3-compatible) local object storage
+  # S3-compatible object storage (AWS S3, MinIO, RustFS, ...)
   endpoint: "localhost:9000"
   access_key: "minioadmin"
   secret_key: "minioadmin"
   bucket: "openfield"
+  # AWS region; only required for AWS S3 / SigV4 region-scoped signing
+  region: ""
   use_ssl: false
-  # Public base URL used to build file URLs returned by the API
+  # Public base URL used to build file URLs returned by the API. Leave empty to
+  # derive it from the endpoint and bucket (works for AWS S3 out of the box).
   public_base_url: "http://localhost:9000/openfield"
   # 10 MB default upload limit
   max_upload_bytes: 10485760

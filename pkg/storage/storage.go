@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/url"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,7 +16,7 @@ import (
 	"github.com/openfield/server/pkg/logger"
 )
 
-// Store wraps a RustFS (S3-compatible) client.
+// Store wraps an S3-compatible object store client (MinIO, AWS S3, RustFS, ...).
 type Store struct {
 	client        *minio.Client
 	bucket        string
@@ -26,6 +28,7 @@ func New(cfg config.StorageConfig) (*Store, error) {
 	client, err := minio.New(cfg.Endpoint, &minio.Options{
 		Creds:  credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
 		Secure: cfg.UseSSL,
+		Region: cfg.Region,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create storage client: %w", err)
@@ -34,7 +37,7 @@ func New(cfg config.StorageConfig) (*Store, error) {
 	s := &Store{
 		client:        client,
 		bucket:        cfg.Bucket,
-		publicBaseURL: cfg.PublicBaseURL,
+		publicBaseURL: resolvePublicBaseURL(cfg),
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -45,7 +48,7 @@ func New(cfg config.StorageConfig) (*Store, error) {
 		return nil, fmt.Errorf("failed to check bucket: %w", err)
 	}
 	if !exists {
-		if err := client.MakeBucket(ctx, s.bucket, minio.MakeBucketOptions{}); err != nil {
+		if err := client.MakeBucket(ctx, s.bucket, minio.MakeBucketOptions{Region: cfg.Region}); err != nil {
 			return nil, fmt.Errorf("failed to create bucket: %w", err)
 		}
 		logger.Log.Info("storage bucket created", "bucket", s.bucket)
@@ -53,6 +56,39 @@ func New(cfg config.StorageConfig) (*Store, error) {
 
 	logger.Log.Info("storage initialized", "endpoint", cfg.Endpoint, "bucket", cfg.Bucket)
 	return s, nil
+}
+
+// resolvePublicBaseURL derives the base URL used to build public object URLs.
+// An explicitly configured PublicBaseURL always wins; otherwise it is derived
+// from the endpoint so AWS S3 and S3-compatible stores work out of the box.
+func resolvePublicBaseURL(cfg config.StorageConfig) string {
+	if cfg.PublicBaseURL != "" {
+		return strings.TrimRight(cfg.PublicBaseURL, "/")
+	}
+	scheme := "http"
+	if cfg.UseSSL {
+		scheme = "https"
+	}
+	if strings.Contains(cfg.Endpoint, "amazonaws.com") {
+		region := cfg.Region
+		if region == "" {
+			region = "us-east-1"
+		}
+		return fmt.Sprintf("https://%s.s3.%s.amazonaws.com", cfg.Bucket, region)
+	}
+	return fmt.Sprintf("%s://%s/%s", scheme, cfg.Endpoint, cfg.Bucket)
+}
+
+// publicURL builds the full URL for an object key against the resolved base.
+// The base may already contain a bucket path (e.g. http://host/openfield), so
+// append the key as additional path segments, keeping "/" as separators.
+func (s *Store) publicURL(objectKey string) string {
+	base, err := url.Parse(s.publicBaseURL)
+	if err != nil {
+		return s.publicBaseURL + "/" + objectKey
+	}
+	base.Path = strings.TrimRight(base.Path, "/") + "/" + objectKey
+	return base.String()
 }
 
 // Upload stores a file and returns its object key and public URL.
@@ -67,8 +103,7 @@ func (s *Store) Upload(ctx context.Context, reader io.Reader, size int64, conten
 		return "", "", fmt.Errorf("failed to upload object: %w", err)
 	}
 
-	url := s.publicBaseURL + "/" + objectKey
-	return objectKey, url, nil
+	return objectKey, s.publicURL(objectKey), nil
 }
 
 // UploadThumb stores a thumbnail image next to an object and returns its public URL.
@@ -81,7 +116,7 @@ func (s *Store) UploadThumb(ctx context.Context, parentObjectKey string, reader 
 	if err != nil {
 		return "", fmt.Errorf("failed to upload thumbnail: %w", err)
 	}
-	return s.publicBaseURL + "/" + thumbKey, nil
+	return s.publicURL(thumbKey), nil
 }
 
 // GetBytes downloads the full contents of an object into memory. It is meant
@@ -185,8 +220,7 @@ func (s *Store) AssembleChunks(ctx context.Context, uploadID string, totalChunks
 		return "", "", fmt.Errorf("failed to assemble chunks: %w", err)
 	}
 
-	url := s.publicBaseURL + "/" + objectKey
-	return objectKey, url, nil
+	return objectKey, s.publicURL(objectKey), nil
 }
 
 // DeleteChunks removes all chunk objects for an upload.
