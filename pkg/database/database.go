@@ -21,7 +21,14 @@ func Connect(cfg *config.Config) error {
 	}
 
 	DB.SetMaxOpenConns(cfg.Database.MaxOpenConns)
-	DB.SetMaxIdleConns(cfg.Database.MaxIdleConns)
+	if cfg.Database.MaxIdleConns > 0 {
+		DB.SetMaxIdleConns(cfg.Database.MaxIdleConns)
+	} else {
+		DB.SetMaxIdleConns(5)
+	}
+	// Keep connections warm so the first query after idle time does not pay a
+	// full connect+auth round trip on every service (and every migration step).
+	DB.SetConnMaxLifetime(0)
 
 	if err = DB.Ping(); err != nil {
 		return fmt.Errorf("failed to ping database: %w", err)

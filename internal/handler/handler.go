@@ -10,22 +10,22 @@ import (
 )
 
 type Handler struct {
-	authHandler    *AuthHandler
-	postHandler    *PostHandler
-	userHandler    *UserHandler
-	messageHandler *MessageHandler
+	authHandler       *AuthHandler
+	postHandler       *PostHandler
+	userHandler       *UserHandler
+	messageHandler    *MessageHandler
 	attachmentHandler *AttachmentHandler
-	config         *config.Config
+	config            *config.Config
 }
 
 func NewHandler(authHandler *AuthHandler, postHandler *PostHandler, userHandler *UserHandler, messageHandler *MessageHandler, attachmentHandler *AttachmentHandler, store *storage.Store, config *config.Config) *Handler {
 	return &Handler{
-		authHandler:    authHandler,
-		postHandler:    postHandler,
-		userHandler:    userHandler,
-		messageHandler: messageHandler,
+		authHandler:       authHandler,
+		postHandler:       postHandler,
+		userHandler:       userHandler,
+		messageHandler:    messageHandler,
 		attachmentHandler: attachmentHandler,
-		config:         config,
+		config:            config,
 	}
 }
 

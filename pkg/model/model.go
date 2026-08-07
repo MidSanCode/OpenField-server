@@ -35,14 +35,14 @@ type User struct {
 
 // Post represents a text post with optional attachments.
 type Post struct {
-	ID          int64        `json:"id"`
-	UserID      int64        `json:"user_id"`
-	Content     string       `json:"content"`
-	CreatedAt   time.Time    `json:"created_at"`
-	UpdatedAt   time.Time    `json:"updated_at"`
-	ReplyCount  int64        `json:"reply_count,omitempty"`
-	ViewCount   int64        `json:"view_count,omitempty"`
-	UniqueViews int64        `json:"unique_views,omitempty"`
+	ID          int64     `json:"id"`
+	UserID      int64     `json:"user_id"`
+	Content     string    `json:"content"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+	ReplyCount  int64     `json:"reply_count,omitempty"`
+	ViewCount   int64     `json:"view_count,omitempty"`
+	UniqueViews int64     `json:"unique_views,omitempty"`
 	// Reactions holds reaction counts keyed by reaction type (e.g. like).
 	Reactions map[string]int64 `json:"reactions,omitempty"`
 	// MyReaction is the authenticated viewer's own reaction, when present.
@@ -56,20 +56,20 @@ type Post struct {
 
 // PostReply represents a reply to a post.
 type PostReply struct {
-	ID        int64      `json:"id"`
-	PostID    int64      `json:"post_id"`
-	UserID    int64      `json:"user_id"`
-	Content   string     `json:"content"`
-	ParentID  *int64     `json:"parent_id,omitempty"`
-	CreatedAt time.Time  `json:"created_at"`
-	UpdatedAt time.Time  `json:"updated_at"`
-	DeletedAt *time.Time `json:"deleted_at,omitempty"`
-	Username  string     `json:"username,omitempty"`
-	Nickname  string     `json:"nickname,omitempty"`
-	AvatarURL string     `json:"avatar_url,omitempty"`
-	IsVerified bool      `json:"is_verified,omitempty"`
+	ID         int64      `json:"id"`
+	PostID     int64      `json:"post_id"`
+	UserID     int64      `json:"user_id"`
+	Content    string     `json:"content"`
+	ParentID   *int64     `json:"parent_id,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+	DeletedAt  *time.Time `json:"deleted_at,omitempty"`
+	Username   string     `json:"username,omitempty"`
+	Nickname   string     `json:"nickname,omitempty"`
+	AvatarURL  string     `json:"avatar_url,omitempty"`
+	IsVerified bool       `json:"is_verified,omitempty"`
 	// ParentContent is a preview of the parent reply's content (for nested threads).
-	ParentContent string       `json:"parent_content,omitempty"`
+	ParentContent string `json:"parent_content,omitempty"`
 	// ParentName is the parent reply author's display name.
 	ParentName  string       `json:"parent_name,omitempty"`
 	Attachments []Attachment `json:"attachments,omitempty"`
@@ -91,13 +91,13 @@ type Attachment struct {
 
 // Conversation represents a private or group chat conversation.
 type Conversation struct {
-	ID         int64     `json:"id"`
-	Type       string    `json:"type"` // private | group
-	Title      string    `json:"title"`
-	AvatarURL  string    `json:"avatar_url"`
-	OwnerID    int64     `json:"owner_id"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	ID        int64     `json:"id"`
+	Type      string    `json:"type"` // private | group
+	Title     string    `json:"title"`
+	AvatarURL string    `json:"avatar_url"`
+	OwnerID   int64     `json:"owner_id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 	// LastMessage is the latest message preview for lists.
 	LastMessage *Message `json:"last_message,omitempty"`
 	Unread      int64    `json:"unread,omitempty"`
@@ -121,19 +121,19 @@ type ConversationMember struct {
 
 // ConsentRequest represents a pending consent request for a private chat or group invite.
 type ConsentRequest struct {
-	ID             int64      `json:"id"`
-	Type           string     `json:"type"` // private_chat | group_invite
-	RequesterID    int64      `json:"requester_id"`
-	TargetUserID   int64      `json:"target_user_id"`
-	ConversationID *int64     `json:"conversation_id,omitempty"`
-	GroupID        *int64     `json:"group_id,omitempty"`
-	Message        string     `json:"message"`
-	Status         string     `json:"status"` // pending | accepted | declined
-	CreatedAt      time.Time  `json:"created_at"`
-	RespondedAt    *time.Time `json:"responded_at,omitempty"`
-	RequesterName  string     `json:"requester_name,omitempty"`
-	RequesterAvatar string    `json:"requester_avatar,omitempty"`
-	GroupTitle     string     `json:"group_title,omitempty"`
+	ID              int64      `json:"id"`
+	Type            string     `json:"type"` // private_chat | group_invite
+	RequesterID     int64      `json:"requester_id"`
+	TargetUserID    int64      `json:"target_user_id"`
+	ConversationID  *int64     `json:"conversation_id,omitempty"`
+	GroupID         *int64     `json:"group_id,omitempty"`
+	Message         string     `json:"message"`
+	Status          string     `json:"status"` // pending | accepted | declined
+	CreatedAt       time.Time  `json:"created_at"`
+	RespondedAt     *time.Time `json:"responded_at,omitempty"`
+	RequesterName   string     `json:"requester_name,omitempty"`
+	RequesterAvatar string     `json:"requester_avatar,omitempty"`
+	GroupTitle      string     `json:"group_title,omitempty"`
 }
 
 // Message represents a chat message within a conversation.
@@ -149,6 +149,10 @@ type Message struct {
 	SenderName     string     `json:"sender_name,omitempty"`
 	SenderAvatar   string     `json:"sender_avatar,omitempty"`
 	SenderVerified bool       `json:"sender_verified,omitempty"`
+	// ReplyToName/ReplyToContent are previews of the replied-to message so
+	// clients can render a quote without loading the full thread.
+	ReplyToName    string       `json:"reply_to_name,omitempty"`
+	ReplyToContent string       `json:"reply_to_content,omitempty"`
 	Attachments    []Attachment `json:"attachments,omitempty"`
 }
 
@@ -179,12 +183,12 @@ type Wallet struct {
 
 // WalletTransaction represents a single balance change on a user's wallet.
 type WalletTransaction struct {
-	ID          int64     `json:"id"`
-	UserID      int64     `json:"user_id"`
-	Amount      int64     `json:"amount"`
-	BalanceAfter int64    `json:"balance_after"`
-	Type        string    `json:"type"`
-	Description string    `json:"description"`
-	OperatorID  int64     `json:"operator_id"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID           int64     `json:"id"`
+	UserID       int64     `json:"user_id"`
+	Amount       int64     `json:"amount"`
+	BalanceAfter int64     `json:"balance_after"`
+	Type         string    `json:"type"`
+	Description  string    `json:"description"`
+	OperatorID   int64     `json:"operator_id"`
+	CreatedAt    time.Time `json:"created_at"`
 }

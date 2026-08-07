@@ -383,6 +383,16 @@ func (r *ConversationRepository) RemoveMember(conversationID, userID int64) erro
 	return nil
 }
 
+// Delete hard-deletes a conversation. Messages, memberships and consent
+// requests are removed by their ON DELETE CASCADE constraints.
+func (r *ConversationRepository) Delete(conversationID int64) error {
+	_, err := database.DB.Exec("DELETE FROM conversations WHERE id = $1", conversationID)
+	if err != nil {
+		return fmt.Errorf("failed to delete conversation: %w", err)
+	}
+	return nil
+}
+
 // SetMemberRole updates a member's role.
 func (r *ConversationRepository) SetMemberRole(conversationID, userID int64, role string) error {
 	_, err := database.DB.Exec(

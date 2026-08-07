@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"golang.org/x/oauth2"
 	"github.com/openfield/server/internal/config"
+	"golang.org/x/oauth2"
 )
 
 // OIDCProvider implements the generic OIDC provider.

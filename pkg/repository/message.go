@@ -96,6 +96,10 @@ func (r *MessageRepository) ListByConversation(conversationID int64, beforeID in
 		return nil, err
 	}
 
+	if err := r.populateReplyPreviews(msgs); err != nil {
+		return nil, err
+	}
+
 	// reverse to chronological order
 	for i, j := 0, len(msgs)-1; i < j; i, j = i+1, j-1 {
 		msgs[i], msgs[j] = msgs[j], msgs[i]
@@ -115,6 +119,10 @@ func (r *MessageRepository) getWithSender(id int64) (*model.Message, error) {
 	).Scan(&msg.ID, &msg.ConversationID, &msg.SenderID, &msg.Content, &msg.ReplyToID, &msg.EditedAt, &msg.DeletedAt, &msg.CreatedAt, &msg.SenderName, &msg.SenderAvatar, &msg.SenderVerified)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get message: %w", err)
+	}
+
+	if err := r.populateReplyPreview(msg); err != nil {
+		return nil, err
 	}
 
 	atts, err := r.attachmentsForMessage(msg.ID)
@@ -192,6 +200,88 @@ func (r *MessageRepository) Delete(id, userID int64) error {
 	affected, _ := result.RowsAffected()
 	if affected == 0 {
 		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// populateReplyPreview fills ReplyToName/ReplyToContent for a single message
+// from the message it quotes (content is blanked if the quoted message was
+// soft-deleted).
+func (r *MessageRepository) populateReplyPreview(msg *model.Message) error {
+	if msg.ReplyToID == nil || *msg.ReplyToID <= 0 {
+		return nil
+	}
+	err := database.DB.QueryRow(
+		`SELECT CASE WHEN m.deleted_at IS NULL THEN COALESCE(m.content, '') ELSE '' END,
+		        COALESCE(u.username, '')
+		 FROM messages m
+		 LEFT JOIN users u ON m.sender_id = u.id
+		 WHERE m.id = $1`,
+		*msg.ReplyToID,
+	).Scan(&msg.ReplyToContent, &msg.ReplyToName)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	return err
+}
+
+// populateReplyPreviews fills ReplyToName/ReplyToContent for a batch of messages.
+func (r *MessageRepository) populateReplyPreviews(msgs []model.Message) error {
+	ids := make([]int64, 0, len(msgs))
+	seen := make(map[int64]bool)
+	for i := range msgs {
+		if msgs[i].ReplyToID == nil {
+			continue
+		}
+		id := *msgs[i].ReplyToID
+		if id <= 0 || seen[id] {
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+
+	rows, err := database.DB.Query(
+		`SELECT m.id, CASE WHEN m.deleted_at IS NULL THEN COALESCE(m.content, '') ELSE '' END,
+		        COALESCE(u.username, '')
+		 FROM messages m
+		 LEFT JOIN users u ON m.sender_id = u.id
+		 WHERE m.id = ANY($1)`,
+		pq.Array(ids),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to query reply previews: %w", err)
+	}
+	defer rows.Close()
+
+	type preview struct {
+		name    string
+		content string
+	}
+	previews := make(map[int64]preview)
+	for rows.Next() {
+		var id int64
+		var p preview
+		if err := rows.Scan(&id, &p.content, &p.name); err != nil {
+			return fmt.Errorf("failed to scan reply preview: %w", err)
+		}
+		previews[id] = p
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("rows error: %w", err)
+	}
+
+	for i := range msgs {
+		if msgs[i].ReplyToID == nil {
+			continue
+		}
+		if p, ok := previews[*msgs[i].ReplyToID]; ok {
+			msgs[i].ReplyToName = p.name
+			msgs[i].ReplyToContent = p.content
+		}
 	}
 	return nil
 }

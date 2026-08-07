@@ -70,6 +70,7 @@ func (r *AttachmentRepository) Delete(id int64) error {
 	}
 	return nil
 }
+
 // AttachToPost links attachments to a post.
 func (r *AttachmentRepository) AttachToPost(postID int64, attachmentIDs []int64) error {
 	for _, attID := range attachmentIDs {

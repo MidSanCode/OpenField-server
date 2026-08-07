@@ -94,8 +94,8 @@ func (h *ConversationHandler) Get(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"conversation": conv,
-		"members":      members,
+		"conversation":  conv,
+		"members":       members,
 		"my_membership": myMember,
 	})
 }
@@ -196,6 +196,12 @@ func (h *ConversationHandler) InviteToGroup(c *gin.Context) {
 		return
 	}
 
+	// Push a realtime notification so the invitee's badge updates immediately.
+	events.Publish(c.Request.Context(), events.ConsentRequested, []int64{req.UserID}, gin.H{
+		"conversation_id": convID,
+		"user_id":         userID,
+	})
+
 	c.JSON(http.StatusCreated, gin.H{"message": "invite sent"})
 }
 
@@ -237,6 +243,11 @@ func (h *ConversationHandler) StartPrivateChat(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to start chat"})
 		return
 	}
+
+	// Push a realtime notification so the recipient's badge updates immediately.
+	events.Publish(c.Request.Context(), events.ConsentRequested, []int64{req.UserID}, gin.H{
+		"user_id": userID,
+	})
 
 	c.JSON(http.StatusCreated, gin.H{"message": "chat request sent"})
 }
@@ -395,6 +406,52 @@ func (h *ConversationHandler) Leave(c *gin.Context) {
 	if err := h.convRepo.RemoveMember(convID, userID); err != nil {
 		logger.Log.Error("failed to leave group", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to leave group"})
+		return
+	}
+
+	c.Status(http.StatusNoContent)
+}
+
+// Delete permanently removes a conversation and all its messages. For groups
+// only the owner can delete; either participant can delete a private chat.
+func (h *ConversationHandler) Delete(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	convID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid conversation ID"})
+		return
+	}
+
+	conv, err := h.convRepo.GetByID(convID)
+	if err != nil {
+		logger.Log.Error("failed to get conversation", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete conversation"})
+		return
+	}
+	if conv == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "conversation not found"})
+		return
+	}
+
+	member, err := h.convRepo.GetMember(convID, userID)
+	if err != nil || member == nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "you are not a member of this conversation"})
+		return
+	}
+
+	if conv.Type == "group" && member.Role != "owner" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "only the owner can delete the group"})
+		return
+	}
+
+	if err := h.convRepo.Delete(convID); err != nil {
+		logger.Log.Error("failed to delete conversation", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete conversation"})
 		return
 	}
 

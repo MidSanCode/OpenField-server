@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/openfield/server/pkg/events"
@@ -129,12 +130,21 @@ func viewerKey(c *gin.Context) string {
 	return "ip:" + c.ClientIP()
 }
 
-// ListPosts retrieves paginated posts.
+// ListPosts retrieves paginated posts, optionally filtered by a search query.
 func (h *PostHandler) ListPosts(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	query := strings.TrimSpace(c.Query("q"))
 
-	posts, err := h.postRepo.List(page, limit)
+	var (
+		posts []model.Post
+		err   error
+	)
+	if query != "" {
+		posts, err = h.postRepo.Search(query, page, limit)
+	} else {
+		posts, err = h.postRepo.List(page, limit)
+	}
 	if err != nil {
 		logger.Log.Error("failed to list posts", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list posts"})
@@ -145,6 +155,7 @@ func (h *PostHandler) ListPosts(c *gin.Context) {
 		"posts": posts,
 		"page":  page,
 		"limit": limit,
+		"query": query,
 	})
 }
 

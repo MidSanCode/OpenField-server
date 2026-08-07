@@ -23,11 +23,11 @@ type User struct {
 
 // Post represents a text post with optional attachments.
 type Post struct {
-	ID          int64        `json:"id"`
-	UserID      int64        `json:"user_id"`
-	Content     string       `json:"content"`
-	CreatedAt   time.Time    `json:"created_at"`
-	UpdatedAt   time.Time    `json:"updated_at"`
+	ID        int64     `json:"id"`
+	UserID    int64     `json:"user_id"`
+	Content   string    `json:"content"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 	// populated on read queries
 	Username    string       `json:"username,omitempty"`
 	Nickname    string       `json:"nickname,omitempty"`

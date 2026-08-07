@@ -4,8 +4,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/openfield/server/internal/repository"
 	"github.com/openfield/server/internal/model"
+	"github.com/openfield/server/internal/repository"
 )
 
 // MessageService handles business logic for messages.

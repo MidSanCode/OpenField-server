@@ -15,12 +15,12 @@ import (
 
 // UserHandler handles user-related requests.
 type UserHandler struct {
-	userRepo  *repository.UserRepository
+	userRepo   *repository.UserRepository
 	followRepo *repository.FollowRepository
-	permRepo  *repository.PermissionRepository
-	attRepo   *repository.AttachmentRepository
-	store     *storage.Store
-	cfg       config.StorageConfig
+	permRepo   *repository.PermissionRepository
+	attRepo    *repository.AttachmentRepository
+	store      *storage.Store
+	cfg        config.StorageConfig
 }
 
 // NewUserHandler creates a new UserHandler.

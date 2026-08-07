@@ -26,6 +26,10 @@ type DatabaseConfig struct {
 	SSLMode      string `yaml:"sslmode"`
 	MaxOpenConns int    `yaml:"max_open_conns"`
 	MaxIdleConns int    `yaml:"max_idle_conns"`
+	// Migrate controls whether the service runs schema migrations at startup.
+	// Only the account service (the schema owner) needs this enabled; the
+	// gateway and other read-only services can disable it to start faster.
+	Migrate bool `yaml:"migrate"`
 }
 
 // RedisConfig holds Redis configuration.
@@ -55,15 +59,15 @@ type JWTConfig struct {
 
 // StorageConfig holds S3-compatible object storage configuration.
 type StorageConfig struct {
-	Endpoint        string `yaml:"endpoint"`
-	AccessKey       string `yaml:"access_key"`
-	SecretKey       string `yaml:"secret_key"`
-	Bucket          string `yaml:"bucket"`
-	Region          string `yaml:"region"`
-	UseSSL          bool   `yaml:"use_ssl"`
-	PublicBaseURL   string `yaml:"public_base_url"`
-	MaxUploadBytes  int64  `yaml:"max_upload_bytes"`
-	MaxAttachments  int    `yaml:"max_attachments_per_post"`
+	Endpoint       string `yaml:"endpoint"`
+	AccessKey      string `yaml:"access_key"`
+	SecretKey      string `yaml:"secret_key"`
+	Bucket         string `yaml:"bucket"`
+	Region         string `yaml:"region"`
+	UseSSL         bool   `yaml:"use_ssl"`
+	PublicBaseURL  string `yaml:"public_base_url"`
+	MaxUploadBytes int64  `yaml:"max_upload_bytes"`
+	MaxAttachments int    `yaml:"max_attachments_per_post"`
 }
 
 // ServicesConfig holds the base URLs of the internal microservices.
@@ -120,6 +124,9 @@ func (c *Config) overrideFromEnv() {
 	}
 	if v := os.Getenv("REDIS_PASSWORD"); v != "" {
 		c.Redis.Password = v
+	}
+	if v := os.Getenv("DATABASE_MIGRATE"); v != "" {
+		c.Database.Migrate = v == "true" || v == "1"
 	}
 	if v := os.Getenv("OIDC_ISSUER_URL"); v != "" {
 		c.OIDC.IssuerURL = v

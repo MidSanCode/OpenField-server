@@ -51,14 +51,14 @@ type JWTConfig struct {
 
 // StorageConfig holds RustFS (S3-compatible) storage configuration.
 type StorageConfig struct {
-	Endpoint        string `yaml:"endpoint"`
-	AccessKey       string `yaml:"access_key"`
-	SecretKey       string `yaml:"secret_key"`
-	Bucket          string `yaml:"bucket"`
-	UseSSL          bool   `yaml:"use_ssl"`
-	PublicBaseURL   string `yaml:"public_base_url"`
-	MaxUploadBytes  int64  `yaml:"max_upload_bytes"`
-	MaxAttachments  int    `yaml:"max_attachments_per_post"`
+	Endpoint       string `yaml:"endpoint"`
+	AccessKey      string `yaml:"access_key"`
+	SecretKey      string `yaml:"secret_key"`
+	Bucket         string `yaml:"bucket"`
+	UseSSL         bool   `yaml:"use_ssl"`
+	PublicBaseURL  string `yaml:"public_base_url"`
+	MaxUploadBytes int64  `yaml:"max_upload_bytes"`
+	MaxAttachments int    `yaml:"max_attachments_per_post"`
 }
 
 // Config holds all configuration for the server.

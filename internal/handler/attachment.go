@@ -14,10 +14,10 @@ import (
 
 // AttachmentHandler handles file upload/download.
 type AttachmentHandler struct {
-	store   *storage.Store
-	attRepo *repository.AttachmentRepository
+	store    *storage.Store
+	attRepo  *repository.AttachmentRepository
 	userRepo *repository.UserRepository
-	cfg     config.StorageConfig
+	cfg      config.StorageConfig
 }
 
 // NewAttachmentHandler creates a new AttachmentHandler.

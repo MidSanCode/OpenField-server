@@ -11,23 +11,23 @@ const (
 	AccountFollow      = "account.follow"
 
 	// Storage
-	StorageUpload  = "storage.upload"
-	StorageList    = "storage.list"
-	StorageGet     = "storage.get"
-	StorageDelete  = "storage.delete"
+	StorageUpload = "storage.upload"
+	StorageList   = "storage.list"
+	StorageGet    = "storage.get"
+	StorageDelete = "storage.delete"
 
 	// Chat
-	ChatView          = "chat.view"
-	ChatSend          = "chat.send"
-	ChatEdit          = "chat.edit"
-	ChatDelete        = "chat.delete"
-	ChatRequestSend   = "chat.request.send"
+	ChatView           = "chat.view"
+	ChatSend           = "chat.send"
+	ChatEdit           = "chat.edit"
+	ChatDelete         = "chat.delete"
+	ChatRequestSend    = "chat.request.send"
 	ChatRequestApprove = "chat.request.approve"
-	ChatGroupCreate   = "chat.group.create"
-	ChatGroupInvite   = "chat.group.invite"
-	ChatGroupManage   = "chat.group.manage"
-	ChatNoteEdit      = "chat.note.edit"
-	ChatGroupNickname = "chat.group.nickname"
+	ChatGroupCreate    = "chat.group.create"
+	ChatGroupInvite    = "chat.group.invite"
+	ChatGroupManage    = "chat.group.manage"
+	ChatNoteEdit       = "chat.note.edit"
+	ChatGroupNickname  = "chat.group.nickname"
 
 	// Posts
 	PostsView        = "posts.view"

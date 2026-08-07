@@ -3,6 +3,8 @@ package database
 import (
 	"fmt"
 
+	"github.com/lib/pq"
+	"github.com/openfield/server/pkg/config"
 	"github.com/openfield/server/pkg/logger"
 	"github.com/openfield/server/pkg/permission"
 )
@@ -261,14 +263,30 @@ func RunMigrations() error {
 	return nil
 }
 
+// RunMigrationsIfEnabled runs schema migrations only when the service is
+// configured as the schema owner (database.migrate: true). Other services skip
+// migrations and simply reuse the schema created by the owner, so they start
+// faster and avoid redundant DDL on every boot.
+func RunMigrationsIfEnabled(cfg *config.Config) error {
+	if !cfg.Database.Migrate {
+		logger.Log.Info("database migrations skipped (migrate disabled for this service)")
+		return nil
+	}
+	return RunMigrations()
+}
+
 func seedPermissions() error {
-	for _, key := range permission.All() {
-		if _, err := DB.Exec(
-			`INSERT INTO permissions (key, name) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING`,
-			key, key,
-		); err != nil {
-			return fmt.Errorf("failed to seed permission %s: %w", key, err)
-		}
+	keys := permission.All()
+	if len(keys) == 0 {
+		return nil
+	}
+	if _, err := DB.Exec(
+		`INSERT INTO permissions (key, name)
+		 SELECT k, k FROM unnest($1::text[]) AS k
+		 ON CONFLICT (key) DO NOTHING`,
+		pq.Array(keys),
+	); err != nil {
+		return fmt.Errorf("failed to seed permissions: %w", err)
 	}
 	return nil
 }
@@ -297,14 +315,28 @@ func seedDefaultGroup() error {
 	}
 
 	// Backfill: ensure every existing user belongs to the default group so the
-	// permission system grants them access immediately.
-	if _, err := DB.Exec(
-		`INSERT INTO user_groups (user_id, group_id)
-		 SELECT id, $1 FROM users
-		 ON CONFLICT DO NOTHING`,
+	// permission system grants them access immediately. Only scan when there is
+	// at least one user missing a default-group membership.
+	var missing int64
+	if err := DB.QueryRow(
+		`SELECT count(*) FROM users u
+		 WHERE NOT EXISTS (
+		   SELECT 1 FROM user_groups ug
+		   WHERE ug.user_id = u.id AND ug.group_id = $1
+		 )`,
 		groupID,
-	); err != nil {
-		return fmt.Errorf("failed to backfill default group membership: %w", err)
+	).Scan(&missing); err != nil {
+		return fmt.Errorf("failed to check default group membership: %w", err)
+	}
+	if missing > 0 {
+		if _, err := DB.Exec(
+			`INSERT INTO user_groups (user_id, group_id)
+			 SELECT id, $1 FROM users
+			 ON CONFLICT DO NOTHING`,
+			groupID,
+		); err != nil {
+			return fmt.Errorf("failed to backfill default group membership: %w", err)
+		}
 	}
 	return nil
 }

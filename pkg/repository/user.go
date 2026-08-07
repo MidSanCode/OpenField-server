@@ -129,7 +129,8 @@ func (r *UserRepository) BindOAuth(userID int64, provider, oauth2ID, oauth2Usern
 }
 
 // GetUsersByIDs retrieves multiple users by their IDs.
-func (r *UserRepository) GetUsersByIDs(ids []int64) (map[int64]*model.User, error) {	if len(ids) == 0 {
+func (r *UserRepository) GetUsersByIDs(ids []int64) (map[int64]*model.User, error) {
+	if len(ids) == 0 {
 		return map[int64]*model.User{}, nil
 	}
 

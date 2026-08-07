@@ -3,8 +3,8 @@ package service
 import (
 	"errors"
 
-	"github.com/openfield/server/internal/repository"
 	"github.com/openfield/server/internal/model"
+	"github.com/openfield/server/internal/repository"
 )
 
 // UserService handles business logic for users.

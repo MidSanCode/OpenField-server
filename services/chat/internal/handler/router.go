@@ -29,6 +29,7 @@ func RegisterRoutes(r *gin.Engine, convHandler *ConversationHandler, consentHand
 			convs.POST("/:id/read", convHandler.MarkRead)
 			convs.POST("/:id/typing", convHandler.Typing)
 			convs.POST("/:id/leave", convHandler.Leave)
+			convs.DELETE("/:id", convHandler.Delete)
 			convs.DELETE("/:id/members/:user_id", convHandler.RemoveMember)
 		}
 

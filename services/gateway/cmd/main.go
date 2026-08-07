@@ -26,9 +26,9 @@ type serviceTarget struct {
 type authLevel int
 
 const (
-	authPublic  authLevel = iota // no auth required
-	authRequired                 // valid JWT required
-	authPermission               // valid JWT + permission required
+	authPublic     authLevel = iota // no auth required
+	authRequired                    // valid JWT required
+	authPermission                  // valid JWT + permission required
 )
 
 // route is a single gateway routing rule. Patterns use gin-style ":param"
@@ -111,9 +111,9 @@ func main() {
 	}
 	defer database.Close()
 
-	if err := database.RunMigrations(); err != nil {
-		log.Fatalf("failed to run database migrations: %v", err)
-	}
+	// The gateway does not own the schema; the account service runs migrations
+	// at startup. The gateway only needs the DB for permission checks, so it
+	// skips migration DDL and boots as fast as possible.
 
 	permFactory := middleware.NewPermissionMiddlewareFactory()
 
@@ -184,6 +184,7 @@ func main() {
 		{http.MethodPost, "/api/v1/conversations/:id/read", cfg.Services.Chat, authPermission, "chat.view"},
 		{http.MethodPost, "/api/v1/conversations/:id/typing", cfg.Services.Chat, authPermission, "chat.view"},
 		{http.MethodPost, "/api/v1/conversations/:id/leave", cfg.Services.Chat, authPermission, "chat.group.manage"},
+		{http.MethodDelete, "/api/v1/conversations/:id", cfg.Services.Chat, authPermission, "chat.group.manage"},
 		{http.MethodDelete, "/api/v1/conversations/:id/members/:user_id", cfg.Services.Chat, authPermission, "chat.group.manage"},
 		{http.MethodGet, "/api/v1/conversations/:id/messages", cfg.Services.Chat, authPermission, "chat.view"},
 		{http.MethodPost, "/api/v1/conversations/:id/messages", cfg.Services.Chat, authPermission, "chat.send"},

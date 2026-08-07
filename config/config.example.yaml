@@ -28,6 +28,9 @@ database:
   sslmode: "disable"
   max_open_conns: 25
   max_idle_conns: 5
+  # Only the account service (the schema owner) runs migrations at startup.
+  # Leave false for the gateway and other services so they boot faster.
+  migrate: true
 
 redis:
   addr: "localhost:6379"

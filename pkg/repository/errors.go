@@ -90,4 +90,3 @@ func RevokeRefreshTokens(userID int64) error {
 	_, err := database.DB.Exec("DELETE FROM refresh_tokens WHERE user_id = $1", userID)
 	return err
 }
-

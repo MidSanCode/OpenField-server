@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/openfield/server/pkg/events"
@@ -227,6 +228,8 @@ func (h *MessageHandler) Delete(c *gin.Context) {
 	}
 
 	if msg != nil {
+		now := time.Now()
+		msg.DeletedAt = &now
 		h.publishMessageEvent(c.Request.Context(), events.ChatMessageDeleted, msg.ConversationID, msg)
 	}
 

@@ -285,6 +285,58 @@ func (r *PostRepository) List(page, limit int) ([]model.Post, error) {
 	return posts, nil
 }
 
+// Search retrieves paginated posts whose content matches query (ILIKE).
+func (r *PostRepository) Search(query string, page, limit int) ([]model.Post, error) {
+	if query == "" {
+		return r.List(page, limit)
+	}
+	if page < 1 {
+		page = 1
+	}
+	if limit < 1 {
+		limit = 20
+	}
+	offset := (page - 1) * limit
+	pattern := "%" + query + "%"
+
+	rows, err := database.DB.Query(
+		`SELECT p.id, p.user_id, p.content, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url, u.is_verified,
+		        (SELECT COUNT(*) FROM post_replies pr WHERE pr.post_id = p.id AND pr.deleted_at IS NULL) AS reply_count
+		 FROM posts p
+		 JOIN users u ON p.user_id = u.id
+		 WHERE p.content ILIKE $1
+		 ORDER BY p.created_at DESC
+		 LIMIT $2 OFFSET $3`,
+		pattern, limit, offset,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search posts: %w", err)
+	}
+	defer rows.Close()
+
+	posts := make([]model.Post, 0)
+	var postIDs []int64
+	for rows.Next() {
+		var post model.Post
+		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.ReplyCount); err != nil {
+			return nil, fmt.Errorf("failed to scan post: %w", err)
+		}
+		posts = append(posts, post)
+		postIDs = append(postIDs, post.ID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows error: %w", err)
+	}
+
+	if err := r.populateAttachments(posts, postIDs); err != nil {
+		return nil, err
+	}
+	if err := r.populateStats(posts, postIDs); err != nil {
+		return nil, err
+	}
+	return posts, nil
+}
+
 // ListByUser retrieves paginated posts by a specific user.
 func (r *PostRepository) ListByUser(userID int64, page, limit int) ([]model.Post, error) {
 	if page < 1 {

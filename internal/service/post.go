@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/openfield/server/internal/repository"
 	"github.com/openfield/server/internal/model"
+	"github.com/openfield/server/internal/repository"
 )
 
 // PostService handles business logic for posts.

@@ -16,12 +16,12 @@ type Client struct {
 
 // Hub tracks all connected clients by user ID and relays events to them.
 type Hub struct {
-	mu        sync.RWMutex
-	clients   map[*Client]struct{}
-	byUser    map[int64]map[*Client]struct{}
-	register  chan *Client
+	mu         sync.RWMutex
+	clients    map[*Client]struct{}
+	byUser     map[int64]map[*Client]struct{}
+	register   chan *Client
 	unregister chan *Client
-	quit      chan struct{}
+	quit       chan struct{}
 }
 
 // NewHub creates an empty hub.

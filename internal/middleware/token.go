@@ -23,9 +23,9 @@ func NewTokenManager(secretKey string, expiryHours int) *TokenManager {
 
 // Claims represents JWT claims.
 type Claims struct {
-	UserID    int64  `json:"user_id"`
-	Email     string `json:"email"`
-	Username  string `json:"username"`
+	UserID   int64  `json:"user_id"`
+	Email    string `json:"email"`
+	Username string `json:"username"`
 	jwt.RegisteredClaims
 }
 
