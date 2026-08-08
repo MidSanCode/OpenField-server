@@ -34,7 +34,9 @@ func (s *Store) Enabled() bool {
 
 // New creates a new storage client from config. When object storage is not
 // configured it returns a disabled store (never an error), so services can
-// still start without storage.
+// still start without storage. The bucket existence check is best-effort:
+// an unreachable or not-yet-created bucket never fails startup — operations
+// fail at request time and recover once the storage backend is available.
 func New(cfg config.StorageConfig) (*Store, error) {
 	if !IsConfigured(cfg) {
 		logger.Log.Warn("storage not configured; running without object storage")
@@ -46,7 +48,9 @@ func New(cfg config.StorageConfig) (*Store, error) {
 		Secure: cfg.UseSSL,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create storage client: %w", err)
+		// A malformed endpoint must not take the service down either.
+		logger.Log.Error("failed to create storage client; running without object storage", "error", err)
+		return &Store{enabled: false}, nil
 	}
 
 	s := &Store{
@@ -61,11 +65,13 @@ func New(cfg config.StorageConfig) (*Store, error) {
 
 	exists, err := client.BucketExists(ctx, s.bucket)
 	if err != nil {
-		return nil, fmt.Errorf("failed to check bucket: %w", err)
+		logger.Log.Warn("storage bucket unavailable at startup", "bucket", s.bucket, "error", err)
+		return s, nil
 	}
 	if !exists {
 		if err := client.MakeBucket(ctx, s.bucket, minio.MakeBucketOptions{}); err != nil {
-			return nil, fmt.Errorf("failed to create bucket: %w", err)
+			logger.Log.Warn("failed to create storage bucket", "bucket", s.bucket, "error", err)
+			return s, nil
 		}
 		logger.Log.Info("storage bucket created", "bucket", s.bucket)
 	}
