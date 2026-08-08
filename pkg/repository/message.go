@@ -60,7 +60,7 @@ func (r *MessageRepository) ListByConversation(conversationID int64, beforeID in
 	if limit < 1 || limit > 100 {
 		limit = 50
 	}
-	query := `SELECT m.id, m.conversation_id, m.sender_id, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at,
+	query := `SELECT m.id, m.conversation_id, m.sender_id, m.kind, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at,
 	                 u.username, u.avatar_url, u.is_verified
 	          FROM messages m
 	          JOIN users u ON m.sender_id = u.id
@@ -82,7 +82,7 @@ func (r *MessageRepository) ListByConversation(conversationID int64, beforeID in
 	var msgIDs []int64
 	for rows.Next() {
 		var m model.Message
-		if err := rows.Scan(&m.ID, &m.ConversationID, &m.SenderID, &m.Content, &m.ReplyToID, &m.EditedAt, &m.DeletedAt, &m.CreatedAt, &m.SenderName, &m.SenderAvatar, &m.SenderVerified); err != nil {
+		if err := rows.Scan(&m.ID, &m.ConversationID, &m.SenderID, &m.Kind, &m.Content, &m.ReplyToID, &m.EditedAt, &m.DeletedAt, &m.CreatedAt, &m.SenderName, &m.SenderAvatar, &m.SenderVerified); err != nil {
 			return nil, fmt.Errorf("failed to scan message: %w", err)
 		}
 		msgs = append(msgs, m)
@@ -110,13 +110,13 @@ func (r *MessageRepository) ListByConversation(conversationID int64, beforeID in
 func (r *MessageRepository) getWithSender(id int64) (*model.Message, error) {
 	msg := &model.Message{}
 	err := database.DB.QueryRow(
-		`SELECT m.id, m.conversation_id, m.sender_id, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at,
+		`SELECT m.id, m.conversation_id, m.sender_id, m.kind, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at,
 		        u.username, u.avatar_url, u.is_verified
 		 FROM messages m
 		 JOIN users u ON m.sender_id = u.id
 		 WHERE m.id = $1`,
 		id,
-	).Scan(&msg.ID, &msg.ConversationID, &msg.SenderID, &msg.Content, &msg.ReplyToID, &msg.EditedAt, &msg.DeletedAt, &msg.CreatedAt, &msg.SenderName, &msg.SenderAvatar, &msg.SenderVerified)
+	).Scan(&msg.ID, &msg.ConversationID, &msg.SenderID, &msg.Kind, &msg.Content, &msg.ReplyToID, &msg.EditedAt, &msg.DeletedAt, &msg.CreatedAt, &msg.SenderName, &msg.SenderAvatar, &msg.SenderVerified)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get message: %w", err)
 	}
@@ -137,13 +137,42 @@ func (r *MessageRepository) getWithSender(id int64) (*model.Message, error) {
 func (r *MessageRepository) GetByID(id int64) (*model.Message, error) {
 	msg := &model.Message{}
 	err := database.DB.QueryRow(
-		`SELECT id, conversation_id, sender_id, content, reply_to_id, edited_at, deleted_at, created_at
+		`SELECT id, conversation_id, sender_id, kind, content, reply_to_id, edited_at, deleted_at, created_at
 		 FROM messages WHERE id = $1`,
 		id,
-	).Scan(&msg.ID, &msg.ConversationID, &msg.SenderID, &msg.Content, &msg.ReplyToID, &msg.EditedAt, &msg.DeletedAt, &msg.CreatedAt)
+	).Scan(&msg.ID, &msg.ConversationID, &msg.SenderID, &msg.Kind, &msg.Content, &msg.ReplyToID, &msg.EditedAt, &msg.DeletedAt, &msg.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
+	if err != nil {
+		return nil, err
+	}
+	return msg, nil
+}
+
+// CreateSystem inserts a system message (e.g. "X joined the chat") authored by
+// an actor user, and returns it with sender info. System messages carry a kind
+// like system.join/system.leave that clients use for localized rendering.
+func (r *MessageRepository) CreateSystem(conversationID, actorID int64, kind string) (*model.Message, error) {
+	msg := &model.Message{}
+	err := database.DB.QueryRow(
+		`INSERT INTO messages (conversation_id, sender_id, kind, content)
+		 VALUES ($1, $2, $3, '')
+		 RETURNING id, conversation_id, sender_id, kind, content, reply_to_id, edited_at, deleted_at, created_at`,
+		conversationID, actorID, kind,
+	).Scan(&msg.ID, &msg.ConversationID, &msg.SenderID, &msg.Kind, &msg.Content, &msg.ReplyToID, &msg.EditedAt, &msg.DeletedAt, &msg.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create system message: %w", err)
+	}
+
+	if _, err := database.DB.Exec(
+		"UPDATE conversations SET updated_at = NOW() WHERE id = $1",
+		conversationID,
+	); err != nil {
+		return nil, fmt.Errorf("failed to touch conversation: %w", err)
+	}
+
+	msg, err = r.getWithSender(msg.ID)
 	if err != nil {
 		return nil, err
 	}

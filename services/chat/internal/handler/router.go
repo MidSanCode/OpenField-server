@@ -22,6 +22,7 @@ func RegisterRoutes(r *gin.Engine, convHandler *ConversationHandler, consentHand
 			convs.GET("", convHandler.List)
 			convs.POST("", convHandler.CreateGroup)
 			convs.POST("/start", convHandler.StartPrivateChat)
+			convs.GET("/public", convHandler.ListPublicGroups)
 			convs.GET("/:id", convHandler.Get)
 			convs.POST("/:id/invite", convHandler.InviteToGroup)
 			convs.PUT("/:id/note", convHandler.UpdateNote)
@@ -29,8 +30,15 @@ func RegisterRoutes(r *gin.Engine, convHandler *ConversationHandler, consentHand
 			convs.POST("/:id/read", convHandler.MarkRead)
 			convs.POST("/:id/typing", convHandler.Typing)
 			convs.POST("/:id/leave", convHandler.Leave)
+			convs.POST("/:id/join", convHandler.JoinGroup)
+			convs.PUT("/:id/settings", convHandler.UpdateSettings)
+			convs.POST("/:id/mute-all", convHandler.MuteAll)
+			convs.DELETE("/:id/mute-all", convHandler.UnmuteAll)
 			convs.DELETE("/:id", convHandler.Delete)
 			convs.DELETE("/:id/members/:user_id", convHandler.RemoveMember)
+			convs.PUT("/:id/members/:user_id/role", convHandler.SetMemberRole)
+			convs.POST("/:id/members/:user_id/mute", convHandler.MuteMember)
+			convs.DELETE("/:id/members/:user_id/mute", convHandler.UnmuteMember)
 		}
 
 		msgs := api.Group("/conversations/:id/messages")

@@ -1,13 +1,16 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/openfield/server/pkg/events"
 	"github.com/openfield/server/pkg/logger"
 	"github.com/openfield/server/pkg/middleware"
+	"github.com/openfield/server/pkg/model"
 	"github.com/openfield/server/pkg/repository"
 )
 
@@ -15,6 +18,7 @@ import (
 type ConversationHandler struct {
 	convRepo    *repository.ConversationRepository
 	consentRepo *repository.ConsentRequestRepository
+	msgRepo     *repository.MessageRepository
 }
 
 // NewConversationHandler creates a new ConversationHandler.
@@ -22,6 +26,7 @@ func NewConversationHandler() *ConversationHandler {
 	return &ConversationHandler{
 		convRepo:    repository.NewConversationRepository(),
 		consentRepo: repository.NewConsentRequestRepository(),
+		msgRepo:     repository.NewMessageRepository(),
 	}
 }
 
@@ -63,10 +68,6 @@ func (h *ConversationHandler) Get(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get conversation"})
 		return
 	}
-	if !isMember {
-		c.JSON(http.StatusForbidden, gin.H{"error": "you are not a member of this conversation"})
-		return
-	}
 
 	conv, err := h.convRepo.GetByID(convID)
 	if err != nil {
@@ -76,6 +77,20 @@ func (h *ConversationHandler) Get(c *gin.Context) {
 	}
 	if conv == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "conversation not found"})
+		return
+	}
+
+	// Non-members may only view public groups (searchable & viewable).
+	if !isMember {
+		if conv.Type != "group" || !conv.IsPublic {
+			c.JSON(http.StatusForbidden, gin.H{"error": "you are not a member of this conversation"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"conversation":  conv,
+			"members":       []model.ConversationMember{},
+			"my_membership": nil,
+		})
 		return
 	}
 
@@ -409,6 +424,16 @@ func (h *ConversationHandler) Leave(c *gin.Context) {
 		return
 	}
 
+	// Announce the departure to the remaining members with a system message.
+	sys, err := h.msgRepo.CreateSystem(convID, userID, "system.leave")
+	if err != nil {
+		logger.Log.Warn("failed to create leave system message", "error", err, "conversation_id", convID)
+	}
+	h.publishConversationEvent(c.Request.Context(), convID)
+	if sys != nil {
+		h.publishMessageEvent(c.Request.Context(), events.ChatMessageCreated, convID, sys)
+	}
+
 	c.Status(http.StatusNoContent)
 }
 
@@ -494,6 +519,463 @@ func (h *ConversationHandler) RemoveMember(c *gin.Context) {
 	}
 
 	c.Status(http.StatusNoContent)
+}
+
+// ListPublicGroups lists public groups that can be searched and joined.
+func (h *ConversationHandler) ListPublicGroups(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	groups, err := h.convRepo.ListPublicGroups(userID, c.Query("q"), limit)
+	if err != nil {
+		logger.Log.Error("failed to list public groups", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list public groups"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"groups": groups})
+}
+
+// JoinGroup lets a user join a public group that allows self-join.
+func (h *ConversationHandler) JoinGroup(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	convID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid conversation ID"})
+		return
+	}
+
+	conv, err := h.convRepo.GetByID(convID)
+	if err != nil {
+		logger.Log.Error("failed to get conversation", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to join group"})
+		return
+	}
+	if conv == nil || conv.Type != "group" {
+		c.JSON(http.StatusNotFound, gin.H{"error": "group not found"})
+		return
+	}
+	if !conv.IsPublic || !conv.AllowJoin {
+		c.JSON(http.StatusForbidden, gin.H{"error": "this group does not allow direct joining"})
+		return
+	}
+
+	isMember, err := h.convRepo.IsMember(convID, userID)
+	if err != nil {
+		logger.Log.Error("failed to check membership", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to join group"})
+		return
+	}
+	if isMember {
+		c.JSON(http.StatusConflict, gin.H{"error": "you are already a member of this group"})
+		return
+	}
+
+	if err := h.convRepo.AddMember(convID, userID, userID, "member", "active"); err != nil {
+		logger.Log.Error("failed to add member", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to join group"})
+		return
+	}
+
+	// Announce the arrival to the whole group with a system message.
+	sys, err := h.msgRepo.CreateSystem(convID, userID, "system.join")
+	if err != nil {
+		logger.Log.Warn("failed to create join system message", "error", err, "conversation_id", convID)
+	}
+	h.publishConversationEvent(c.Request.Context(), convID)
+	if sys != nil {
+		h.publishMessageEvent(c.Request.Context(), events.ChatMessageCreated, convID, sys)
+	}
+
+	c.JSON(http.StatusOK, conv)
+}
+
+// UpdateSettings updates a group's visibility and self-join policy (owner only).
+func (h *ConversationHandler) UpdateSettings(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	convID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid conversation ID"})
+		return
+	}
+
+	var req struct {
+		IsPublic  bool `json:"is_public"`
+		AllowJoin bool `json:"allow_join"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	conv, err := h.convRepo.GetByID(convID)
+	if err != nil {
+		logger.Log.Error("failed to get conversation", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update group settings"})
+		return
+	}
+	if conv == nil || conv.Type != "group" {
+		c.JSON(http.StatusNotFound, gin.H{"error": "group not found"})
+		return
+	}
+
+	member, err := h.convRepo.GetMember(convID, userID)
+	if err != nil || member == nil || member.Role != "owner" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "only the group owner can edit settings"})
+		return
+	}
+
+	if err := h.convRepo.UpdateGroupSettings(convID, req.IsPublic, req.AllowJoin); err != nil {
+		logger.Log.Error("failed to update group settings", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update group settings"})
+		return
+	}
+
+	h.publishConversationEvent(c.Request.Context(), convID)
+	c.JSON(http.StatusOK, gin.H{"message": "group settings updated"})
+}
+
+// SetMemberRole promotes or demotes a member (owner only).
+func (h *ConversationHandler) SetMemberRole(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	convID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid conversation ID"})
+		return
+	}
+	targetID, err := strconv.ParseInt(c.Param("user_id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user ID"})
+		return
+	}
+
+	var req struct {
+		Role string `json:"role" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+	if req.Role != "admin" && req.Role != "member" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "role must be admin or member"})
+		return
+	}
+
+	actor, err := h.convRepo.GetMember(convID, userID)
+	if err != nil || actor == nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "you are not a member of this conversation"})
+		return
+	}
+	if actor.Role != "owner" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "only the group owner can change roles"})
+		return
+	}
+
+	target, err := h.convRepo.GetMember(convID, targetID)
+	if err != nil || target == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "member not found"})
+		return
+	}
+	if target.Role == "owner" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "cannot change the group owner's role"})
+		return
+	}
+
+	if err := h.convRepo.SetMemberRole(convID, targetID, req.Role); err != nil {
+		logger.Log.Error("failed to set member role", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to set member role"})
+		return
+	}
+
+	h.publishConversationEvent(c.Request.Context(), convID)
+	c.JSON(http.StatusOK, gin.H{"message": "role updated"})
+}
+
+// maxMuteMinutes is the longest mute allowed (10 years).
+const maxMuteMinutes = 5256000
+
+// MuteMember mutes a member for a set duration (owner/admin only).
+func (h *ConversationHandler) MuteMember(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	convID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid conversation ID"})
+		return
+	}
+	targetID, err := strconv.ParseInt(c.Param("user_id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user ID"})
+		return
+	}
+
+	var req struct {
+		DurationMinutes int64 `json:"duration_minutes"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+	if req.DurationMinutes <= 0 || req.DurationMinutes > maxMuteMinutes {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid mute duration"})
+		return
+	}
+
+	actor, err := h.convRepo.GetMember(convID, userID)
+	if err != nil || actor == nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "you are not a member of this conversation"})
+		return
+	}
+	if actor.Role != "owner" && actor.Role != "admin" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "only the owner or admins can mute members"})
+		return
+	}
+
+	target, err := h.convRepo.GetMember(convID, targetID)
+	if err != nil || target == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "member not found"})
+		return
+	}
+	if target.Role == "owner" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "cannot mute the group owner"})
+		return
+	}
+	if actor.Role == "admin" && target.Role == "admin" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "admins cannot mute other admins"})
+		return
+	}
+
+	until := time.Now().Add(time.Duration(req.DurationMinutes) * time.Minute)
+	if err := h.convRepo.SetMemberMute(convID, targetID, &until); err != nil {
+		logger.Log.Error("failed to mute member", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to mute member"})
+		return
+	}
+
+	sys, err := h.msgRepo.CreateSystem(convID, targetID, "system.mute")
+	if err != nil {
+		logger.Log.Warn("failed to create mute system message", "error", err, "conversation_id", convID)
+	}
+	h.publishConversationEvent(c.Request.Context(), convID)
+	if sys != nil {
+		h.publishMessageEvent(c.Request.Context(), events.ChatMessageCreated, convID, sys)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "member muted", "muted_until": until})
+}
+
+// UnmuteMember removes an individual mute (owner/admin only).
+func (h *ConversationHandler) UnmuteMember(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	convID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid conversation ID"})
+		return
+	}
+	targetID, err := strconv.ParseInt(c.Param("user_id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user ID"})
+		return
+	}
+
+	actor, err := h.convRepo.GetMember(convID, userID)
+	if err != nil || actor == nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "you are not a member of this conversation"})
+		return
+	}
+	if actor.Role != "owner" && actor.Role != "admin" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "only the owner or admins can unmute members"})
+		return
+	}
+
+	target, err := h.convRepo.GetMember(convID, targetID)
+	if err != nil || target == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "member not found"})
+		return
+	}
+	if target.Role == "owner" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "cannot unmute the group owner"})
+		return
+	}
+	if actor.Role == "admin" && target.Role == "admin" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "admins cannot unmute other admins"})
+		return
+	}
+
+	if err := h.convRepo.SetMemberMute(convID, targetID, nil); err != nil {
+		logger.Log.Error("failed to unmute member", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to unmute member"})
+		return
+	}
+
+	sys, err := h.msgRepo.CreateSystem(convID, targetID, "system.unmute")
+	if err != nil {
+		logger.Log.Warn("failed to create unmute system message", "error", err, "conversation_id", convID)
+	}
+	h.publishConversationEvent(c.Request.Context(), convID)
+	if sys != nil {
+		h.publishMessageEvent(c.Request.Context(), events.ChatMessageCreated, convID, sys)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "member unmuted"})
+}
+
+// MuteAll mutes every non-staff member for a duration (owner/admin only).
+func (h *ConversationHandler) MuteAll(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	convID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid conversation ID"})
+		return
+	}
+
+	var req struct {
+		DurationMinutes int64 `json:"duration_minutes"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+	if req.DurationMinutes <= 0 || req.DurationMinutes > maxMuteMinutes {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid mute duration"})
+		return
+	}
+
+	actor, err := h.convRepo.GetMember(convID, userID)
+	if err != nil || actor == nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "you are not a member of this conversation"})
+		return
+	}
+	if actor.Role != "owner" && actor.Role != "admin" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "only the owner or admins can mute the group"})
+		return
+	}
+
+	until := time.Now().Add(time.Duration(req.DurationMinutes) * time.Minute)
+	if err := h.convRepo.SetGroupMuteAll(convID, &until); err != nil {
+		logger.Log.Error("failed to mute group", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to mute group"})
+		return
+	}
+
+	sys, err := h.msgRepo.CreateSystem(convID, userID, "system.mute.all")
+	if err != nil {
+		logger.Log.Warn("failed to create mute-all system message", "error", err, "conversation_id", convID)
+	}
+	h.publishConversationEvent(c.Request.Context(), convID)
+	if sys != nil {
+		h.publishMessageEvent(c.Request.Context(), events.ChatMessageCreated, convID, sys)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "group muted", "mute_all_until": until})
+}
+
+// UnmuteAll clears the group-wide mute (owner/admin only).
+func (h *ConversationHandler) UnmuteAll(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	convID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid conversation ID"})
+		return
+	}
+
+	actor, err := h.convRepo.GetMember(convID, userID)
+	if err != nil || actor == nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "you are not a member of this conversation"})
+		return
+	}
+	if actor.Role != "owner" && actor.Role != "admin" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "only the owner or admins can unmute the group"})
+		return
+	}
+
+	if err := h.convRepo.SetGroupMuteAll(convID, nil); err != nil {
+		logger.Log.Error("failed to unmute group", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to unmute group"})
+		return
+	}
+
+	sys, err := h.msgRepo.CreateSystem(convID, userID, "system.unmute.all")
+	if err != nil {
+		logger.Log.Warn("failed to create unmute-all system message", "error", err, "conversation_id", convID)
+	}
+	h.publishConversationEvent(c.Request.Context(), convID)
+	if sys != nil {
+		h.publishMessageEvent(c.Request.Context(), events.ChatMessageCreated, convID, sys)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "group unmuted"})
+}
+
+// publishConversationEvent notifies the group's active members that the
+// conversation changed (membership, roles, settings, mutes).
+func (h *ConversationHandler) publishConversationEvent(ctx context.Context, convID int64) {
+	members, err := h.convRepo.ListMembers(convID)
+	if err != nil {
+		logger.Log.Warn("failed to list members for conversation event", "error", err, "conversation_id", convID)
+		return
+	}
+	recipients := make([]int64, 0, len(members))
+	for _, m := range members {
+		if m.Status == "active" {
+			recipients = append(recipients, m.UserID)
+		}
+	}
+	events.Publish(ctx, events.ConversationUpdated, recipients, gin.H{"conversation_id": convID})
+}
+
+// publishMessageEvent notifies all active members about a message change.
+func (h *ConversationHandler) publishMessageEvent(ctx context.Context, typ string, convID int64, msg interface{}) {
+	members, err := h.convRepo.ListMembers(convID)
+	if err != nil {
+		logger.Log.Warn("failed to list members for push", "error", err, "conversation_id", convID)
+		return
+	}
+	recipients := make([]int64, 0, len(members))
+	for _, m := range members {
+		if m.Status == "active" {
+			recipients = append(recipients, m.UserID)
+		}
+	}
+	events.Publish(ctx, typ, recipients, msg)
 }
 
 // Typing broadcasts a "typing" indicator to the other members of the

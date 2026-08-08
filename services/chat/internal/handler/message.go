@@ -49,8 +49,12 @@ func (h *MessageHandler) List(c *gin.Context) {
 		return
 	}
 	if !isMember {
-		c.JSON(http.StatusForbidden, gin.H{"error": "you are not a member of this conversation"})
-		return
+		// Non-members may read messages of public groups (public = viewable).
+		conv, convErr := h.convRepo.GetByID(convID)
+		if convErr != nil || conv == nil || conv.Type != "group" || !conv.IsPublic {
+			c.JSON(http.StatusForbidden, gin.H{"error": "you are not a member of this conversation"})
+			return
+		}
 	}
 
 	beforeID, _ := strconv.ParseInt(c.DefaultQuery("before", "0"), 10, 64)
@@ -110,6 +114,17 @@ func (h *MessageHandler) Send(c *gin.Context) {
 	}
 	if !isMember {
 		c.JSON(http.StatusForbidden, gin.H{"error": "you are not a member of this conversation"})
+		return
+	}
+
+	muted, err := h.convRepo.IsUserMuted(convID, userID)
+	if err != nil {
+		logger.Log.Error("failed to check mute status", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to send message"})
+		return
+	}
+	if muted {
+		c.JSON(http.StatusForbidden, gin.H{"error": "you are muted and cannot send messages in this conversation"})
 		return
 	}
 

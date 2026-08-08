@@ -98,6 +98,16 @@ type Conversation struct {
 	OwnerID   int64     `json:"owner_id"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+	// IsPublic makes the group searchable and viewable by non-members.
+	IsPublic bool `json:"is_public"`
+	// AllowJoin lets users join the group without an invitation when it is public.
+	AllowJoin bool `json:"allow_join"`
+	// MuteAllUntil, when set in the future, mutes every non-staff member.
+	MuteAllUntil *time.Time `json:"mute_all_until,omitempty"`
+	// MemberCount is populated on public group listings.
+	MemberCount int64 `json:"member_count,omitempty"`
+	// IsMember is whether the requesting user belongs to the group (public listings).
+	IsMember bool `json:"is_member,omitempty"`
 	// LastMessage is the latest message preview for lists.
 	LastMessage *Message `json:"last_message,omitempty"`
 	Unread      int64    `json:"unread,omitempty"`
@@ -113,10 +123,12 @@ type ConversationMember struct {
 	Status         string    `json:"status"` // pending | active | declined
 	AddedBy        int64     `json:"added_by"`
 	CreatedAt      time.Time `json:"created_at"`
-	Username       string    `json:"username,omitempty"`
-	Nickname       string    `json:"nickname,omitempty"`
-	AvatarURL      string    `json:"avatar_url,omitempty"`
-	IsVerified     bool      `json:"is_verified,omitempty"`
+	// MutedUntil, when set in the future, silences the member in this group.
+	MutedUntil *time.Time `json:"muted_until,omitempty"`
+	Username   string     `json:"username,omitempty"`
+	Nickname   string     `json:"nickname,omitempty"`
+	AvatarURL  string     `json:"avatar_url,omitempty"`
+	IsVerified bool       `json:"is_verified,omitempty"`
 }
 
 // ConsentRequest represents a pending consent request for a private chat or group invite.
@@ -141,6 +153,7 @@ type Message struct {
 	ID             int64      `json:"id"`
 	ConversationID int64      `json:"conversation_id"`
 	SenderID       int64      `json:"sender_id"`
+	Kind           string     `json:"kind"` // text | system.join | system.leave | system.mute | system.unmute | system.mute.all | system.unmute.all
 	Content        string     `json:"content"`
 	ReplyToID      *int64     `json:"reply_to_id,omitempty"`
 	EditedAt       *time.Time `json:"edited_at,omitempty"`

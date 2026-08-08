@@ -3,6 +3,7 @@ package repository
 import (
 	"database/sql"
 	"fmt"
+	"time"
 
 	"github.com/lib/pq"
 	"github.com/openfield/server/pkg/database"
@@ -27,9 +28,9 @@ func (r *ConversationRepository) CreatePrivate(userA, userB int64) (*model.Conve
 
 	conv := &model.Conversation{}
 	err = tx.QueryRow(
-		"INSERT INTO conversations (type, owner_id) VALUES ('private', $1) RETURNING id, type, title, avatar_url, owner_id, created_at, updated_at",
+		"INSERT INTO conversations (type, owner_id) VALUES ('private', $1) RETURNING id, type, title, avatar_url, owner_id, created_at, updated_at, is_public, allow_join, mute_all_until",
 		userA,
-	).Scan(&conv.ID, &conv.Type, &conv.Title, &conv.AvatarURL, &conv.OwnerID, &conv.CreatedAt, &conv.UpdatedAt)
+	).Scan(&conv.ID, &conv.Type, &conv.Title, &conv.AvatarURL, &conv.OwnerID, &conv.CreatedAt, &conv.UpdatedAt, &conv.IsPublic, &conv.AllowJoin, &conv.MuteAllUntil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create conversation: %w", err)
 	}
@@ -59,9 +60,9 @@ func (r *ConversationRepository) CreateGroup(ownerID int64, title string) (*mode
 
 	conv := &model.Conversation{}
 	err = tx.QueryRow(
-		"INSERT INTO conversations (type, title, owner_id) VALUES ('group', $1, $2) RETURNING id, type, title, avatar_url, owner_id, created_at, updated_at",
+		"INSERT INTO conversations (type, title, owner_id) VALUES ('group', $1, $2) RETURNING id, type, title, avatar_url, owner_id, created_at, updated_at, is_public, allow_join, mute_all_until",
 		title, ownerID,
-	).Scan(&conv.ID, &conv.Type, &conv.Title, &conv.AvatarURL, &conv.OwnerID, &conv.CreatedAt, &conv.UpdatedAt)
+	).Scan(&conv.ID, &conv.Type, &conv.Title, &conv.AvatarURL, &conv.OwnerID, &conv.CreatedAt, &conv.UpdatedAt, &conv.IsPublic, &conv.AllowJoin, &conv.MuteAllUntil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create group: %w", err)
 	}
@@ -83,9 +84,9 @@ func (r *ConversationRepository) CreateGroup(ownerID int64, title string) (*mode
 func (r *ConversationRepository) GetByID(id int64) (*model.Conversation, error) {
 	conv := &model.Conversation{}
 	err := database.DB.QueryRow(
-		"SELECT id, type, title, avatar_url, owner_id, created_at, updated_at FROM conversations WHERE id = $1",
+		"SELECT id, type, title, avatar_url, owner_id, created_at, updated_at, is_public, allow_join, mute_all_until FROM conversations WHERE id = $1",
 		id,
-	).Scan(&conv.ID, &conv.Type, &conv.Title, &conv.AvatarURL, &conv.OwnerID, &conv.CreatedAt, &conv.UpdatedAt)
+	).Scan(&conv.ID, &conv.Type, &conv.Title, &conv.AvatarURL, &conv.OwnerID, &conv.CreatedAt, &conv.UpdatedAt, &conv.IsPublic, &conv.AllowJoin, &conv.MuteAllUntil)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -113,12 +114,13 @@ func (r *ConversationRepository) GetMember(conversationID, userID int64) (*model
 	member := &model.ConversationMember{}
 	err := database.DB.QueryRow(
 		`SELECT cm.conversation_id, cm.user_id, cm.role, cm.note, cm.group_nickname, cm.status, cm.added_by, cm.created_at,
+		        cm.muted_until,
 		        u.username, u.nickname, u.avatar_url, u.is_verified
 		 FROM conversation_members cm
 		 JOIN users u ON cm.user_id = u.id
 		 WHERE cm.conversation_id = $1 AND cm.user_id = $2`,
 		conversationID, userID,
-	).Scan(&member.ConversationID, &member.UserID, &member.Role, &member.Note, &member.GroupNickname, &member.Status, &member.AddedBy, &member.CreatedAt, &member.Username, &member.Nickname, &member.AvatarURL, &member.IsVerified)
+	).Scan(&member.ConversationID, &member.UserID, &member.Role, &member.Note, &member.GroupNickname, &member.Status, &member.AddedBy, &member.CreatedAt, &member.MutedUntil, &member.Username, &member.Nickname, &member.AvatarURL, &member.IsVerified)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -132,6 +134,7 @@ func (r *ConversationRepository) GetMember(conversationID, userID int64) (*model
 func (r *ConversationRepository) ListMembers(conversationID int64) ([]model.ConversationMember, error) {
 	rows, err := database.DB.Query(
 		`SELECT cm.conversation_id, cm.user_id, cm.role, cm.note, cm.group_nickname, cm.status, cm.added_by, cm.created_at,
+		        cm.muted_until,
 		        u.username, u.nickname, u.avatar_url, u.is_verified
 		 FROM conversation_members cm
 		 JOIN users u ON cm.user_id = u.id
@@ -147,7 +150,7 @@ func (r *ConversationRepository) ListMembers(conversationID int64) ([]model.Conv
 	members := make([]model.ConversationMember, 0)
 	for rows.Next() {
 		var member model.ConversationMember
-		if err := rows.Scan(&member.ConversationID, &member.UserID, &member.Role, &member.Note, &member.GroupNickname, &member.Status, &member.AddedBy, &member.CreatedAt, &member.Username, &member.Nickname, &member.AvatarURL, &member.IsVerified); err != nil {
+		if err := rows.Scan(&member.ConversationID, &member.UserID, &member.Role, &member.Note, &member.GroupNickname, &member.Status, &member.AddedBy, &member.CreatedAt, &member.MutedUntil, &member.Username, &member.Nickname, &member.AvatarURL, &member.IsVerified); err != nil {
 			return nil, fmt.Errorf("failed to scan member: %w", err)
 		}
 		members = append(members, member)
@@ -162,6 +165,7 @@ func (r *ConversationRepository) ListMembers(conversationID int64) ([]model.Conv
 func (r *ConversationRepository) ListForUser(userID int64) ([]model.Conversation, error) {
 	rows, err := database.DB.Query(
 		`SELECT c.id, c.type, c.title, c.avatar_url, c.owner_id, c.created_at, c.updated_at,
+		        c.is_public, c.allow_join, c.mute_all_until,
 		        cm.note, cm.last_read_message_id
 		 FROM conversations c
 		 JOIN conversation_members cm ON cm.conversation_id = c.id
@@ -183,7 +187,7 @@ func (r *ConversationRepository) ListForUser(userID int64) ([]model.Conversation
 	var convIDs []int64
 	for rows.Next() {
 		var rw row
-		if err := rows.Scan(&rw.conv.ID, &rw.conv.Type, &rw.conv.Title, &rw.conv.AvatarURL, &rw.conv.OwnerID, &rw.conv.CreatedAt, &rw.conv.UpdatedAt, &rw.note, &rw.lastMsg); err != nil {
+		if err := rows.Scan(&rw.conv.ID, &rw.conv.Type, &rw.conv.Title, &rw.conv.AvatarURL, &rw.conv.OwnerID, &rw.conv.CreatedAt, &rw.conv.UpdatedAt, &rw.conv.IsPublic, &rw.conv.AllowJoin, &rw.conv.MuteAllUntil, &rw.note, &rw.lastMsg); err != nil {
 			return nil, fmt.Errorf("failed to scan conversation: %w", err)
 		}
 		rowsData = append(rowsData, rw)
@@ -237,7 +241,7 @@ func (r *ConversationRepository) lastMessages(convIDs []int64) (map[int64]model.
 		return result, nil
 	}
 	rows, err := database.DB.Query(
-		`SELECT m.conversation_id, m.id, m.sender_id, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at,
+		`SELECT m.conversation_id, m.id, m.sender_id, m.kind, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at,
 		        u.username, u.avatar_url, u.is_verified
 		 FROM messages m
 		 JOIN users u ON m.sender_id = u.id
@@ -252,7 +256,7 @@ func (r *ConversationRepository) lastMessages(convIDs []int64) (map[int64]model.
 
 	for rows.Next() {
 		var m model.Message
-		if err := rows.Scan(&m.ConversationID, &m.ID, &m.SenderID, &m.Content, &m.ReplyToID, &m.EditedAt, &m.DeletedAt, &m.CreatedAt, &m.SenderName, &m.SenderAvatar, &m.SenderVerified); err != nil {
+		if err := rows.Scan(&m.ConversationID, &m.ID, &m.SenderID, &m.Kind, &m.Content, &m.ReplyToID, &m.EditedAt, &m.DeletedAt, &m.CreatedAt, &m.SenderName, &m.SenderAvatar, &m.SenderVerified); err != nil {
 			return nil, fmt.Errorf("failed to scan message: %w", err)
 		}
 		if _, exists := result[m.ConversationID]; !exists {
@@ -305,6 +309,7 @@ func (r *ConversationRepository) privateDisplay(userID int64, convIDs []int64) (
 	}
 	rows, err := database.DB.Query(
 		`SELECT cm.conversation_id, cm.user_id, cm.role, cm.note, cm.group_nickname, cm.status, cm.added_by, cm.created_at,
+		        cm.muted_until,
 		        u.username, u.nickname, u.avatar_url, u.is_verified
 		 FROM conversation_members cm
 		 JOIN users u ON cm.user_id = u.id
@@ -318,7 +323,7 @@ func (r *ConversationRepository) privateDisplay(userID int64, convIDs []int64) (
 
 	for rows.Next() {
 		var member model.ConversationMember
-		if err := rows.Scan(&member.ConversationID, &member.UserID, &member.Role, &member.Note, &member.GroupNickname, &member.Status, &member.AddedBy, &member.CreatedAt, &member.Username, &member.Nickname, &member.AvatarURL, &member.IsVerified); err != nil {
+		if err := rows.Scan(&member.ConversationID, &member.UserID, &member.Role, &member.Note, &member.GroupNickname, &member.Status, &member.AddedBy, &member.CreatedAt, &member.MutedUntil, &member.Username, &member.Nickname, &member.AvatarURL, &member.IsVerified); err != nil {
 			return nil, fmt.Errorf("failed to scan member: %w", err)
 		}
 		// only keep members from private conversations (a group will return many rows)
@@ -428,4 +433,108 @@ func (r *ConversationRepository) GetPrivatePeer(conversationID, userID int64) (i
 		return 0, err
 	}
 	return peer, nil
+}
+
+// UpdateGroupSettings sets a group's visibility and self-join policy.
+func (r *ConversationRepository) UpdateGroupSettings(conversationID int64, isPublic, allowJoin bool) error {
+	_, err := database.DB.Exec(
+		"UPDATE conversations SET is_public = $2, allow_join = $3 WHERE id = $1",
+		conversationID, isPublic, allowJoin,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update group settings: %w", err)
+	}
+	return nil
+}
+
+// ListPublicGroups returns public groups matching a search query with the
+// requesting user's membership flag and an active member count.
+func (r *ConversationRepository) ListPublicGroups(userID int64, query string, limit int) ([]model.Conversation, error) {
+	if limit < 1 || limit > 100 {
+		limit = 50
+	}
+	pattern := "%" + query + "%"
+	rows, err := database.DB.Query(
+		`SELECT c.id, c.type, c.title, c.avatar_url, c.owner_id, c.created_at, c.updated_at,
+		        c.is_public, c.allow_join, c.mute_all_until,
+		        COUNT(cm.user_id) FILTER (WHERE cm.status = 'active') AS member_count,
+		        EXISTS (SELECT 1 FROM conversation_members me
+		                WHERE me.conversation_id = c.id AND me.user_id = $1 AND me.status = 'active') AS is_member
+		 FROM conversations c
+		 LEFT JOIN conversation_members cm ON cm.conversation_id = c.id
+		 WHERE c.type = 'group' AND c.is_public = TRUE AND c.title ILIKE $2
+		 GROUP BY c.id
+		 ORDER BY c.updated_at DESC
+		 LIMIT $3`,
+		userID, pattern, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list public groups: %w", err)
+	}
+	defer rows.Close()
+
+	groups := make([]model.Conversation, 0)
+	for rows.Next() {
+		var g model.Conversation
+		if err := rows.Scan(&g.ID, &g.Type, &g.Title, &g.AvatarURL, &g.OwnerID, &g.CreatedAt, &g.UpdatedAt, &g.IsPublic, &g.AllowJoin, &g.MuteAllUntil, &g.MemberCount, &g.IsMember); err != nil {
+			return nil, fmt.Errorf("failed to scan public group: %w", err)
+		}
+		groups = append(groups, g)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows error: %w", err)
+	}
+	return groups, nil
+}
+
+// SetMemberMute sets (or clears) a member's individual mute expiry.
+func (r *ConversationRepository) SetMemberMute(conversationID, userID int64, until *time.Time) error {
+	_, err := database.DB.Exec(
+		"UPDATE conversation_members SET muted_until = $3 WHERE conversation_id = $1 AND user_id = $2",
+		conversationID, userID, until,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to set member mute: %w", err)
+	}
+	return nil
+}
+
+// SetGroupMuteAll sets (or clears) the group-wide mute expiry.
+func (r *ConversationRepository) SetGroupMuteAll(conversationID int64, until *time.Time) error {
+	_, err := database.DB.Exec(
+		"UPDATE conversations SET mute_all_until = $2 WHERE id = $1",
+		conversationID, until,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to set group mute: %w", err)
+	}
+	return nil
+}
+
+// IsUserMuted reports whether a member is currently unable to send messages:
+// either by an individual mute or (for regular members only) a group-wide mute.
+func (r *ConversationRepository) IsUserMuted(conversationID, userID int64) (bool, error) {
+	var role string
+	var mutedUntil *time.Time
+	var muteAllUntil *time.Time
+	err := database.DB.QueryRow(
+		`SELECT cm.role, cm.muted_until, c.mute_all_until
+		 FROM conversation_members cm
+		 JOIN conversations c ON c.id = cm.conversation_id
+		 WHERE cm.conversation_id = $1 AND cm.user_id = $2 AND cm.status = 'active'`,
+		conversationID, userID,
+	).Scan(&role, &mutedUntil, &muteAllUntil)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("failed to check mute status: %w", err)
+	}
+	if mutedUntil != nil && mutedUntil.After(time.Now()) {
+		return true, nil
+	}
+	if role != "owner" && role != "admin" && muteAllUntil != nil && muteAllUntil.After(time.Now()) {
+		return true, nil
+	}
+	return false, nil
 }
