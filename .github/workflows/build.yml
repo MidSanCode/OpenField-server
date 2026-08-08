@@ -87,7 +87,7 @@ jobs:
         run: |
           cd dist
           if [ "${{ matrix.goos }}" == "windows" ]; then
-            powershell -Command "Compress-Archive -Path bin/* -DestinationPath openfield-server-${{ matrix.goos }}-${{ matrix.goarch }}.zip -Force"
+            zip -r openfield-server-${{ matrix.goos }}-${{ matrix.goarch }}.zip bin
           else
             tar -czf openfield-server-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz bin
           fi
@@ -119,21 +119,3 @@ jobs:
             echo "$unformatted"
             exit 1
           fi
-
-  release:
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: openfield-server-*
-          merge-multiple: true
-      - name: Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            openfield-server-*.zip
-            openfield-server-*.tar.gz
