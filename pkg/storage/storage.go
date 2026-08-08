@@ -21,10 +21,31 @@ type Store struct {
 	client        *minio.Client
 	bucket        string
 	publicBaseURL string
+	enabled       bool
 }
 
-// New creates a new storage client from config.
+// IsConfigured reports whether object storage has been configured. When no
+// endpoint or bucket is set, services start without object storage and all
+// upload endpoints return an error.
+func IsConfigured(cfg config.StorageConfig) bool {
+	return cfg.Endpoint != "" && cfg.Bucket != ""
+}
+
+// Enabled reports whether this store has a backing object store. When false,
+// all upload/delete operations must not be called.
+func (s *Store) Enabled() bool {
+	return s != nil && s.enabled
+}
+
+// New creates a new storage client from config. When object storage is not
+// configured it returns a disabled store (never an error), so services can
+// still start without storage.
 func New(cfg config.StorageConfig) (*Store, error) {
+	if !IsConfigured(cfg) {
+		logger.Log.Warn("storage not configured; running without object storage")
+		return &Store{enabled: false}, nil
+	}
+
 	client, err := minio.New(cfg.Endpoint, &minio.Options{
 		Creds:  credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
 		Secure: cfg.UseSSL,
@@ -38,6 +59,7 @@ func New(cfg config.StorageConfig) (*Store, error) {
 		client:        client,
 		bucket:        cfg.Bucket,
 		publicBaseURL: resolvePublicBaseURL(cfg),
+		enabled:       true,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

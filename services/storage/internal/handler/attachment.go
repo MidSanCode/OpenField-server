@@ -54,11 +54,25 @@ func (h *AttachmentHandler) checkQuota(c *gin.Context, userID int64, size int64)
 	return used+size <= user.StorageQuota, nil
 }
 
+// storageAvailable writes a 503 response when object storage is not configured
+// and reports whether uploads are allowed.
+func (h *AttachmentHandler) storageAvailable(c *gin.Context) bool {
+	if h.store == nil || !h.store.Enabled() {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "storage not configured"})
+		return false
+	}
+	return true
+}
+
 // Upload accepts a multipart file upload, stores it in RustFS, and returns attachment metadata.
 func (h *AttachmentHandler) Upload(c *gin.Context) {
 	userID, ok := middleware.GetUserID(c)
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	if !h.storageAvailable(c) {
 		return
 	}
 

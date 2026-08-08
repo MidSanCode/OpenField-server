@@ -44,6 +44,10 @@ func (h *AttachmentHandler) ChunkInit(c *gin.Context) {
 		return
 	}
 
+	if !h.storageAvailable(c) {
+		return
+	}
+
 	var req chunkInitRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
@@ -76,6 +80,10 @@ func (h *AttachmentHandler) ChunkInit(c *gin.Context) {
 func (h *AttachmentHandler) ChunkUpload(c *gin.Context) {
 	if _, ok := middleware.GetUserID(c); !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	if !h.storageAvailable(c) {
 		return
 	}
 
@@ -149,6 +157,10 @@ func (h *AttachmentHandler) ChunkComplete(c *gin.Context) {
 	userID, ok := middleware.GetUserID(c)
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	if !h.storageAvailable(c) {
 		return
 	}
 

@@ -207,6 +207,11 @@ func (h *UserHandler) uploadImage(c *gin.Context, kind string) {
 		return
 	}
 
+	if h.store == nil || !h.store.Enabled() {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "storage not configured"})
+		return
+	}
+
 	file, header, err := c.Request.FormFile("file")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "missing file field"})
