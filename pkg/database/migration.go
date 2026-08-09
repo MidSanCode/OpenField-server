@@ -334,11 +334,11 @@ var requiredColumns = map[string][]string{
 		"storage_quota", "bio", "is_verified", "oauth2_username",
 		"e2ee_public_key", "verified_note", "verified_by",
 	},
-	"attachments":           {"visibility", "thumb_url"},
-	"posts":                 {"view_count"},
-	"messages":              {"kind", "conversation_id", "reply_to_id", "edited_at", "deleted_at"},
-	"conversations":         {"is_public", "allow_join", "mute_all_until", "encrypted"},
-	"conversation_members":  {"last_read_message_id", "muted_until"},
+	"attachments":          {"visibility", "thumb_url"},
+	"posts":                {"view_count"},
+	"messages":             {"kind", "conversation_id", "reply_to_id", "edited_at", "deleted_at"},
+	"conversations":        {"is_public", "allow_join", "mute_all_until", "encrypted"},
+	"conversation_members": {"last_read_message_id", "muted_until"},
 }
 
 // SchemaNeedsMigration reports whether the connected database is missing any

@@ -1108,9 +1108,9 @@ func (h *ConversationHandler) GetE2EEKeys(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"version":      version,
-		"envelopes":    envelopes,
-		"my_envelope":  myEnvelope,
+		"version":         version,
+		"envelopes":       envelopes,
+		"my_envelope":     myEnvelope,
 		"conversation_id": convID,
 	})
 }
