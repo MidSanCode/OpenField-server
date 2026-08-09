@@ -34,6 +34,10 @@ func main() {
 	}
 	defer database.Close()
 
+	if err := database.RunMigrationsIfEnabled(cfg); err != nil {
+		log.Fatalf("failed to run database migrations: %v", err)
+	}
+
 	postHandler := handler.NewPostHandler()
 
 	r := gin.New()

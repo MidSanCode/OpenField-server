@@ -1,7 +1,9 @@
 package database
 
 import (
+	"context"
 	"fmt"
+	"time"
 
 	"github.com/lib/pq"
 	"github.com/openfield/server/pkg/config"
@@ -280,16 +282,105 @@ func RunMigrations() error {
 	return nil
 }
 
-// RunMigrationsIfEnabled runs schema migrations only when the service is
-// configured as the schema owner (database.migrate: true). Other services skip
-// migrations and simply reuse the schema created by the owner, so they start
-// faster and avoid redundant DDL on every boot.
+// RunMigrationsIfEnabled runs schema migrations when explicitly requested
+// (database.migrate: true) or when automatic upgrades are enabled
+// (database.auto_migrate, defaults to true) and the database is missing a
+// required table or column. Because migrations are idempotent, an automatic
+// upgrade simply applies the same DDL, so production databases are upgraded in
+// place without operator intervention.
 func RunMigrationsIfEnabled(cfg *config.Config) error {
-	if !cfg.Database.Migrate {
-		logger.Log.Info("database migrations skipped (migrate disabled for this service)")
+	if cfg.Database.Migrate {
+		return RunMigrations()
+	}
+	auto := true
+	if cfg.Database.AutoMigrate != nil {
+		auto = *cfg.Database.AutoMigrate
+	}
+	if !auto {
+		logger.Log.Info("database migrations skipped (auto_migrate disabled for this service)")
 		return nil
 	}
+	needs, err := SchemaNeedsMigration()
+	if err != nil {
+		return fmt.Errorf("failed to check database schema state: %w", err)
+	}
+	if !needs {
+		logger.Log.Info("database schema is up to date, migrations skipped")
+		return nil
+	}
+	logger.Log.Info("database schema is missing required tables/columns, running automatic upgrade")
 	return RunMigrations()
+}
+
+// requiredTables are the tables the API relies on. A missing table means the
+// database was never migrated (or was created by an old version), which
+// triggers an automatic upgrade.
+var requiredTables = []string{
+	"users", "attachments", "posts", "post_attachments", "post_replies",
+	"reply_attachments", "permissions", "groups", "group_permissions",
+	"user_groups", "conversations", "conversation_members",
+	"conversation_e2ee_keys", "consent_requests", "messages",
+	"message_attachments", "refresh_tokens", "post_views", "post_reactions",
+	"user_follows", "wallets", "wallet_transactions",
+}
+
+// requiredColumns map a table to the columns that queries depend on. A missing
+// column means the database is missing a parameter introduced by a newer
+// version (e.g. a new optional field), which also triggers an automatic
+// upgrade so the schema heals itself on boot.
+var requiredColumns = map[string][]string{
+	"users": {
+		"banner_url", "nickname", "role", "password_hash", "needs_registration",
+		"storage_quota", "bio", "is_verified", "oauth2_username",
+		"e2ee_public_key", "verified_note", "verified_by",
+	},
+	"attachments":           {"visibility", "thumb_url"},
+	"posts":                 {"view_count"},
+	"messages":              {"kind", "conversation_id", "reply_to_id", "edited_at", "deleted_at"},
+	"conversations":         {"is_public", "allow_join", "mute_all_until", "encrypted"},
+	"conversation_members":  {"last_read_message_id", "muted_until"},
+}
+
+// SchemaNeedsMigration reports whether the connected database is missing any
+// required table or column. It uses cheap information_schema lookups instead
+// of running the full idempotent DDL on every boot.
+func SchemaNeedsMigration() (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	for _, table := range requiredTables {
+		var exists bool
+		if err := DB.QueryRowContext(ctx,
+			`SELECT EXISTS (
+				SELECT 1 FROM information_schema.tables
+				WHERE table_schema = current_schema() AND table_name = $1
+			)`, table,
+		).Scan(&exists); err != nil {
+			return false, fmt.Errorf("failed to check table %s: %w", table, err)
+		}
+		if !exists {
+			return true, nil
+		}
+	}
+
+	for table, cols := range requiredColumns {
+		for _, col := range cols {
+			var exists bool
+			if err := DB.QueryRowContext(ctx,
+				`SELECT EXISTS (
+					SELECT 1 FROM information_schema.columns
+					WHERE table_schema = current_schema() AND table_name = $1 AND column_name = $2
+				)`, table, col,
+			).Scan(&exists); err != nil {
+				return false, fmt.Errorf("failed to check column %s.%s: %w", table, col, err)
+			}
+			if !exists {
+				return true, nil
+			}
+		}
+	}
+
+	return false, nil
 }
 
 func seedPermissions() error {

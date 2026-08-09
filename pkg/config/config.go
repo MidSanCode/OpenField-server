@@ -26,10 +26,17 @@ type DatabaseConfig struct {
 	SSLMode      string `yaml:"sslmode"`
 	MaxOpenConns int    `yaml:"max_open_conns"`
 	MaxIdleConns int    `yaml:"max_idle_conns"`
-	// Migrate controls whether the service runs schema migrations at startup.
-	// Only the account service (the schema owner) needs this enabled; the
-	// gateway and other read-only services can disable it to start faster.
+	// Migrate forces a full schema migration at startup. Historically only the
+	// account service (the schema owner) enabled this; other services relied on
+	// the owner to have already created the schema.
 	Migrate bool `yaml:"migrate"`
+	// AutoMigrate enables automatic schema upgrades: when a required table or
+	// column is missing (e.g. a fresh database or an upgrade that added a new
+	// parameter), the service upgrades the schema itself on boot. Defaults to
+	// true when unset, so every service in every environment (including
+	// production) heals its schema without operator intervention. Set to false
+	// to disable.
+	AutoMigrate *bool `yaml:"auto_migrate"`
 }
 
 // RedisConfig holds Redis configuration.
@@ -127,6 +134,10 @@ func (c *Config) overrideFromEnv() {
 	}
 	if v := os.Getenv("DATABASE_MIGRATE"); v != "" {
 		c.Database.Migrate = v == "true" || v == "1"
+	}
+	if v := os.Getenv("DATABASE_AUTO_MIGRATE"); v != "" {
+		enabled := v == "true" || v == "1"
+		c.Database.AutoMigrate = &enabled
 	}
 	if v := os.Getenv("OIDC_ISSUER_URL"); v != "" {
 		c.OIDC.IssuerURL = v

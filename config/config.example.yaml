@@ -28,9 +28,14 @@ database:
   sslmode: "disable"
   max_open_conns: 25
   max_idle_conns: 5
-  # Only the account service (the schema owner) runs migrations at startup.
-  # Leave false for the gateway and other services so they boot faster.
+  # Force a full schema migration at startup. Historically only the account
+  # service (the schema owner) needed this enabled.
   migrate: true
+  # Automatic schema upgrade: when the database is missing a required table or
+  # column (fresh database, or a newer version that added parameters), every
+  # service upgrades the schema itself on boot. Defaults to true when unset.
+  # Set to false to disable.
+  auto_migrate: true
 
 redis:
   addr: "localhost:6379"

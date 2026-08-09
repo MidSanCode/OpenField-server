@@ -111,9 +111,13 @@ func main() {
 	}
 	defer database.Close()
 
-	// The gateway does not own the schema; the account service runs migrations
-	// at startup. The gateway only needs the DB for permission checks, so it
-	// skips migration DDL and boots as fast as possible.
+	// The gateway does not own the schema, but it still auto-upgrades when the
+	// database is missing required tables/columns (fresh DB, or a new version
+	// that added parameters). All DDL is idempotent, so this heals production
+	// databases without operator intervention.
+	if err := database.RunMigrationsIfEnabled(cfg); err != nil {
+		log.Fatalf("failed to run database migrations: %v", err)
+	}
 
 	permFactory := middleware.NewPermissionMiddlewareFactory()
 
