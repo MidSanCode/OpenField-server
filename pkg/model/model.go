@@ -126,6 +126,10 @@ type ConversationMember struct {
 	Role           string    `json:"role"` // owner | admin | member
 	Note           string    `json:"note"` // remark set by the member for the other side (private)
 	GroupNickname  string    `json:"group_nickname"`
+	// Title is a label set by group admins/owner that renders next to the
+	// member's nickname in chat (e.g. "VIP", "管理员"). Distinct from
+	// [GroupNickname], which is a self-set nickname for the conversation.
+	Title          string    `json:"title"`
 	Status         string    `json:"status"` // pending | active | declined
 	AddedBy        int64     `json:"added_by"`
 	CreatedAt      time.Time `json:"created_at"`

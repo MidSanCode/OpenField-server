@@ -41,6 +41,7 @@ func RegisterRoutes(r *gin.Engine, convHandler *ConversationHandler, consentHand
 			convs.DELETE("/:id", convHandler.Delete)
 			convs.DELETE("/:id/members/:user_id", convHandler.RemoveMember)
 			convs.PUT("/:id/members/:user_id/role", convHandler.SetMemberRole)
+			convs.PUT("/:id/members/:user_id/title", convHandler.SetMemberTitle)
 			convs.POST("/:id/members/:user_id/mute", convHandler.MuteMember)
 			convs.DELETE("/:id/members/:user_id/mute", convHandler.UnmuteMember)
 		}

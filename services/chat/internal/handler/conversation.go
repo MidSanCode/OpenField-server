@@ -825,6 +825,66 @@ func (h *ConversationHandler) SetMemberRole(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "role updated"})
 }
 
+// SetMemberTitle sets the custom title shown next to a member's nickname in
+// the chat (owner/admin only). Titles are an owner-controlled label and must
+// not be confused with the self-set group_nickname.
+func (h *ConversationHandler) SetMemberTitle(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	convID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid conversation ID"})
+		return
+	}
+	targetID, err := strconv.ParseInt(c.Param("user_id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user ID"})
+		return
+	}
+
+	var req struct {
+		Title string `json:"title"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+	// Cap to a reasonable size so a malicious admin cannot flood the UI.
+	if len([]rune(req.Title)) > 24 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "title too long (max 24 chars)"})
+		return
+	}
+
+	actor, err := h.convRepo.GetMember(convID, userID)
+	if err != nil || actor == nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "you are not a member of this conversation"})
+		return
+	}
+	if actor.Role != "owner" && actor.Role != "admin" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "only group owner or admin can set titles"})
+		return
+	}
+
+	target, err := h.convRepo.GetMember(convID, targetID)
+	if err != nil || target == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "member not found"})
+		return
+	}
+
+	if err := h.convRepo.UpdateMemberTitle(convID, targetID, req.Title); err != nil {
+		logger.Log.Error("failed to set member title", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to set member title"})
+		return
+	}
+
+	h.publishConversationEvent(c.Request.Context(), convID)
+	c.JSON(http.StatusOK, gin.H{"message": "title updated"})
+}
+
 // maxMuteMinutes is the longest mute allowed (10 years).
 const maxMuteMinutes = 5256000
 
