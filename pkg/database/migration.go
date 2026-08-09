@@ -37,6 +37,7 @@ func RunMigrations() error {
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS bio TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS is_verified BOOLEAN NOT NULL DEFAULT FALSE`,
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS oauth2_username VARCHAR(255) NOT NULL DEFAULT ''`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS e2ee_public_key TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS verified_note TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS verified_by VARCHAR(255) NOT NULL DEFAULT ''`,
 		`ALTER TABLE users ALTER COLUMN email TYPE VARCHAR(255)`,
@@ -140,7 +141,17 @@ func RunMigrations() error {
 		`ALTER TABLE conversations ADD COLUMN IF NOT EXISTS allow_join BOOLEAN NOT NULL DEFAULT FALSE`,
 		`ALTER TABLE conversations ADD COLUMN IF NOT EXISTS mute_all_until TIMESTAMPTZ`,
 		`ALTER TABLE conversation_members ADD COLUMN IF NOT EXISTS muted_until TIMESTAMPTZ`,
+		`ALTER TABLE conversations ADD COLUMN IF NOT EXISTS encrypted BOOLEAN NOT NULL DEFAULT FALSE`,
 		`CREATE INDEX IF NOT EXISTS idx_conversations_public ON conversations(is_public)`,
+		`CREATE TABLE IF NOT EXISTS conversation_e2ee_keys (
+			id BIGSERIAL PRIMARY KEY,
+			conversation_id BIGINT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+			version BIGINT NOT NULL,
+			target_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			ciphertext TEXT NOT NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_e2ee_keys_conv_target ON conversation_e2ee_keys(conversation_id, target_user_id, version)`,
 		`CREATE TABLE IF NOT EXISTS consent_requests (
 			id BIGSERIAL PRIMARY KEY,
 			type VARCHAR(20) NOT NULL,

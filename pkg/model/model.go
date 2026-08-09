@@ -31,6 +31,9 @@ type User struct {
 	IsFollowing bool `json:"is_following,omitempty"`
 	// Permissions are populated on /users/me when requested.
 	Permissions []string `json:"permissions,omitempty"`
+	// E2EEPublicKey is the X25519 public key this user publishes for
+	// end-to-end-encrypted conversations (empty when not set).
+	E2EEPublicKey string `json:"e2ee_public_key,omitempty"`
 }
 
 // Post represents a text post with optional attachments.
@@ -104,6 +107,9 @@ type Conversation struct {
 	AllowJoin bool `json:"allow_join"`
 	// MuteAllUntil, when set in the future, mutes every non-staff member.
 	MuteAllUntil *time.Time `json:"mute_all_until,omitempty"`
+	// Encrypted marks the conversation as end-to-end-encrypted: messages are
+	// stored as ciphertext and only clients holding the group key can decrypt.
+	Encrypted bool `json:"encrypted"`
 	// MemberCount is populated on public group listings.
 	MemberCount int64 `json:"member_count,omitempty"`
 	// IsMember is whether the requesting user belongs to the group (public listings).
@@ -129,6 +135,9 @@ type ConversationMember struct {
 	Nickname   string     `json:"nickname,omitempty"`
 	AvatarURL  string     `json:"avatar_url,omitempty"`
 	IsVerified bool       `json:"is_verified,omitempty"`
+	// E2EEPublicKey is the member's published X25519 public key for encrypted
+	// group-key envelopes (empty when the member has no key published).
+	E2EEPublicKey string `json:"e2ee_public_key,omitempty"`
 }
 
 // ConsentRequest represents a pending consent request for a private chat or group invite.
@@ -167,6 +176,16 @@ type Message struct {
 	ReplyToName    string       `json:"reply_to_name,omitempty"`
 	ReplyToContent string       `json:"reply_to_content,omitempty"`
 	Attachments    []Attachment `json:"attachments,omitempty"`
+}
+
+// E2EEKeyEnvelope is a group key encrypted to a single member's public key.
+type E2EEKeyEnvelope struct {
+	ID             int64     `json:"id"`
+	ConversationID int64     `json:"conversation_id"`
+	Version        int64     `json:"version"`
+	TargetUserID   int64     `json:"target_user_id"`
+	Ciphertext     string    `json:"ciphertext"` // base64(AES-256-GCM(plaintext_group_key))
+	CreatedAt      time.Time `json:"created_at"`
 }
 
 // Group represents a user group used for permission management.

@@ -28,9 +28,9 @@ func (r *ConversationRepository) CreatePrivate(userA, userB int64) (*model.Conve
 
 	conv := &model.Conversation{}
 	err = tx.QueryRow(
-		"INSERT INTO conversations (type, owner_id) VALUES ('private', $1) RETURNING id, type, title, avatar_url, owner_id, created_at, updated_at, is_public, allow_join, mute_all_until",
+		"INSERT INTO conversations (type, owner_id) VALUES ('private', $1) RETURNING id, type, title, avatar_url, owner_id, created_at, updated_at, is_public, allow_join, mute_all_until, encrypted",
 		userA,
-	).Scan(&conv.ID, &conv.Type, &conv.Title, &conv.AvatarURL, &conv.OwnerID, &conv.CreatedAt, &conv.UpdatedAt, &conv.IsPublic, &conv.AllowJoin, &conv.MuteAllUntil)
+	).Scan(&conv.ID, &conv.Type, &conv.Title, &conv.AvatarURL, &conv.OwnerID, &conv.CreatedAt, &conv.UpdatedAt, &conv.IsPublic, &conv.AllowJoin, &conv.MuteAllUntil, &conv.Encrypted)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create conversation: %w", err)
 	}
@@ -60,9 +60,9 @@ func (r *ConversationRepository) CreateGroup(ownerID int64, title string) (*mode
 
 	conv := &model.Conversation{}
 	err = tx.QueryRow(
-		"INSERT INTO conversations (type, title, owner_id) VALUES ('group', $1, $2) RETURNING id, type, title, avatar_url, owner_id, created_at, updated_at, is_public, allow_join, mute_all_until",
+		"INSERT INTO conversations (type, title, owner_id) VALUES ('group', $1, $2) RETURNING id, type, title, avatar_url, owner_id, created_at, updated_at, is_public, allow_join, mute_all_until, encrypted",
 		title, ownerID,
-	).Scan(&conv.ID, &conv.Type, &conv.Title, &conv.AvatarURL, &conv.OwnerID, &conv.CreatedAt, &conv.UpdatedAt, &conv.IsPublic, &conv.AllowJoin, &conv.MuteAllUntil)
+	).Scan(&conv.ID, &conv.Type, &conv.Title, &conv.AvatarURL, &conv.OwnerID, &conv.CreatedAt, &conv.UpdatedAt, &conv.IsPublic, &conv.AllowJoin, &conv.MuteAllUntil, &conv.Encrypted)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create group: %w", err)
 	}
@@ -84,9 +84,9 @@ func (r *ConversationRepository) CreateGroup(ownerID int64, title string) (*mode
 func (r *ConversationRepository) GetByID(id int64) (*model.Conversation, error) {
 	conv := &model.Conversation{}
 	err := database.DB.QueryRow(
-		"SELECT id, type, title, avatar_url, owner_id, created_at, updated_at, is_public, allow_join, mute_all_until FROM conversations WHERE id = $1",
+		"SELECT id, type, title, avatar_url, owner_id, created_at, updated_at, is_public, allow_join, mute_all_until, encrypted FROM conversations WHERE id = $1",
 		id,
-	).Scan(&conv.ID, &conv.Type, &conv.Title, &conv.AvatarURL, &conv.OwnerID, &conv.CreatedAt, &conv.UpdatedAt, &conv.IsPublic, &conv.AllowJoin, &conv.MuteAllUntil)
+	).Scan(&conv.ID, &conv.Type, &conv.Title, &conv.AvatarURL, &conv.OwnerID, &conv.CreatedAt, &conv.UpdatedAt, &conv.IsPublic, &conv.AllowJoin, &conv.MuteAllUntil, &conv.Encrypted)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -115,12 +115,12 @@ func (r *ConversationRepository) GetMember(conversationID, userID int64) (*model
 	err := database.DB.QueryRow(
 		`SELECT cm.conversation_id, cm.user_id, cm.role, cm.note, cm.group_nickname, cm.status, cm.added_by, cm.created_at,
 		        cm.muted_until,
-		        u.username, u.nickname, u.avatar_url, u.is_verified
+		        u.username, u.nickname, u.avatar_url, u.is_verified, u.e2ee_public_key
 		 FROM conversation_members cm
 		 JOIN users u ON cm.user_id = u.id
 		 WHERE cm.conversation_id = $1 AND cm.user_id = $2`,
 		conversationID, userID,
-	).Scan(&member.ConversationID, &member.UserID, &member.Role, &member.Note, &member.GroupNickname, &member.Status, &member.AddedBy, &member.CreatedAt, &member.MutedUntil, &member.Username, &member.Nickname, &member.AvatarURL, &member.IsVerified)
+	).Scan(&member.ConversationID, &member.UserID, &member.Role, &member.Note, &member.GroupNickname, &member.Status, &member.AddedBy, &member.CreatedAt, &member.MutedUntil, &member.Username, &member.Nickname, &member.AvatarURL, &member.IsVerified, &member.E2EEPublicKey)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -150,7 +150,7 @@ func (r *ConversationRepository) ListMembers(conversationID int64) ([]model.Conv
 	members := make([]model.ConversationMember, 0)
 	for rows.Next() {
 		var member model.ConversationMember
-		if err := rows.Scan(&member.ConversationID, &member.UserID, &member.Role, &member.Note, &member.GroupNickname, &member.Status, &member.AddedBy, &member.CreatedAt, &member.MutedUntil, &member.Username, &member.Nickname, &member.AvatarURL, &member.IsVerified); err != nil {
+		if err := rows.Scan(&member.ConversationID, &member.UserID, &member.Role, &member.Note, &member.GroupNickname, &member.Status, &member.AddedBy, &member.CreatedAt, &member.MutedUntil, &member.Username, &member.Nickname, &member.AvatarURL, &member.IsVerified, &member.E2EEPublicKey); err != nil {
 			return nil, fmt.Errorf("failed to scan member: %w", err)
 		}
 		members = append(members, member)
@@ -165,7 +165,7 @@ func (r *ConversationRepository) ListMembers(conversationID int64) ([]model.Conv
 func (r *ConversationRepository) ListForUser(userID int64) ([]model.Conversation, error) {
 	rows, err := database.DB.Query(
 		`SELECT c.id, c.type, c.title, c.avatar_url, c.owner_id, c.created_at, c.updated_at,
-		        c.is_public, c.allow_join, c.mute_all_until,
+		        c.is_public, c.allow_join, c.mute_all_until, c.encrypted,
 		        cm.note, cm.last_read_message_id
 		 FROM conversations c
 		 JOIN conversation_members cm ON cm.conversation_id = c.id
@@ -187,7 +187,7 @@ func (r *ConversationRepository) ListForUser(userID int64) ([]model.Conversation
 	var convIDs []int64
 	for rows.Next() {
 		var rw row
-		if err := rows.Scan(&rw.conv.ID, &rw.conv.Type, &rw.conv.Title, &rw.conv.AvatarURL, &rw.conv.OwnerID, &rw.conv.CreatedAt, &rw.conv.UpdatedAt, &rw.conv.IsPublic, &rw.conv.AllowJoin, &rw.conv.MuteAllUntil, &rw.note, &rw.lastMsg); err != nil {
+		if err := rows.Scan(&rw.conv.ID, &rw.conv.Type, &rw.conv.Title, &rw.conv.AvatarURL, &rw.conv.OwnerID, &rw.conv.CreatedAt, &rw.conv.UpdatedAt, &rw.conv.IsPublic, &rw.conv.AllowJoin, &rw.conv.MuteAllUntil, &rw.conv.Encrypted, &rw.note, &rw.lastMsg); err != nil {
 			return nil, fmt.Errorf("failed to scan conversation: %w", err)
 		}
 		rowsData = append(rowsData, rw)
@@ -435,11 +435,12 @@ func (r *ConversationRepository) GetPrivatePeer(conversationID, userID int64) (i
 	return peer, nil
 }
 
-// UpdateGroupSettings sets a group's visibility and self-join policy.
-func (r *ConversationRepository) UpdateGroupSettings(conversationID int64, isPublic, allowJoin bool) error {
+// UpdateGroupSettings sets a group's visibility, self-join policy and whether
+// the conversation is end-to-end-encrypted.
+func (r *ConversationRepository) UpdateGroupSettings(conversationID int64, isPublic, allowJoin, encrypted bool) error {
 	_, err := database.DB.Exec(
-		"UPDATE conversations SET is_public = $2, allow_join = $3 WHERE id = $1",
-		conversationID, isPublic, allowJoin,
+		"UPDATE conversations SET is_public = $2, allow_join = $3, encrypted = $4 WHERE id = $1",
+		conversationID, isPublic, allowJoin, encrypted,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to update group settings: %w", err)
@@ -456,7 +457,7 @@ func (r *ConversationRepository) ListPublicGroups(userID int64, query string, li
 	pattern := "%" + query + "%"
 	rows, err := database.DB.Query(
 		`SELECT c.id, c.type, c.title, c.avatar_url, c.owner_id, c.created_at, c.updated_at,
-		        c.is_public, c.allow_join, c.mute_all_until,
+		        c.is_public, c.allow_join, c.mute_all_until, c.encrypted,
 		        COUNT(cm.user_id) FILTER (WHERE cm.status = 'active') AS member_count,
 		        EXISTS (SELECT 1 FROM conversation_members me
 		                WHERE me.conversation_id = c.id AND me.user_id = $1 AND me.status = 'active') AS is_member
@@ -476,7 +477,7 @@ func (r *ConversationRepository) ListPublicGroups(userID int64, query string, li
 	groups := make([]model.Conversation, 0)
 	for rows.Next() {
 		var g model.Conversation
-		if err := rows.Scan(&g.ID, &g.Type, &g.Title, &g.AvatarURL, &g.OwnerID, &g.CreatedAt, &g.UpdatedAt, &g.IsPublic, &g.AllowJoin, &g.MuteAllUntil, &g.MemberCount, &g.IsMember); err != nil {
+		if err := rows.Scan(&g.ID, &g.Type, &g.Title, &g.AvatarURL, &g.OwnerID, &g.CreatedAt, &g.UpdatedAt, &g.IsPublic, &g.AllowJoin, &g.MuteAllUntil, &g.Encrypted, &g.MemberCount, &g.IsMember); err != nil {
 			return nil, fmt.Errorf("failed to scan public group: %w", err)
 		}
 		groups = append(groups, g)
@@ -537,4 +538,136 @@ func (r *ConversationRepository) IsUserMuted(conversationID, userID int64) (bool
 		return true, nil
 	}
 	return false, nil
+}
+
+// CurrentE2EEVersion returns the highest key version stored for a conversation
+// (0 when no envelope exists yet).
+func (r *ConversationRepository) CurrentE2EEVersion(conversationID int64) (int64, error) {
+	var version int64
+	err := database.DB.QueryRow(
+		"SELECT COALESCE(MAX(version), 0) FROM conversation_e2ee_keys WHERE conversation_id = $1",
+		conversationID,
+	).Scan(&version)
+	if err != nil {
+		return 0, fmt.Errorf("failed to read e2ee version: %w", err)
+	}
+	return version, nil
+}
+
+// PutE2EEKeys stores a batch of encrypted group-key envelopes for a
+// conversation. Envelopes arrive as a list of (target_user_id, ciphertext);
+// when a previous version exists the new envelopes are written under the next
+// version number, otherwise version 1.
+func (r *ConversationRepository) PutE2EEKeys(conversationID int64, envelopes map[int64]string) (int64, error) {
+	if len(envelopes) == 0 {
+		return 0, nil
+	}
+	tx, err := database.DB.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	var version int64
+	if err := tx.QueryRow(
+		"SELECT COALESCE(MAX(version), 0) FROM conversation_e2ee_keys WHERE conversation_id = $1 FOR UPDATE",
+		conversationID,
+	).Scan(&version); err != nil {
+		return 0, fmt.Errorf("failed to read e2ee version: %w", err)
+	}
+	version++
+
+	for targetUserID, ciphertext := range envelopes {
+		if _, err := tx.Exec(
+			"INSERT INTO conversation_e2ee_keys (conversation_id, version, target_user_id, ciphertext) VALUES ($1, $2, $3, $4)",
+			conversationID, version, targetUserID, ciphertext,
+		); err != nil {
+			return 0, fmt.Errorf("failed to store e2ee key: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("failed to commit e2ee keys: %w", err)
+	}
+	return version, nil
+}
+
+// ListE2EEKeyEnvelopes returns the latest group-key envelope for each member of
+// the conversation, joined with their published public keys. Members without a
+// stored envelope still appear with an empty ciphertext.
+func (r *ConversationRepository) ListE2EEKeyEnvelopes(conversationID int64) ([]model.E2EEKeyEnvelope, error) {
+	rows, err := database.DB.Query(
+		`SELECT e.conversation_id, e.version, e.target_user_id, e.ciphertext, e.created_at
+		 FROM conversation_e2ee_keys e
+		 JOIN (
+		   SELECT target_user_id, MAX(version) AS version
+		   FROM conversation_e2ee_keys
+		   WHERE conversation_id = $1
+		   GROUP BY target_user_id
+		 ) latest ON latest.target_user_id = e.target_user_id AND latest.version = e.version`,
+		conversationID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list e2ee envelopes: %w", err)
+	}
+	defer rows.Close()
+
+	envelopes := make([]model.E2EEKeyEnvelope, 0)
+	for rows.Next() {
+		var e model.E2EEKeyEnvelope
+		if err := rows.Scan(&e.ConversationID, &e.Version, &e.TargetUserID, &e.Ciphertext, &e.CreatedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan e2ee envelope: %w", err)
+		}
+		envelopes = append(envelopes, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows error: %w", err)
+	}
+	return envelopes, nil
+}
+
+// GetE2EEEnvelopeFor returns the current user's envelope for a conversation.
+func (r *ConversationRepository) GetE2EEEnvelopeFor(conversationID, userID int64) (*model.E2EEKeyEnvelope, error) {
+	var e model.E2EEKeyEnvelope
+	err := database.DB.QueryRow(
+		"SELECT id, conversation_id, version, target_user_id, ciphertext, created_at FROM conversation_e2ee_keys WHERE conversation_id = $1 AND target_user_id = $2 ORDER BY version DESC LIMIT 1",
+		conversationID, userID,
+	).Scan(&e.ID, &e.ConversationID, &e.Version, &e.TargetUserID, &e.Ciphertext, &e.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to read e2ee envelope: %w", err)
+	}
+	return &e, nil
+}
+
+// ListMemberE2EEPublicKeys returns the published E2EE public key for every
+// active member of a conversation.
+func (r *ConversationRepository) ListMemberE2EEPublicKeys(conversationID int64) (map[int64]string, error) {
+	rows, err := database.DB.Query(
+		`SELECT cm.user_id, u.e2ee_public_key
+		 FROM conversation_members cm
+		 JOIN users u ON u.id = cm.user_id
+		 WHERE cm.conversation_id = $1 AND cm.status = 'active'`,
+		conversationID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list member e2ee keys: %w", err)
+	}
+	defer rows.Close()
+
+	keys := make(map[int64]string)
+	for rows.Next() {
+		var userID int64
+		var pub string
+		if err := rows.Scan(&userID, &pub); err != nil {
+			return nil, fmt.Errorf("failed to scan e2ee public key: %w", err)
+		}
+		keys[userID] = pub
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows error: %w", err)
+	}
+	return keys, nil
 }

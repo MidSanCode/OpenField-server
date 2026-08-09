@@ -56,4 +56,8 @@ const (
 	ConversationUpdated = "chat.conversation.updated"
 	ConsentRequested    = "chat.consent.requested"
 	ChatTyping          = "chat.typing"
+
+	// ChatE2EEKeysUpdated fires when new group-key envelopes are stored for a
+	// conversation (after enabling encryption or adding members).
+	ChatE2EEKeysUpdated = "chat.e2ee.keys.updated"
 )

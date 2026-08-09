@@ -190,6 +190,32 @@ func (h *UserHandler) UpdateProfile(c *gin.Context) {
 	c.JSON(http.StatusOK, user)
 }
 
+// SetE2EEKey publishes (or removes) the current user's X25519 public key used
+// for end-to-end-encrypted group-key envelopes.
+func (h *UserHandler) SetE2EEKey(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	var req struct {
+		PublicKey string `json:"public_key"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	if err := h.userRepo.SetE2EEPublicKey(userID, req.PublicKey); err != nil {
+		logger.Log.Error("failed to set e2ee public key", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to set e2ee public key"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "e2ee public key updated"})
+}
+
 // UploadAvatar uploads a new avatar image and updates the user profile.
 func (h *UserHandler) UploadAvatar(c *gin.Context) {
 	h.uploadImage(c, "avatar")

@@ -616,6 +616,7 @@ func (h *ConversationHandler) UpdateSettings(c *gin.Context) {
 	var req struct {
 		IsPublic  bool `json:"is_public"`
 		AllowJoin bool `json:"allow_join"`
+		Encrypted bool `json:"encrypted"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
@@ -639,7 +640,7 @@ func (h *ConversationHandler) UpdateSettings(c *gin.Context) {
 		return
 	}
 
-	if err := h.convRepo.UpdateGroupSettings(convID, req.IsPublic, req.AllowJoin); err != nil {
+	if err := h.convRepo.UpdateGroupSettings(convID, req.IsPublic, req.AllowJoin, req.Encrypted); err != nil {
 		logger.Log.Error("failed to update group settings", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update group settings"})
 		return
@@ -943,6 +944,115 @@ func (h *ConversationHandler) UnmuteAll(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "group unmuted"})
+}
+
+// GetE2EEKeys returns the current group-key envelopes for every member of an
+// encrypted conversation, including the requesting member's own envelope.
+func (h *ConversationHandler) GetE2EEKeys(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	convID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid conversation ID"})
+		return
+	}
+
+	isMember, err := h.convRepo.IsMember(convID, userID)
+	if err != nil {
+		logger.Log.Error("failed to check membership", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get e2ee keys"})
+		return
+	}
+	if !isMember {
+		c.JSON(http.StatusForbidden, gin.H{"error": "you are not a member of this conversation"})
+		return
+	}
+
+	envelopes, err := h.convRepo.ListE2EEKeyEnvelopes(convID)
+	if err != nil {
+		logger.Log.Error("failed to list e2ee envelopes", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get e2ee keys"})
+		return
+	}
+
+	myEnvelope, err := h.convRepo.GetE2EEEnvelopeFor(convID, userID)
+	if err != nil {
+		logger.Log.Error("failed to read my e2ee envelope", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get e2ee keys"})
+		return
+	}
+
+	version, err := h.convRepo.CurrentE2EEVersion(convID)
+	if err != nil {
+		logger.Log.Error("failed to read e2ee version", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get e2ee keys"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"version":      version,
+		"envelopes":    envelopes,
+		"my_envelope":  myEnvelope,
+		"conversation_id": convID,
+	})
+}
+
+// PutE2EEKeys stores a batch of group-key envelopes after a key rotation
+// (enabling encryption, or adding a member). The caller must be an active
+// member; the server never inspects the ciphertext.
+func (h *ConversationHandler) PutE2EEKeys(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	convID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid conversation ID"})
+		return
+	}
+
+	isMember, err := h.convRepo.IsMember(convID, userID)
+	if err != nil {
+		logger.Log.Error("failed to check membership", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to store e2ee keys"})
+		return
+	}
+	if !isMember {
+		c.JSON(http.StatusForbidden, gin.H{"error": "you are not a member of this conversation"})
+		return
+	}
+
+	var req struct {
+		Envelopes map[int64]string `json:"envelopes"` // target_user_id -> base64 ciphertext
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+	if len(req.Envelopes) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no envelopes provided"})
+		return
+	}
+
+	version, err := h.convRepo.PutE2EEKeys(convID, req.Envelopes)
+	if err != nil {
+		logger.Log.Error("failed to store e2ee keys", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to store e2ee keys"})
+		return
+	}
+
+	h.publishMessageEvent(c.Request.Context(), events.ChatE2EEKeysUpdated, convID, gin.H{
+		"conversation_id": convID,
+		"version":         version,
+	})
+
+	c.JSON(http.StatusOK, gin.H{"message": "e2ee keys stored", "version": version})
 }
 
 // publishConversationEvent notifies the group's active members that the

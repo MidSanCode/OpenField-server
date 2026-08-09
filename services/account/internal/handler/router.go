@@ -26,6 +26,7 @@ func RegisterRoutes(r *gin.Engine, authHandler *AuthHandler, userHandler *UserHa
 		{
 			users.GET("/me", userHandler.GetCurrentUser)
 			users.PUT("/me", userHandler.UpdateProfile)
+			users.PUT("/me/e2ee-key", userHandler.SetE2EEKey)
 			users.POST("/me/avatar", userHandler.UploadAvatar)
 			users.POST("/me/banner", userHandler.UploadBanner)
 			users.GET("/me/permissions", userHandler.GetMyPermissions)
