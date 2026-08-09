@@ -135,7 +135,7 @@ func (r *ConversationRepository) ListMembers(conversationID int64) ([]model.Conv
 	rows, err := database.DB.Query(
 		`SELECT cm.conversation_id, cm.user_id, cm.role, cm.note, cm.group_nickname, cm.status, cm.added_by, cm.created_at,
 		        cm.muted_until,
-		        u.username, u.nickname, u.avatar_url, u.is_verified
+		        u.username, u.nickname, u.avatar_url, u.is_verified, u.e2ee_public_key
 		 FROM conversation_members cm
 		 JOIN users u ON cm.user_id = u.id
 		 WHERE cm.conversation_id = $1 AND cm.status = 'active'
