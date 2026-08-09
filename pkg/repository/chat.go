@@ -18,8 +18,11 @@ func NewConversationRepository() *ConversationRepository {
 	return &ConversationRepository{}
 }
 
-// CreatePrivate creates a private conversation with two active members.
-func (r *ConversationRepository) CreatePrivate(userA, userB int64) (*model.Conversation, error) {
+// CreatePrivate creates a private conversation with two active members. When
+// [encrypted] is true the conversation is created with end-to-end encryption
+// enabled, so the group key can be initialized as soon as both members have
+// published identity keys.
+func (r *ConversationRepository) CreatePrivate(userA, userB int64, encrypted bool) (*model.Conversation, error) {
 	tx, err := database.DB.Begin()
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
@@ -28,8 +31,8 @@ func (r *ConversationRepository) CreatePrivate(userA, userB int64) (*model.Conve
 
 	conv := &model.Conversation{}
 	err = tx.QueryRow(
-		"INSERT INTO conversations (type, owner_id) VALUES ('private', $1) RETURNING id, type, title, avatar_url, owner_id, created_at, updated_at, is_public, allow_join, mute_all_until, encrypted",
-		userA,
+		"INSERT INTO conversations (type, owner_id, encrypted) VALUES ('private', $1, $2) RETURNING id, type, title, avatar_url, owner_id, created_at, updated_at, is_public, allow_join, mute_all_until, encrypted",
+		userA, encrypted,
 	).Scan(&conv.ID, &conv.Type, &conv.Title, &conv.AvatarURL, &conv.OwnerID, &conv.CreatedAt, &conv.UpdatedAt, &conv.IsPublic, &conv.AllowJoin, &conv.MuteAllUntil, &conv.Encrypted)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create conversation: %w", err)

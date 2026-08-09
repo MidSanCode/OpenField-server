@@ -21,14 +21,14 @@ func NewConsentRequestRepository() *ConsentRequestRepository {
 }
 
 // Create inserts a pending consent request.
-func (r *ConsentRequestRepository) Create(reqType string, requesterID, targetUserID int64, conversationID *int64, message string) (*model.ConsentRequest, error) {
+func (r *ConsentRequestRepository) Create(reqType string, requesterID, targetUserID int64, conversationID *int64, message string, encrypted bool) (*model.ConsentRequest, error) {
 	req := &model.ConsentRequest{}
 	err := database.DB.QueryRow(
-		`INSERT INTO consent_requests (type, requester_id, target_user_id, conversation_id, message)
-		 VALUES ($1, $2, $3, $4, $5)
-		 RETURNING id, type, requester_id, target_user_id, conversation_id, message, status, created_at, responded_at`,
-		reqType, requesterID, targetUserID, conversationID, message,
-	).Scan(&req.ID, &req.Type, &req.RequesterID, &req.TargetUserID, &req.ConversationID, &req.Message, &req.Status, &req.CreatedAt, &req.RespondedAt)
+		`INSERT INTO consent_requests (type, requester_id, target_user_id, conversation_id, message, encrypted)
+		 VALUES ($1, $2, $3, $4, $5, $6)
+		 RETURNING id, type, requester_id, target_user_id, conversation_id, message, status, created_at, responded_at, encrypted`,
+		reqType, requesterID, targetUserID, conversationID, message, encrypted,
+	).Scan(&req.ID, &req.Type, &req.RequesterID, &req.TargetUserID, &req.ConversationID, &req.Message, &req.Status, &req.CreatedAt, &req.RespondedAt, &req.Encrypted)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create consent request: %w", err)
 	}
@@ -57,13 +57,14 @@ func (r *ConsentRequestRepository) GetByID(id int64) (*model.ConsentRequest, err
 	err := database.DB.QueryRow(
 		`SELECT cr.id, cr.type, cr.requester_id, cr.target_user_id, cr.conversation_id, cr.message, cr.status, cr.created_at, cr.responded_at,
 		        ru.username, ru.avatar_url,
-		        COALESCE(c.title, '')
+		        COALESCE(c.title, ''),
+		        cr.encrypted
 		 FROM consent_requests cr
 		 JOIN users ru ON cr.requester_id = ru.id
 		 LEFT JOIN conversations c ON c.id = cr.conversation_id
 		 WHERE cr.id = $1`,
 		id,
-	).Scan(&req.ID, &req.Type, &req.RequesterID, &req.TargetUserID, &req.ConversationID, &req.Message, &req.Status, &req.CreatedAt, &req.RespondedAt, &req.RequesterName, &req.RequesterAvatar, &req.GroupTitle)
+	).Scan(&req.ID, &req.Type, &req.RequesterID, &req.TargetUserID, &req.ConversationID, &req.Message, &req.Status, &req.CreatedAt, &req.RespondedAt, &req.RequesterName, &req.RequesterAvatar, &req.GroupTitle, &req.Encrypted)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -78,7 +79,8 @@ func (r *ConsentRequestRepository) ListPendingForUser(userID int64) ([]model.Con
 	rows, err := database.DB.Query(
 		`SELECT cr.id, cr.type, cr.requester_id, cr.target_user_id, cr.conversation_id, cr.message, cr.status, cr.created_at, cr.responded_at,
 		        ru.username, ru.avatar_url,
-		        COALESCE(c.title, '')
+		        COALESCE(c.title, ''),
+		        cr.encrypted
 		 FROM consent_requests cr
 		 JOIN users ru ON cr.requester_id = ru.id
 		 LEFT JOIN conversations c ON c.id = cr.conversation_id
@@ -94,7 +96,7 @@ func (r *ConsentRequestRepository) ListPendingForUser(userID int64) ([]model.Con
 	reqs := make([]model.ConsentRequest, 0)
 	for rows.Next() {
 		var req model.ConsentRequest
-		if err := rows.Scan(&req.ID, &req.Type, &req.RequesterID, &req.TargetUserID, &req.ConversationID, &req.Message, &req.Status, &req.CreatedAt, &req.RespondedAt, &req.RequesterName, &req.RequesterAvatar, &req.GroupTitle); err != nil {
+		if err := rows.Scan(&req.ID, &req.Type, &req.RequesterID, &req.TargetUserID, &req.ConversationID, &req.Message, &req.Status, &req.CreatedAt, &req.RespondedAt, &req.RequesterName, &req.RequesterAvatar, &req.GroupTitle, &req.Encrypted); err != nil {
 			return nil, fmt.Errorf("failed to scan consent request: %w", err)
 		}
 		reqs = append(reqs, req)
@@ -121,7 +123,7 @@ func (r *ConsentRequestRepository) Accept(reqID int64) (*model.Conversation, err
 	}
 
 	if req.Type == "private_chat" {
-		conv, err := r.convRepo.CreatePrivate(req.RequesterID, req.TargetUserID)
+		conv, err := r.convRepo.CreatePrivate(req.RequesterID, req.TargetUserID, req.Encrypted)
 		if err != nil {
 			return nil, err
 		}

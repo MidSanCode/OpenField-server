@@ -222,7 +222,9 @@ func (h *ConversationHandler) InviteToGroup(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{"message": "invite sent"})
 }
 
-// StartPrivateChat sends a private chat consent request to another user.
+// StartPrivateChat sends a private chat consent request to another user. When
+// [req.Encrypted] is true the resulting conversation will be created with
+// end-to-end encryption enabled as soon as the recipient accepts.
 func (h *ConversationHandler) StartPrivateChat(c *gin.Context) {
 	userID, ok := middleware.GetUserID(c)
 	if !ok {
@@ -231,8 +233,9 @@ func (h *ConversationHandler) StartPrivateChat(c *gin.Context) {
 	}
 
 	var req struct {
-		UserID  int64  `json:"user_id" binding:"required"`
-		Message string `json:"message"`
+		UserID    int64  `json:"user_id" binding:"required"`
+		Message   string `json:"message"`
+		Encrypted bool   `json:"encrypted"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
@@ -254,7 +257,7 @@ func (h *ConversationHandler) StartPrivateChat(c *gin.Context) {
 		return
 	}
 
-	_, err = h.consentRepo.Create("private_chat", userID, req.UserID, nil, req.Message)
+	_, err = h.consentRepo.Create("private_chat", userID, req.UserID, nil, req.Message, req.Encrypted)
 	if err != nil {
 		logger.Log.Error("failed to create chat request", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to start chat"})
@@ -263,7 +266,8 @@ func (h *ConversationHandler) StartPrivateChat(c *gin.Context) {
 
 	// Push a realtime notification so the recipient's badge updates immediately.
 	events.Publish(c.Request.Context(), events.ConsentRequested, []int64{req.UserID}, gin.H{
-		"user_id": userID,
+		"user_id":   userID,
+		"encrypted": req.Encrypted,
 	})
 
 	c.JSON(http.StatusCreated, gin.H{"message": "chat request sent"})

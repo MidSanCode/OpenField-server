@@ -159,6 +159,9 @@ type ConsentRequest struct {
 	RequesterName   string     `json:"requester_name,omitempty"`
 	RequesterAvatar string     `json:"requester_avatar,omitempty"`
 	GroupTitle      string     `json:"group_title,omitempty"`
+	// Encrypted indicates the requester asked for an end-to-end encrypted
+	// private chat. Honored when the recipient accepts.
+	Encrypted       bool       `json:"encrypted,omitempty"`
 }
 
 // Message represents a chat message within a conversation.

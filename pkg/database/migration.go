@@ -145,6 +145,7 @@ func RunMigrations() error {
 		`ALTER TABLE conversation_members ADD COLUMN IF NOT EXISTS muted_until TIMESTAMPTZ`,
 		`ALTER TABLE conversations ADD COLUMN IF NOT EXISTS encrypted BOOLEAN NOT NULL DEFAULT FALSE`,
 		`ALTER TABLE conversation_members ADD COLUMN IF NOT EXISTS title TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE consent_requests ADD COLUMN IF NOT EXISTS encrypted BOOLEAN NOT NULL DEFAULT FALSE`,
 		`CREATE INDEX IF NOT EXISTS idx_conversations_public ON conversations(is_public)`,
 		`CREATE TABLE IF NOT EXISTS conversation_e2ee_keys (
 			id BIGSERIAL PRIMARY KEY,
