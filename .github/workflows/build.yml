@@ -27,17 +27,40 @@ env:
   GO_VERSION: '1.25.0'
 
 jobs:
-  build:
+  # Builds the build matrix from the workflow_dispatch inputs (or the default
+  # targets on a tag push). Only the selected targets become matrix entries, so
+  # disabled targets do not spin up a runner or attempt a build at all.
+  compute-matrix:
     runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set.outputs.matrix }}
+    steps:
+      - id: set
+        run: |
+          set -e
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            W="${{ github.event.inputs.build_windows }}"
+            L="${{ github.event.inputs.build_linux }}"
+            A="${{ github.event.inputs.build_linux_arm }}"
+            D="${{ github.event.inputs.build_darwin }}"
+          else
+            # Tag push: ship the default targets.
+            W=true; L=true; A=false; D=false
+          fi
+          entries="[]"
+          [ "$W" == "true" ] && entries=$(jq -c '. + [{"id":"windows","goos":"windows","goarch":"amd64","ext":".exe"}]' <<< "$entries")
+          [ "$L" == "true" ] && entries=$(jq -c '. + [{"id":"linux","goos":"linux","goarch":"amd64","ext":""}]' <<< "$entries")
+          [ "$A" == "true" ] && entries=$(jq -c '. + [{"id":"linux-arm","goos":"linux","goarch":"arm64","ext":""}]' <<< "$entries")
+          [ "$D" == "true" ] && entries=$(jq -c '. + [{"id":"darwin","goos":"darwin","goarch":"amd64","ext":""}]' <<< "$entries")
+          echo "matrix=$entries" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: compute-matrix
+    runs-on: ubuntu-latest
+    if: ${{ needs.compute-matrix.outputs.matrix != '[]' }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - { os: windows, goos: windows, goarch: amd64, ext: .exe, enabled: true }
-          - { os: linux,   goos: linux,   goarch: amd64, ext: '',    enabled: true }
-          - { os: linux-arm64, goos: linux, goarch: arm64, ext: '',  enabled: false }
-          - { os: darwin,  goos: darwin,  goarch: amd64, ext: '',    enabled: false }
-
+      matrix: ${{ fromJson(needs.compute-matrix.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
 
@@ -46,43 +69,18 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
 
-      - name: Determine matrix enablement
-        id: matrix
-        run: |
-          ENABLED=${{ matrix.enabled }}
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            case "${{ matrix.os }}" in
-              windows) INPUT="${{ github.event.inputs.build_windows }}" ;;
-              linux)   INPUT="${{ github.event.inputs.build_linux }}" ;;
-              linux-arm64) INPUT="${{ github.event.inputs.build_linux_arm }}" ;;
-              darwin)  INPUT="${{ github.event.inputs.build_darwin }}" ;;
-            esac
-            if [ "$INPUT" == "true" ]; then ENABLED=true; else ENABLED=false; fi
-          fi
-          echo "enabled=$ENABLED" >> "$GITHUB_OUTPUT"
-
       - name: Build services
-        if: steps.matrix.outputs.enabled == 'true'
         shell: bash
         run: |
           set -e
           mkdir -p dist/bin
           CGO_ENABLED=0
-          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -trimpath -ldflags="-s -w" \
-            -o "dist/bin/openfield-account${{ matrix.ext }}" ./services/account/cmd
-          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -trimpath -ldflags="-s -w" \
-            -o "dist/bin/openfield-storage${{ matrix.ext }}" ./services/storage/cmd
-          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -trimpath -ldflags="-s -w" \
-            -o "dist/bin/openfield-chat${{ matrix.ext }}" ./services/chat/cmd
-          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -trimpath -ldflags="-s -w" \
-            -o "dist/bin/openfield-posts${{ matrix.ext }}" ./services/posts/cmd
-          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -trimpath -ldflags="-s -w" \
-            -o "dist/bin/openfield-push${{ matrix.ext }}" ./services/push/cmd
-          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -trimpath -ldflags="-s -w" \
-            -o "dist/bin/openfield-gateway${{ matrix.ext }}" ./services/gateway/cmd
+          for svc in account storage chat posts push gateway; do
+            GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -trimpath -ldflags="-s -w" \
+              -o "dist/bin/openfield-$svc${{ matrix.ext }}" "./services/$svc/cmd"
+          done
 
       - name: Package
-        if: steps.matrix.outputs.enabled == 'true'
         shell: bash
         run: |
           cd dist
@@ -92,9 +90,7 @@ jobs:
             tar -czf openfield-server-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz bin
           fi
 
-      - name: Upload artifacts
-        if: steps.matrix.outputs.enabled == 'true'
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: openfield-server-${{ matrix.goos }}-${{ matrix.goarch }}
           path: dist/openfield-server-${{ matrix.goos }}-${{ matrix.goarch }}.*
