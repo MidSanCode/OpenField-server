@@ -8,6 +8,7 @@ import (
 	"github.com/openfield/server/pkg/config"
 	"github.com/openfield/server/pkg/database"
 	"github.com/openfield/server/pkg/logger"
+	"github.com/openfield/server/pkg/middleware"
 	"github.com/openfield/server/services/chat/internal/handler"
 )
 
@@ -38,8 +39,10 @@ func main() {
 	msgHandler := handler.NewMessageHandler()
 
 	r := gin.New()
-	r.Use(gin.Recovery())
+	r.Use(middleware.Recovery())
 	r.Use(logger.GinLogger())
+	r.NoRoute(middleware.NotFound())
+	r.NoMethod(middleware.MethodNotAllowed())
 
 	handler.RegisterRoutes(r, convHandler, consentHandler, msgHandler)
 

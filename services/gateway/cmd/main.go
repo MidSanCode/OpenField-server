@@ -190,6 +190,8 @@ func main() {
 		{http.MethodPost, "/api/v1/conversations/:id/leave", cfg.Services.Chat, authPermission, "chat.group.manage"},
 		{http.MethodPost, "/api/v1/conversations/:id/join", cfg.Services.Chat, authPermission, "chat.group.manage"},
 		{http.MethodPut, "/api/v1/conversations/:id/settings", cfg.Services.Chat, authPermission, "chat.group.manage"},
+		{http.MethodPut, "/api/v1/conversations/:id/title", cfg.Services.Chat, authPermission, "chat.group.manage"},
+		{http.MethodPut, "/api/v1/conversations/:id/avatar", cfg.Services.Chat, authPermission, "chat.group.manage"},
 		{http.MethodPost, "/api/v1/conversations/:id/mute-all", cfg.Services.Chat, authPermission, "chat.group.manage"},
 		{http.MethodDelete, "/api/v1/conversations/:id/mute-all", cfg.Services.Chat, authPermission, "chat.group.manage"},
 		{http.MethodDelete, "/api/v1/conversations/:id", cfg.Services.Chat, authPermission, "chat.group.manage"},
@@ -222,7 +224,7 @@ func main() {
 	}
 
 	r := gin.New()
-	r.Use(gin.Recovery())
+	r.Use(middleware.Recovery())
 	r.Use(logger.GinLogger())
 	r.Use(middleware.CORS(cfg))
 

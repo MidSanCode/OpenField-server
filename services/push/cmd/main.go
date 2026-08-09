@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/openfield/server/pkg/config"
 	"github.com/openfield/server/pkg/logger"
+	"github.com/openfield/server/pkg/middleware"
 	"github.com/openfield/server/services/push/internal/handler"
 )
 
@@ -41,8 +42,10 @@ func main() {
 	wsHandler := handler.NewWsHandler(hub)
 
 	r := gin.New()
-	r.Use(gin.Recovery())
+	r.Use(middleware.Recovery())
 	r.Use(logger.GinLogger())
+	r.NoRoute(middleware.NotFound())
+	r.NoMethod(middleware.MethodNotAllowed())
 
 	handler.RegisterRoutes(r, wsHandler)
 

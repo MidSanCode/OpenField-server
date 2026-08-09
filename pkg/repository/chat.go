@@ -448,6 +448,30 @@ func (r *ConversationRepository) UpdateGroupSettings(conversationID int64, isPub
 	return nil
 }
 
+// UpdateGroupTitle renames a group conversation.
+func (r *ConversationRepository) UpdateGroupTitle(conversationID int64, title string) error {
+	_, err := database.DB.Exec(
+		"UPDATE conversations SET title = $2, updated_at = NOW() WHERE id = $1",
+		conversationID, title,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update group title: %w", err)
+	}
+	return nil
+}
+
+// UpdateGroupAvatar sets a group conversation's avatar image URL.
+func (r *ConversationRepository) UpdateGroupAvatar(conversationID int64, avatarURL string) error {
+	_, err := database.DB.Exec(
+		"UPDATE conversations SET avatar_url = $2, updated_at = NOW() WHERE id = $1",
+		conversationID, avatarURL,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update group avatar: %w", err)
+	}
+	return nil
+}
+
 // ListPublicGroups returns public groups matching a search query with the
 // requesting user's membership flag and an active member count.
 func (r *ConversationRepository) ListPublicGroups(userID int64, query string, limit int) ([]model.Conversation, error) {

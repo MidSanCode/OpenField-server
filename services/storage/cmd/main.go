@@ -8,6 +8,7 @@ import (
 	"github.com/openfield/server/pkg/config"
 	"github.com/openfield/server/pkg/database"
 	"github.com/openfield/server/pkg/logger"
+	"github.com/openfield/server/pkg/middleware"
 	"github.com/openfield/server/pkg/storage"
 	"github.com/openfield/server/services/storage/internal/handler"
 )
@@ -42,8 +43,10 @@ func main() {
 	attHandler := handler.NewAttachmentHandler(store, cfg.Storage)
 
 	r := gin.New()
-	r.Use(gin.Recovery())
+	r.Use(middleware.Recovery())
 	r.Use(logger.GinLogger())
+	r.NoRoute(middleware.NotFound())
+	r.NoMethod(middleware.MethodNotAllowed())
 
 	handler.RegisterRoutes(r, attHandler)
 

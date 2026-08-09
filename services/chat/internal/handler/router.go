@@ -34,6 +34,8 @@ func RegisterRoutes(r *gin.Engine, convHandler *ConversationHandler, consentHand
 			convs.POST("/:id/leave", convHandler.Leave)
 			convs.POST("/:id/join", convHandler.JoinGroup)
 			convs.PUT("/:id/settings", convHandler.UpdateSettings)
+			convs.PUT("/:id/title", convHandler.UpdateTitle)
+			convs.PUT("/:id/avatar", convHandler.UpdateAvatar)
 			convs.POST("/:id/mute-all", convHandler.MuteAll)
 			convs.DELETE("/:id/mute-all", convHandler.UnmuteAll)
 			convs.DELETE("/:id", convHandler.Delete)

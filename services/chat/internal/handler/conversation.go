@@ -4,7 +4,9 @@ import (
 	"context"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"github.com/openfield/server/pkg/events"
@@ -648,6 +650,118 @@ func (h *ConversationHandler) UpdateSettings(c *gin.Context) {
 
 	h.publishConversationEvent(c.Request.Context(), convID)
 	c.JSON(http.StatusOK, gin.H{"message": "group settings updated"})
+}
+
+// UpdateTitle renames a group conversation (owner only).
+func (h *ConversationHandler) UpdateTitle(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	convID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid conversation ID"})
+		return
+	}
+
+	var req struct {
+		Title string `json:"title" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+	title := strings.TrimSpace(req.Title)
+	if title == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "group title cannot be empty"})
+		return
+	}
+	if utf8.RuneCountInString(title) > 100 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "group title too long (max 100)"})
+		return
+	}
+
+	conv, err := h.convRepo.GetByID(convID)
+	if err != nil {
+		logger.Log.Error("failed to get conversation", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update group title"})
+		return
+	}
+	if conv == nil || conv.Type != "group" {
+		c.JSON(http.StatusNotFound, gin.H{"error": "group not found"})
+		return
+	}
+
+	member, err := h.convRepo.GetMember(convID, userID)
+	if err != nil || member == nil || member.Role != "owner" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "only the group owner can edit the title"})
+		return
+	}
+
+	if err := h.convRepo.UpdateGroupTitle(convID, title); err != nil {
+		logger.Log.Error("failed to update group title", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update group title"})
+		return
+	}
+
+	h.publishConversationEvent(c.Request.Context(), convID)
+	c.JSON(http.StatusOK, gin.H{"message": "group title updated"})
+}
+
+// UpdateAvatar sets a group's avatar image URL (owner only).
+func (h *ConversationHandler) UpdateAvatar(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	convID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid conversation ID"})
+		return
+	}
+
+	var req struct {
+		AvatarURL string `json:"avatar_url" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+	avatarURL := strings.TrimSpace(req.AvatarURL)
+	if avatarURL == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "avatar URL cannot be empty"})
+		return
+	}
+
+	conv, err := h.convRepo.GetByID(convID)
+	if err != nil {
+		logger.Log.Error("failed to get conversation", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update group avatar"})
+		return
+	}
+	if conv == nil || conv.Type != "group" {
+		c.JSON(http.StatusNotFound, gin.H{"error": "group not found"})
+		return
+	}
+
+	member, err := h.convRepo.GetMember(convID, userID)
+	if err != nil || member == nil || member.Role != "owner" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "only the group owner can edit the avatar"})
+		return
+	}
+
+	if err := h.convRepo.UpdateGroupAvatar(convID, avatarURL); err != nil {
+		logger.Log.Error("failed to update group avatar", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update group avatar"})
+		return
+	}
+
+	h.publishConversationEvent(c.Request.Context(), convID)
+	c.JSON(http.StatusOK, gin.H{"message": "group avatar updated"})
 }
 
 // SetMemberRole promotes or demotes a member (owner only).

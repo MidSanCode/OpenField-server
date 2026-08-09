@@ -62,8 +62,10 @@ func main() {
 	walletHandler := handler.NewWalletHandler()
 
 	r := gin.New()
-	r.Use(gin.Recovery())
+	r.Use(middleware.Recovery())
 	r.Use(logger.GinLogger())
+	r.NoRoute(middleware.NotFound())
+	r.NoMethod(middleware.MethodNotAllowed())
 
 	handler.RegisterRoutes(r, authHandler, userHandler, walletHandler)
 
