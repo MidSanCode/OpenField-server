@@ -27,49 +27,14 @@ env:
   GO_VERSION: '1.25.0'
 
 jobs:
-  # Builds the build matrix from the workflow_dispatch inputs (or the default
-  # targets on a tag push). Only the checked platforms become matrix entries, so
-  # a single selected target does NOT spin up or build the others.
-  compute-matrix:
-    runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.set.outputs.matrix }}
-    steps:
-      - id: set
-        shell: bash
-        run: |
-          set -eu
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            W="${{ github.event.inputs.build_windows }}"
-            L="${{ github.event.inputs.build_linux }}"
-            A="${{ github.event.inputs.build_linux_arm }}"
-            D="${{ github.event.inputs.build_darwin }}"
-          else
-            # Tag push: ship the default targets.
-            W=true; L=true; A=false; D=false
-          fi
-          objs=""
-          if [ "$W" = "true" ]; then
-            objs="${objs:+$objs,}{\"id\":\"windows\",\"goos\":\"windows\",\"goarch\":\"amd64\",\"ext\":\".exe\"}"
-          fi
-          if [ "$L" = "true" ]; then
-            objs="${objs:+$objs,}{\"id\":\"linux\",\"goos\":\"linux\",\"goarch\":\"amd64\",\"ext\":\"\"}"
-          fi
-          if [ "$A" = "true" ]; then
-            objs="${objs:+$objs,}{\"id\":\"linux-arm\",\"goos\":\"linux\",\"goarch\":\"arm64\",\"ext\":\"\"}"
-          fi
-          if [ "$D" = "true" ]; then
-            objs="${objs:+$objs,}{\"id\":\"darwin\",\"goos\":\"darwin\",\"goarch\":\"amd64\",\"ext\":\"\"}"
-          fi
-          echo "matrix=[$objs]" >> "$GITHUB_OUTPUT"
+  # One job per release target, each gated by its workflow_dispatch input, the
+  # same shape as the app's build workflow. Only the checked targets are ever
+  # built or packaged. On a tag push the default targets (Windows + Linux x64)
+  # ship so releases keep producing artifacts without manual dispatch.
 
-  build:
-    needs: compute-matrix
+  windows:
+    if: ${{ github.event_name == 'push' || inputs.build_windows }}
     runs-on: ubuntu-latest
-    if: ${{ needs.compute-matrix.outputs.matrix != '[]' }}
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJson(needs.compute-matrix.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
 
@@ -83,26 +48,120 @@ jobs:
         run: |
           set -e
           mkdir -p dist/bin
-          CGO_ENABLED=0
           for svc in account storage chat posts push gateway; do
-            GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -trimpath -ldflags="-s -w" \
-              -o "dist/bin/openfield-$svc${{ matrix.ext }}" "./services/$svc/cmd"
+            CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags="-s -w" \
+              -o "dist/bin/openfield-$svc.exe" "./services/$svc/cmd"
           done
 
       - name: Package
         shell: bash
         run: |
           cd dist
-          if [ "${{ matrix.goos }}" == "windows" ]; then
-            zip -r openfield-server-${{ matrix.goos }}-${{ matrix.goarch }}.zip bin
-          else
-            tar -czf openfield-server-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz bin
-          fi
+          zip -r openfield-server-windows-amd64.zip bin
 
       - uses: actions/upload-artifact@v4
         with:
-          name: openfield-server-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: dist/openfield-server-${{ matrix.goos }}-${{ matrix.goarch }}.*
+          name: openfield-server-windows-amd64
+          path: dist/openfield-server-windows-amd64.zip
+          if-no-files-found: error
+
+  linux:
+    if: ${{ github.event_name == 'push' || inputs.build_linux }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Build services
+        shell: bash
+        run: |
+          set -e
+          mkdir -p dist/bin
+          for svc in account storage chat posts push gateway; do
+            CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" \
+              -o "dist/bin/openfield-$svc" "./services/$svc/cmd"
+          done
+
+      - name: Package
+        shell: bash
+        run: |
+          cd dist
+          tar -czf openfield-server-linux-amd64.tar.gz bin
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openfield-server-linux-amd64
+          path: dist/openfield-server-linux-amd64.tar.gz
+          if-no-files-found: error
+
+  linux-arm:
+    if: inputs.build_linux_arm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Build services
+        shell: bash
+        run: |
+          set -e
+          mkdir -p dist/bin
+          for svc in account storage chat posts push gateway; do
+            CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" \
+              -o "dist/bin/openfield-$svc" "./services/$svc/cmd"
+          done
+
+      - name: Package
+        shell: bash
+        run: |
+          cd dist
+          tar -czf openfield-server-linux-arm64.tar.gz bin
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openfield-server-linux-arm64
+          path: dist/openfield-server-linux-arm64.tar.gz
+          if-no-files-found: error
+
+  darwin:
+    if: inputs.build_darwin
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Build services
+        shell: bash
+        run: |
+          set -e
+          mkdir -p dist/bin
+          for svc in account storage chat posts push gateway; do
+            CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags="-s -w" \
+              -o "dist/bin/openfield-$svc" "./services/$svc/cmd"
+          done
+
+      - name: Package
+        shell: bash
+        run: |
+          cd dist
+          tar -czf openfield-server-darwin-amd64.tar.gz bin
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openfield-server-darwin-amd64
+          path: dist/openfield-server-darwin-amd64.tar.gz
           if-no-files-found: error
 
   lint:
