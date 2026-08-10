@@ -31,12 +31,12 @@ type DatabaseConfig struct {
 	// account service (the schema owner) enabled this; other services relied on
 	// the owner to have already created the schema.
 	Migrate bool `yaml:"migrate"`
-	// AutoMigrate enables automatic schema upgrades: when a required table or
-	// column is missing (e.g. a fresh database or an upgrade that added a new
-	// parameter), the service upgrades the schema itself on boot. Defaults to
-	// true when unset, so every service in every environment (including
-	// production) heals its schema without operator intervention. Set to false
-	// to disable.
+	// AutoMigrate enables automatic schema upgrades: when the database is behind
+	// the schema version this binary knows about (recorded in
+	// schema_migrations), the service applies the missing numbered migrations on
+	// boot. Defaults to true when unset, so every service in every environment
+	// (including production) upgrades its schema without operator intervention.
+	// Set to false to disable.
 	AutoMigrate *bool `yaml:"auto_migrate"`
 }
 
