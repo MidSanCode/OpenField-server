@@ -134,6 +134,9 @@ func main() {
 		{http.MethodPost, "/api/v1/auth/refresh", cfg.Services.Account, authPublic, ""},
 		{http.MethodPost, "/api/v1/auth/register", cfg.Services.Account, authRequired, ""},
 
+		// ---- capabilities (public introspection) ----
+		{http.MethodGet, "/api/v1/capabilities", cfg.Services.Account, authPublic, ""},
+
 		// ---- account ----
 		{http.MethodGet, "/api/v1/users/me/permissions", cfg.Services.Account, authRequired, ""},
 		{http.MethodGet, "/api/v1/users/me", cfg.Services.Account, authRequired, "account.view"},
@@ -141,14 +144,20 @@ func main() {
 		{http.MethodPut, "/api/v1/users/me/e2ee-key", cfg.Services.Account, authRequired, ""},
 		{http.MethodPost, "/api/v1/users/me/avatar", cfg.Services.Account, authPermission, "account.avatar.edit"},
 		{http.MethodPost, "/api/v1/users/me/banner", cfg.Services.Account, authPermission, "account.banner.edit"},
+		{http.MethodPost, "/api/v1/users/me/claim-daily-bonus", cfg.Services.Account, authRequired, ""},
 		{http.MethodGet, "/api/v1/users/search", cfg.Services.Account, authRequired, ""},
 		{http.MethodGet, "/api/v1/users/:user_id", cfg.Services.Account, authPublic, ""},
+		{http.MethodPut, "/api/v1/users/:user_id/exp", cfg.Services.Account, authPermission, "user.adjust_exp"},
 
 		// ---- storage ----
 		{http.MethodPost, "/api/v1/attachments", cfg.Services.Storage, authPermission, "storage.upload"},
 		{http.MethodGet, "/api/v1/attachments", cfg.Services.Storage, authPermission, "storage.list"},
 		{http.MethodGet, "/api/v1/attachments/:id", cfg.Services.Storage, authPermission, "storage.get"},
 		{http.MethodDelete, "/api/v1/attachments/:id", cfg.Services.Storage, authPermission, "storage.delete"},
+		{http.MethodPost, "/api/v1/attachments/chunk/init", cfg.Services.Storage, authPermission, "storage.upload"},
+		{http.MethodGet, "/api/v1/attachments/chunk/:upload_id", cfg.Services.Storage, authPermission, "storage.upload"},
+		{http.MethodPost, "/api/v1/attachments/chunk/:upload_id/:index", cfg.Services.Storage, authPermission, "storage.upload"},
+		{http.MethodPost, "/api/v1/attachments/chunk/:upload_id/complete", cfg.Services.Storage, authPermission, "storage.upload"},
 		{http.MethodGet, "/api/v1/storage/usage", cfg.Services.Storage, authPermission, "storage.list"},
 
 		// ---- posts ----
@@ -189,6 +198,7 @@ func main() {
 		{http.MethodPost, "/api/v1/conversations/:id/invite", cfg.Services.Chat, authPermission, "chat.group.invite"},
 		{http.MethodPut, "/api/v1/conversations/:id/note", cfg.Services.Chat, authPermission, "chat.note.edit"},
 		{http.MethodPut, "/api/v1/conversations/:id/group-nickname", cfg.Services.Chat, authPermission, "chat.group.nickname"},
+		{http.MethodPut, "/api/v1/conversations/:id/notify-level", cfg.Services.Chat, authPermission, "chat.view"},
 		{http.MethodPost, "/api/v1/conversations/:id/read", cfg.Services.Chat, authPermission, "chat.view"},
 		{http.MethodPost, "/api/v1/conversations/:id/typing", cfg.Services.Chat, authPermission, "chat.view"},
 		{http.MethodPost, "/api/v1/conversations/:id/leave", cfg.Services.Chat, authPermission, "chat.group.manage"},
@@ -201,6 +211,7 @@ func main() {
 		{http.MethodDelete, "/api/v1/conversations/:id", cfg.Services.Chat, authPermission, "chat.group.manage"},
 		{http.MethodDelete, "/api/v1/conversations/:id/members/:user_id", cfg.Services.Chat, authPermission, "chat.group.manage"},
 		{http.MethodPut, "/api/v1/conversations/:id/members/:user_id/role", cfg.Services.Chat, authPermission, "chat.group.manage"},
+		{http.MethodPut, "/api/v1/conversations/:id/members/:user_id/title", cfg.Services.Chat, authPermission, "chat.group.manage"},
 		{http.MethodPost, "/api/v1/conversations/:id/members/:user_id/mute", cfg.Services.Chat, authPermission, "chat.group.manage"},
 		{http.MethodDelete, "/api/v1/conversations/:id/members/:user_id/mute", cfg.Services.Chat, authPermission, "chat.group.manage"},
 		{http.MethodGet, "/api/v1/conversations/:id/messages", cfg.Services.Chat, authPermission, "chat.view"},
