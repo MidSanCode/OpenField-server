@@ -28,17 +28,18 @@ env:
 
 jobs:
   # Builds the build matrix from the workflow_dispatch inputs (or the default
-  # targets on a tag push). Only the selected targets become matrix entries, so
-  # disabled targets do not spin up a runner or attempt a build at all.
+  # targets on a tag push). Only the checked platforms become matrix entries, so
+  # a single selected target does NOT spin up or build the others.
   compute-matrix:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.set.outputs.matrix }}
     steps:
       - id: set
+        shell: bash
         run: |
-          set -e
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+          set -eu
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             W="${{ github.event.inputs.build_windows }}"
             L="${{ github.event.inputs.build_linux }}"
             A="${{ github.event.inputs.build_linux_arm }}"
@@ -47,12 +48,20 @@ jobs:
             # Tag push: ship the default targets.
             W=true; L=true; A=false; D=false
           fi
-          entries="[]"
-          [ "$W" == "true" ] && entries=$(jq -c '. + [{"id":"windows","goos":"windows","goarch":"amd64","ext":".exe"}]' <<< "$entries")
-          [ "$L" == "true" ] && entries=$(jq -c '. + [{"id":"linux","goos":"linux","goarch":"amd64","ext":""}]' <<< "$entries")
-          [ "$A" == "true" ] && entries=$(jq -c '. + [{"id":"linux-arm","goos":"linux","goarch":"arm64","ext":""}]' <<< "$entries")
-          [ "$D" == "true" ] && entries=$(jq -c '. + [{"id":"darwin","goos":"darwin","goarch":"amd64","ext":""}]' <<< "$entries")
-          echo "matrix=$entries" >> "$GITHUB_OUTPUT"
+          objs=""
+          if [ "$W" = "true" ]; then
+            objs="${objs:+$objs,}{\"id\":\"windows\",\"goos\":\"windows\",\"goarch\":\"amd64\",\"ext\":\".exe\"}"
+          fi
+          if [ "$L" = "true" ]; then
+            objs="${objs:+$objs,}{\"id\":\"linux\",\"goos\":\"linux\",\"goarch\":\"amd64\",\"ext\":\"\"}"
+          fi
+          if [ "$A" = "true" ]; then
+            objs="${objs:+$objs,}{\"id\":\"linux-arm\",\"goos\":\"linux\",\"goarch\":\"arm64\",\"ext\":\"\"}"
+          fi
+          if [ "$D" = "true" ]; then
+            objs="${objs:+$objs,}{\"id\":\"darwin\",\"goos\":\"darwin\",\"goarch\":\"amd64\",\"ext\":\"\"}"
+          fi
+          echo "matrix=[$objs]" >> "$GITHUB_OUTPUT"
 
   build:
     needs: compute-matrix
