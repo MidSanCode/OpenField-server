@@ -17,7 +17,9 @@ const MaxLevel = 200
 // lifetime experience points.
 //
 // Formula: the threshold for reaching level N is
-//     sum_{k=1}^{N-1} 100 * 1.05^k  =  100 * (1.05^N - 1.05) / 0.05
+//
+//	sum_{k=1}^{N-1} 100 * 1.05^k  =  100 * (1.05^N - 1.05) / 0.05
+//
 // We invert it as level = ceil(log_{1.05}(1 + 0.05*exp/100)) and clamp to
 // [0, MaxLevel]. A user starts at level 0 (no exp).
 func LevelForExp(exp int64) int {

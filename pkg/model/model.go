@@ -131,18 +131,18 @@ type Conversation struct {
 
 // ConversationMember represents a membership of a user in a conversation.
 type ConversationMember struct {
-	ConversationID int64     `json:"conversation_id"`
-	UserID         int64     `json:"user_id"`
-	Role           string    `json:"role"` // owner | admin | member
-	Note           string    `json:"note"` // remark set by the member for the other side (private)
-	GroupNickname  string    `json:"group_nickname"`
+	ConversationID int64  `json:"conversation_id"`
+	UserID         int64  `json:"user_id"`
+	Role           string `json:"role"` // owner | admin | member
+	Note           string `json:"note"` // remark set by the member for the other side (private)
+	GroupNickname  string `json:"group_nickname"`
 	// Title is a label set by group admins/owner that renders next to the
 	// member's nickname in chat (e.g. "VIP", "管理员"). Distinct from
 	// [GroupNickname], which is a self-set nickname for the conversation.
-	Title          string    `json:"title"`
-	Status         string    `json:"status"` // pending | active | declined
-	AddedBy        int64     `json:"added_by"`
-	CreatedAt      time.Time `json:"created_at"`
+	Title     string    `json:"title"`
+	Status    string    `json:"status"` // pending | active | declined
+	AddedBy   int64     `json:"added_by"`
+	CreatedAt time.Time `json:"created_at"`
 	// MutedUntil, when set in the future, silences the member in this group.
 	MutedUntil *time.Time `json:"muted_until,omitempty"`
 	Username   string     `json:"username,omitempty"`
@@ -175,7 +175,7 @@ type ConsentRequest struct {
 	GroupTitle      string     `json:"group_title,omitempty"`
 	// Encrypted indicates the requester asked for an end-to-end encrypted
 	// private chat. Honored when the recipient accepts.
-	Encrypted       bool       `json:"encrypted,omitempty"`
+	Encrypted bool `json:"encrypted,omitempty"`
 }
 
 // Message represents a chat message within a conversation.
