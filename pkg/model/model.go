@@ -24,6 +24,16 @@ type User struct {
 	VerifiedBy        string    `json:"verified_by"`
 	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt         time.Time `json:"updated_at"`
+	// Exp is the user's lifetime accumulated experience points. The display
+	// level is derived from exp on the client; the server only stores the
+	// raw total so a level formula change doesn't need a migration.
+	Exp int64 `json:"exp"`
+	// Level is recomputed from [Exp] and returned alongside it for clients
+	// that don't run the formula locally.
+	Level int `json:"level"`
+	// LastDailyBonusAt tracks when the user last received the daily login
+	// exp grant (used by the server to gate the next grant to once per day).
+	LastDailyBonusAt *time.Time `json:"last_daily_bonus_at,omitempty"`
 	// FollowerCount/FollowingCount are populated on profile reads.
 	FollowerCount  int64 `json:"follower_count,omitempty"`
 	FollowingCount int64 `json:"following_count,omitempty"`
@@ -142,6 +152,10 @@ type ConversationMember struct {
 	// E2EEPublicKey is the member's published X25519 public key for encrypted
 	// group-key envelopes (empty when the member has no key published).
 	E2EEPublicKey string `json:"e2ee_public_key,omitempty"`
+	// NotifyLevel controls how chat events for this conversation reach the
+	// user. "all" = every message, "mentions" = only when explicitly
+	// mentioned or @everyone is used, "off" = mute entirely.
+	NotifyLevel string `json:"notify_level,omitempty"`
 }
 
 // ConsentRequest represents a pending consent request for a private chat or group invite.
@@ -183,6 +197,11 @@ type Message struct {
 	ReplyToName    string       `json:"reply_to_name,omitempty"`
 	ReplyToContent string       `json:"reply_to_content,omitempty"`
 	Attachments    []Attachment `json:"attachments,omitempty"`
+	// Mentions lists the user IDs explicitly @-mentioned in this message,
+	// including the special "everyone" token (-1) when @everyone is used.
+	// Stored server-side so notification logic doesn't have to re-parse the
+	// content on every push.
+	Mentions []int64 `json:"mentions,omitempty"`
 }
 
 // E2EEKeyEnvelope is a group key encrypted to a single member's public key.

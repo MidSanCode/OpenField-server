@@ -18,17 +18,23 @@ func NewMessageRepository() *MessageRepository {
 }
 
 // Create inserts a new message with optional attachments and returns it with sender info.
-func (r *MessageRepository) Create(conversationID, senderID int64, content string, replyToID *int64, attachmentIDs []int64) (*model.Message, error) {
+// [mentions] is the list of explicitly mentioned user IDs, plus -1 when
+// @everyone is used; an empty/nil slice means no mentions.
+func (r *MessageRepository) Create(conversationID, senderID int64, content string, replyToID *int64, attachmentIDs []int64, mentions []int64) (*model.Message, error) {
+	if mentions == nil {
+		mentions = []int64{}
+	}
 	msg := &model.Message{}
 	err := database.DB.QueryRow(
-		`INSERT INTO messages (conversation_id, sender_id, content, reply_to_id)
-		 VALUES ($1, $2, $3, $4)
+		`INSERT INTO messages (conversation_id, sender_id, content, reply_to_id, mentions)
+		 VALUES ($1, $2, $3, $4, $5)
 		 RETURNING id, conversation_id, sender_id, content, reply_to_id, edited_at, deleted_at, created_at`,
-		conversationID, senderID, content, replyToID,
+		conversationID, senderID, content, replyToID, pq.Array(mentions),
 	).Scan(&msg.ID, &msg.ConversationID, &msg.SenderID, &msg.Content, &msg.ReplyToID, &msg.EditedAt, &msg.DeletedAt, &msg.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create message: %w", err)
 	}
+	msg.Mentions = append([]int64(nil), mentions...)
 
 	if len(attachmentIDs) > 0 {
 		for _, attID := range attachmentIDs {
@@ -48,11 +54,16 @@ func (r *MessageRepository) Create(conversationID, senderID int64, content strin
 		return nil, fmt.Errorf("failed to touch conversation: %w", err)
 	}
 
-	msg, err = r.getWithSender(msg.ID)
+	full, err := r.getWithSender(msg.ID)
 	if err != nil {
 		return nil, err
 	}
-	return msg, nil
+	// Preserve the mentions we just inserted even if the SELECT filter
+	// strips them for some reason.
+	if len(full.Mentions) == 0 && len(msg.Mentions) > 0 {
+		full.Mentions = msg.Mentions
+	}
+	return full, nil
 }
 
 // ListByConversation retrieves messages for a conversation (newest last).
@@ -60,7 +71,7 @@ func (r *MessageRepository) ListByConversation(conversationID int64, beforeID in
 	if limit < 1 || limit > 100 {
 		limit = 50
 	}
-	query := `SELECT m.id, m.conversation_id, m.sender_id, m.kind, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at,
+	query := `SELECT m.id, m.conversation_id, m.sender_id, m.kind, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at, m.mentions,
 	                 u.username, u.avatar_url, u.is_verified
 	          FROM messages m
 	          JOIN users u ON m.sender_id = u.id
@@ -82,8 +93,13 @@ func (r *MessageRepository) ListByConversation(conversationID int64, beforeID in
 	var msgIDs []int64
 	for rows.Next() {
 		var m model.Message
-		if err := rows.Scan(&m.ID, &m.ConversationID, &m.SenderID, &m.Kind, &m.Content, &m.ReplyToID, &m.EditedAt, &m.DeletedAt, &m.CreatedAt, &m.SenderName, &m.SenderAvatar, &m.SenderVerified); err != nil {
+		var mentions pq.Int64Array
+		if err := rows.Scan(&m.ID, &m.ConversationID, &m.SenderID, &m.Kind, &m.Content, &m.ReplyToID, &m.EditedAt, &m.DeletedAt, &m.CreatedAt, &mentions, &m.SenderName, &m.SenderAvatar, &m.SenderVerified); err != nil {
 			return nil, fmt.Errorf("failed to scan message: %w", err)
+		}
+		m.Mentions = []int64(mentions)
+		if m.Mentions == nil {
+			m.Mentions = []int64{}
 		}
 		msgs = append(msgs, m)
 		msgIDs = append(msgIDs, m.ID)
@@ -109,16 +125,21 @@ func (r *MessageRepository) ListByConversation(conversationID int64, beforeID in
 
 func (r *MessageRepository) getWithSender(id int64) (*model.Message, error) {
 	msg := &model.Message{}
+	var mentions pq.Int64Array
 	err := database.DB.QueryRow(
-		`SELECT m.id, m.conversation_id, m.sender_id, m.kind, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at,
+		`SELECT m.id, m.conversation_id, m.sender_id, m.kind, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at, m.mentions,
 		        u.username, u.avatar_url, u.is_verified
 		 FROM messages m
 		 JOIN users u ON m.sender_id = u.id
 		 WHERE m.id = $1`,
 		id,
-	).Scan(&msg.ID, &msg.ConversationID, &msg.SenderID, &msg.Kind, &msg.Content, &msg.ReplyToID, &msg.EditedAt, &msg.DeletedAt, &msg.CreatedAt, &msg.SenderName, &msg.SenderAvatar, &msg.SenderVerified)
+	).Scan(&msg.ID, &msg.ConversationID, &msg.SenderID, &msg.Kind, &msg.Content, &msg.ReplyToID, &msg.EditedAt, &msg.DeletedAt, &msg.CreatedAt, &mentions, &msg.SenderName, &msg.SenderAvatar, &msg.SenderVerified)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get message: %w", err)
+	}
+	msg.Mentions = []int64(mentions)
+	if msg.Mentions == nil {
+		msg.Mentions = []int64{}
 	}
 
 	if err := r.populateReplyPreview(msg); err != nil {

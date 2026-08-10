@@ -29,6 +29,7 @@ func RegisterRoutes(r *gin.Engine, convHandler *ConversationHandler, consentHand
 			convs.POST("/:id/invite", convHandler.InviteToGroup)
 			convs.PUT("/:id/note", convHandler.UpdateNote)
 			convs.PUT("/:id/group-nickname", convHandler.UpdateGroupNickname)
+			convs.PUT("/:id/notify-level", convHandler.UpdateNotifyLevel)
 			convs.POST("/:id/read", convHandler.MarkRead)
 			convs.POST("/:id/typing", convHandler.Typing)
 			convs.POST("/:id/leave", convHandler.Leave)

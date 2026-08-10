@@ -88,6 +88,7 @@ func (h *MessageHandler) Send(c *gin.Context) {
 		Content       string  `json:"content" binding:"required"`
 		ReplyToID     *int64  `json:"reply_to_id"`
 		AttachmentIDs []int64 `json:"attachment_ids"`
+		Mentions      []int64 `json:"mentions"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
@@ -104,6 +105,19 @@ func (h *MessageHandler) Send(c *gin.Context) {
 	if len(req.AttachmentIDs) > 9 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "too many attachments (max 9)"})
 		return
+	}
+
+	// @everyone is restricted to group owners and admins. Drop the sentinel
+	// from non-privileged senders and let the client fail loudly.
+	if hasEveryone := containsEveryone(req.Mentions); hasEveryone {
+		actor, err := h.convRepo.GetMember(convID, userID)
+		if err != nil || actor == nil {
+			c.JSON(http.StatusForbidden, gin.H{"error": "you are not a member of this conversation"})
+			return
+		}
+		if actor.Role != "owner" && actor.Role != "admin" {
+			req.Mentions = removeEveryone(req.Mentions)
+		}
 	}
 
 	isMember, err := h.convRepo.IsMember(convID, userID)
@@ -128,7 +142,7 @@ func (h *MessageHandler) Send(c *gin.Context) {
 		return
 	}
 
-	msg, err := h.msgRepo.Create(convID, userID, req.Content, req.ReplyToID, req.AttachmentIDs)
+	msg, err := h.msgRepo.Create(convID, userID, req.Content, req.ReplyToID, req.AttachmentIDs, req.Mentions)
 	if err != nil {
 		logger.Log.Error("failed to send message", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to send message"})
@@ -138,6 +152,29 @@ func (h *MessageHandler) Send(c *gin.Context) {
 	h.publishMessageEvent(c.Request.Context(), events.ChatMessageCreated, convID, msg)
 
 	c.JSON(http.StatusCreated, msg)
+}
+
+// everyoneSentinel is the user id stored in [model.Message.Mentions] to mark
+// an @everyone mention. We use -1 because real user ids are positive.
+const everyoneSentinel = int64(-1)
+
+func containsEveryone(m []int64) bool {
+	for _, id := range m {
+		if id == everyoneSentinel {
+			return true
+		}
+	}
+	return false
+}
+
+func removeEveryone(m []int64) []int64 {
+	out := make([]int64, 0, len(m))
+	for _, id := range m {
+		if id != everyoneSentinel {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // publishMessageEvent notifies all conversation members (via the push service)

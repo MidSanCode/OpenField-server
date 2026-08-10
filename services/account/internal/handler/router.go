@@ -7,9 +7,13 @@ import (
 
 // RegisterRoutes registers all account service routes.
 // Public auth endpoints and protected user endpoints.
-func RegisterRoutes(r *gin.Engine, authHandler *AuthHandler, userHandler *UserHandler, walletHandler *WalletHandler) {
+func RegisterRoutes(r *gin.Engine, authHandler *AuthHandler, userHandler *UserHandler, walletHandler *WalletHandler, capabilitiesHandler *CapabilitiesHandler) {
 	api := r.Group("/api/v1")
 	{
+		// Public capabilities introspection — unauthenticated so the client
+		// can show a compatibility matrix in settings before login.
+		api.GET("/capabilities", capabilitiesHandler.Capabilities)
+
 		auth := api.Group("/auth")
 		{
 			auth.GET("/providers", authHandler.GetProviders)
@@ -30,10 +34,13 @@ func RegisterRoutes(r *gin.Engine, authHandler *AuthHandler, userHandler *UserHa
 			users.POST("/me/avatar", userHandler.UploadAvatar)
 			users.POST("/me/banner", userHandler.UploadBanner)
 			users.GET("/me/permissions", userHandler.GetMyPermissions)
+			users.POST("/me/claim-daily-bonus", userHandler.ClaimDailyBonus)
 			users.GET("/search", userHandler.SearchUsers)
 		}
 		// Public profile lookup (used to view other users' public profiles).
 		api.GET("/users/:id", userHandler.GetUser)
+		// Admin exp adjustment (gateway enforces the user.adjust_exp permission).
+		api.PUT("/users/:id/exp", middleware.GatewayAuthMiddleware(), userHandler.AdjustExp)
 
 		// Follow relationships: mutations require auth; lists are public reads.
 		follow := api.Group("/users/:id")

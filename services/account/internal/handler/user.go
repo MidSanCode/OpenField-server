@@ -21,6 +21,7 @@ type UserHandler struct {
 	attRepo    *repository.AttachmentRepository
 	store      *storage.Store
 	cfg        config.StorageConfig
+	gameCfg    config.GameConfig
 }
 
 // NewUserHandler creates a new UserHandler.
@@ -33,6 +34,12 @@ func NewUserHandler(store *storage.Store, cfg config.StorageConfig) *UserHandler
 		store:      store,
 		cfg:        cfg,
 	}
+}
+
+// SetGameConfig attaches the gameplay config so the handler can run the
+// daily-bonus grant with the right amount and timezone.
+func (h *UserHandler) SetGameConfig(c config.GameConfig) {
+	h.gameCfg = c
 }
 
 // requesterID returns the authenticated user id forwarded by the gateway, or 0
@@ -445,4 +452,57 @@ func (h *UserHandler) ListFollowing(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"users": users, "page": page, "limit": limit})
+}
+
+// ClaimDailyBonus grants the day's experience bonus to the authenticated
+// user. Idempotent: returns {granted: false} when already claimed today. The
+// call is intentionally cheap so the client can fire it once per session.
+func (h *UserHandler) ClaimDailyBonus(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	amount := h.gameCfg.DailyBonusExp
+	if amount <= 0 {
+		amount = 100
+	}
+	loc := h.gameCfg.Location()
+	granted, newExp, err := h.userRepo.GrantDailyBonus(userID, amount, loc)
+	if err != nil {
+		logger.Log.Error("failed to grant daily bonus", "error", err, "user_id", userID)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to grant daily bonus"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"granted": granted,
+		"amount":  amount,
+		"exp":     newExp,
+		"level":   model.LevelForExp(newExp),
+	})
+}
+
+// AdjustExp is an admin-only endpoint to add or subtract experience from a
+// user's account. Requires the user.adjust_exp permission (enforced by the
+// gateway).
+func (h *UserHandler) AdjustExp(c *gin.Context) {
+	userID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user ID"})
+		return
+	}
+	var req struct {
+		Delta int64 `json:"delta"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+	exp, err := h.userRepo.AdjustExp(userID, req.Delta)
+	if err != nil {
+		logger.Log.Error("failed to adjust exp", "error", err, "user_id", userID, "delta", req.Delta)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to adjust exp"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"exp": exp, "level": model.LevelForExp(exp)})
 }

@@ -3,6 +3,7 @@ package repository
 import (
 	"database/sql"
 	"fmt"
+	"time"
 
 	"github.com/lib/pq"
 	"github.com/openfield/server/pkg/database"
@@ -17,14 +18,15 @@ func NewUserRepository() *UserRepository {
 	return &UserRepository{}
 }
 
-const userColumns = "id, username, nickname, email, avatar_url, banner_url, role, password_hash, needs_registration, bio, is_verified, storage_quota, oauth2_provider, oauth2_id, oauth2_username, verified_note, verified_by, e2ee_public_key, created_at, updated_at"
+const userColumns = "id, username, nickname, email, avatar_url, banner_url, role, password_hash, needs_registration, bio, is_verified, storage_quota, oauth2_provider, oauth2_id, oauth2_username, verified_note, verified_by, e2ee_public_key, exp, last_daily_bonus_at, created_at, updated_at"
 
 func scanUser(row interface{ Scan(...any) error }) (*model.User, error) {
 	user := &model.User{}
-	err := row.Scan(&user.ID, &user.Username, &user.Nickname, &user.Email, &user.AvatarURL, &user.BannerURL, &user.Role, &user.PasswordHash, &user.NeedsRegistration, &user.Bio, &user.IsVerified, &user.StorageQuota, &user.OAuth2Provider, &user.OAuth2ID, &user.OAuth2Username, &user.VerifiedNote, &user.VerifiedBy, &user.E2EEPublicKey, &user.CreatedAt, &user.UpdatedAt)
+	err := row.Scan(&user.ID, &user.Username, &user.Nickname, &user.Email, &user.AvatarURL, &user.BannerURL, &user.Role, &user.PasswordHash, &user.NeedsRegistration, &user.Bio, &user.IsVerified, &user.StorageQuota, &user.OAuth2Provider, &user.OAuth2ID, &user.OAuth2Username, &user.VerifiedNote, &user.VerifiedBy, &user.E2EEPublicKey, &user.Exp, &user.LastDailyBonusAt, &user.CreatedAt, &user.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
+	user.Level = model.LevelForExp(user.Exp)
 	return user, nil
 }
 
@@ -138,6 +140,65 @@ func (r *UserRepository) SetE2EEPublicKey(userID int64, publicKey string) error 
 		return fmt.Errorf("failed to set e2ee public key: %w", err)
 	}
 	return nil
+}
+
+// GrantDailyBonus grants [amount] exp to the user and stamps
+// [last_daily_bonus_at] so the caller can check the once-per-day invariant.
+// The bonus resets at the configured [loc] midnight (defaults to UTC).
+// Returns whether the grant actually happened (false when already granted
+// today) and the new total exp.
+func (r *UserRepository) GrantDailyBonus(userID int64, amount int64, loc *time.Location) (bool, int64, error) {
+	if loc == nil {
+		loc = time.UTC
+	}
+	tx, err := database.DB.Begin()
+	if err != nil {
+		return false, 0, err
+	}
+	defer tx.Rollback()
+
+	var lastBonusAt *time.Time
+	var exp int64
+	if err := tx.QueryRow(
+		"SELECT last_daily_bonus_at, exp FROM users WHERE id = $1 FOR UPDATE",
+		userID,
+	).Scan(&lastBonusAt, &exp); err != nil {
+		return false, 0, fmt.Errorf("failed to load user for bonus: %w", err)
+	}
+	if lastBonusAt != nil && isSameUTCDay(*lastBonusAt, time.Now().UTC(), loc) {
+		return false, exp, nil
+	}
+	if _, err := tx.Exec(
+		"UPDATE users SET exp = exp + $2, last_daily_bonus_at = NOW(), updated_at = NOW() WHERE id = $1",
+		userID, amount,
+	); err != nil {
+		return false, 0, fmt.Errorf("failed to grant daily bonus: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return false, 0, err
+	}
+	return true, exp + amount, nil
+}
+
+// AdjustExp is an admin-only manual adjustment of a user's experience points.
+func (r *UserRepository) AdjustExp(userID int64, delta int64) (int64, error) {
+	var exp int64
+	err := database.DB.QueryRow(
+		"UPDATE users SET exp = GREATEST(0, exp + $2), updated_at = NOW() WHERE id = $1 RETURNING exp",
+		userID, delta,
+	).Scan(&exp)
+	if err != nil {
+		return 0, fmt.Errorf("failed to adjust exp: %w", err)
+	}
+	return exp, nil
+}
+
+// isSameUTCDay reports whether two timestamps fall on the same calendar day
+// under [loc]. Used to gate the daily login bonus.
+func isSameUTCDay(a, b time.Time, loc *time.Location) bool {
+	ay, am, ad := a.In(loc).Date()
+	by, bm, bd := b.In(loc).Date()
+	return ay == by && am == bm && ad == bd
 }
 
 // GetUsersByIDs retrieves multiple users by their IDs.

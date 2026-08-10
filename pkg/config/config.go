@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -86,6 +87,16 @@ type ServicesConfig struct {
 	Push    string `yaml:"push"`
 }
 
+// GameConfig holds gameplay / level-system configuration.
+type GameConfig struct {
+	// DailyBonusExp is the amount of exp granted once per server-day on the
+	// user's first authenticated request. Defaults to 100.
+	DailyBonusExp int64 `yaml:"daily_bonus_exp"`
+	// Timezone is the IANA timezone name (e.g. "Asia/Shanghai") the server
+	// uses to compute "calendar day" for the daily bonus. Defaults to UTC.
+	Timezone string `yaml:"timezone"`
+}
+
 // Config holds all configuration for the server.
 type Config struct {
 	Server   ServerConfig   `yaml:"server"`
@@ -95,6 +106,7 @@ type Config struct {
 	JWT      JWTConfig      `yaml:"jwt"`
 	Storage  StorageConfig  `yaml:"storage"`
 	Services ServicesConfig `yaml:"services"`
+	Game     GameConfig     `yaml:"game"`
 }
 
 // Load reads configuration from a YAML file, with environment variable overrides.
@@ -196,6 +208,12 @@ func (c *Config) overrideFromEnv() {
 	if v := os.Getenv("SERVICE_PUSH"); v != "" {
 		c.Services.Push = v
 	}
+	if v := os.Getenv("GAME_DAILY_BONUS_EXP"); v != "" {
+		fmt.Sscanf(v, "%d", &c.Game.DailyBonusExp)
+	}
+	if v := os.Getenv("GAME_TIMEZONE"); v != "" {
+		c.Game.Timezone = v
+	}
 }
 
 // ServicePort returns the listen port for a named internal service.
@@ -245,4 +263,27 @@ func (c *Config) DSN() string {
 // Address returns the server address.
 func (c *Config) Address() string {
 	return ":" + c.Server.Port
+}
+
+// EffectiveDailyBonus returns the configured daily login exp grant, or 100
+// when unset / non-positive so a missing key still gives the documented
+// baseline behavior.
+func (c *Config) EffectiveDailyBonus() int64 {
+	if c.Game.DailyBonusExp <= 0 {
+		return 100
+	}
+	return c.Game.DailyBonusExp
+}
+
+// Location returns the IANA timezone configured for the daily bonus, or UTC
+// when unset / invalid. Errors are swallowed so a typo in the config doesn't
+// crash the service.
+func (g GameConfig) Location() *time.Location {
+	if g.Timezone == "" {
+		return time.UTC
+	}
+	if loc, err := time.LoadLocation(g.Timezone); err == nil {
+		return loc
+	}
+	return time.UTC
 }

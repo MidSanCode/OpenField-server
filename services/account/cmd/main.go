@@ -21,6 +21,11 @@ func main() {
 
 	logger.Init()
 
+	buildVersion := os.Getenv("OPENFIELD_VERSION")
+	if buildVersion == "" {
+		buildVersion = "dev"
+	}
+
 	configPath := os.Getenv("OPENFIELD_CONFIG")
 	if configPath == "" {
 		configPath = "config/config.local.yaml"
@@ -59,7 +64,9 @@ func main() {
 
 	authHandler := handler.NewAuthHandler(authManager, tokenMgr, cfg.OIDC.AppRedirectURL, cfg.JWT.RefreshExpiryDays)
 	userHandler := handler.NewUserHandler(store, cfg.Storage)
+	userHandler.SetGameConfig(cfg.Game)
 	walletHandler := handler.NewWalletHandler()
+	capabilitiesHandler := handler.NewCapabilitiesHandler(buildVersion)
 
 	r := gin.New()
 	r.Use(middleware.Recovery())
@@ -67,7 +74,7 @@ func main() {
 	r.NoRoute(middleware.NotFound())
 	r.NoMethod(middleware.MethodNotAllowed())
 
-	handler.RegisterRoutes(r, authHandler, userHandler, walletHandler)
+	handler.RegisterRoutes(r, authHandler, userHandler, walletHandler, capabilitiesHandler)
 
 	addr := "127.0.0.1:" + cfg.ServicePort("ACCOUNT")
 	logger.Log.Info("account service starting", "address", addr)

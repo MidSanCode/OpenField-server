@@ -347,6 +347,50 @@ func (h *ConversationHandler) UpdateGroupNickname(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "group nickname updated"})
 }
 
+// UpdateNotifyLevel sets the member's chat-notification preference for a
+// conversation (all | mentions | none).
+func (h *ConversationHandler) UpdateNotifyLevel(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	convID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid conversation ID"})
+		return
+	}
+
+	var req struct {
+		Level string `json:"level" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+	switch req.Level {
+	case "all", "mentions", "none":
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid notify level (expected all|mentions|none)"})
+		return
+	}
+
+	isMember, err := h.convRepo.IsMember(convID, userID)
+	if err != nil || !isMember {
+		c.JSON(http.StatusForbidden, gin.H{"error": "you are not a member of this conversation"})
+		return
+	}
+
+	if err := h.convRepo.UpdateNotifyLevel(convID, userID, req.Level); err != nil {
+		logger.Log.Error("failed to update notify level", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update notify level"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "notify level updated"})
+}
+
 // MarkRead marks the conversation as read up to a message ID.
 func (h *ConversationHandler) MarkRead(c *gin.Context) {
 	userID, ok := middleware.GetUserID(c)
