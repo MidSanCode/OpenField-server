@@ -206,7 +206,7 @@ func (h *ConversationHandler) InviteToGroup(c *gin.Context) {
 		return
 	}
 
-	_, err = h.consentRepo.Create("group_invite", userID, req.UserID, &convID, req.Message)
+	_, err = h.consentRepo.Create("group_invite", userID, req.UserID, &convID, req.Message, false)
 	if err != nil {
 		logger.Log.Error("failed to create invite", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to send invite"})
