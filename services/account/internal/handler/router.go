@@ -7,7 +7,7 @@ import (
 
 // RegisterRoutes registers all account service routes.
 // Public auth endpoints and protected user endpoints.
-func RegisterRoutes(r *gin.Engine, authHandler *AuthHandler, userHandler *UserHandler, walletHandler *WalletHandler, capabilitiesHandler *CapabilitiesHandler) {
+func RegisterRoutes(r *gin.Engine, authHandler *AuthHandler, userHandler *UserHandler, walletHandler *WalletHandler, capabilitiesHandler *CapabilitiesHandler, taskHandler *TaskHandler, transferHandler *TransferHandler) {
 	api := r.Group("/api/v1")
 	{
 		// Public capabilities introspection — unauthenticated so the client
@@ -35,6 +35,7 @@ func RegisterRoutes(r *gin.Engine, authHandler *AuthHandler, userHandler *UserHa
 			users.POST("/me/banner", userHandler.UploadBanner)
 			users.GET("/me/permissions", userHandler.GetMyPermissions)
 			users.POST("/me/claim-daily-bonus", userHandler.ClaimDailyBonus)
+			users.PUT("/me/locale", userHandler.UpdateLocale)
 			users.GET("/search", userHandler.SearchUsers)
 		}
 		// Public profile lookup (used to view other users' public profiles).
@@ -57,6 +58,33 @@ func RegisterRoutes(r *gin.Engine, authHandler *AuthHandler, userHandler *UserHa
 		{
 			wallet.GET("", middleware.GatewayAuthMiddleware(), walletHandler.GetMyWallet)
 			wallet.POST("/adjust", middleware.GatewayAuthMiddleware(), walletHandler.AdjustWallet)
+		}
+
+		// Tasks / experience: auth required.
+		tasks := api.Group("/tasks")
+		tasks.Use(middleware.GatewayAuthMiddleware())
+		{
+			tasks.GET("", taskHandler.ListTasks)
+			tasks.POST("/daily-login/claim", taskHandler.ClaimDailyLogin)
+			tasks.POST("/daily-login/makeup", taskHandler.MakeupCheckin)
+			tasks.POST("/:code/claim", taskHandler.ClaimOneTime)
+		}
+
+		// Experience history: auth required.
+		exp := api.Group("/exp")
+		exp.Use(middleware.GatewayAuthMiddleware())
+		{
+			exp.GET("/history", taskHandler.ListExpHistory)
+		}
+
+		// Transfers: auth required; any user may send to any valid user.
+		transfers := api.Group("/transfers")
+		transfers.Use(middleware.GatewayAuthMiddleware())
+		{
+			transfers.GET("", transferHandler.ListTransfers)
+			transfers.POST("", transferHandler.CreateTransfer)
+			transfers.POST("/:id/accept", transferHandler.AcceptTransfer)
+			transfers.POST("/:id/decline", transferHandler.DeclineTransfer)
 		}
 	}
 }

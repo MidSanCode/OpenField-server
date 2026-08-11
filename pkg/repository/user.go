@@ -18,11 +18,11 @@ func NewUserRepository() *UserRepository {
 	return &UserRepository{}
 }
 
-const userColumns = "id, username, nickname, email, avatar_url, banner_url, role, password_hash, needs_registration, bio, is_verified, storage_quota, oauth2_provider, oauth2_id, oauth2_username, verified_note, verified_by, e2ee_public_key, exp, last_daily_bonus_at, created_at, updated_at"
+const userColumns = "id, username, nickname, email, avatar_url, banner_url, role, password_hash, needs_registration, bio, is_verified, storage_quota, oauth2_provider, oauth2_id, oauth2_username, verified_note, verified_by, e2ee_public_key, exp, last_daily_bonus_at, checkin_streak, region, lang, created_at, updated_at"
 
 func scanUser(row interface{ Scan(...any) error }) (*model.User, error) {
 	user := &model.User{}
-	err := row.Scan(&user.ID, &user.Username, &user.Nickname, &user.Email, &user.AvatarURL, &user.BannerURL, &user.Role, &user.PasswordHash, &user.NeedsRegistration, &user.Bio, &user.IsVerified, &user.StorageQuota, &user.OAuth2Provider, &user.OAuth2ID, &user.OAuth2Username, &user.VerifiedNote, &user.VerifiedBy, &user.E2EEPublicKey, &user.Exp, &user.LastDailyBonusAt, &user.CreatedAt, &user.UpdatedAt)
+	err := row.Scan(&user.ID, &user.Username, &user.Nickname, &user.Email, &user.AvatarURL, &user.BannerURL, &user.Role, &user.PasswordHash, &user.NeedsRegistration, &user.Bio, &user.IsVerified, &user.StorageQuota, &user.OAuth2Provider, &user.OAuth2ID, &user.OAuth2Username, &user.VerifiedNote, &user.VerifiedBy, &user.E2EEPublicKey, &user.Exp, &user.LastDailyBonusAt, &user.CheckinStreak, &user.Region, &user.Lang, &user.CreatedAt, &user.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -142,42 +142,19 @@ func (r *UserRepository) SetE2EEPublicKey(userID int64, publicKey string) error 
 	return nil
 }
 
-// GrantDailyBonus grants [amount] exp to the user and stamps
-// [last_daily_bonus_at] so the caller can check the once-per-day invariant.
-// The bonus resets at the configured [loc] midnight (defaults to UTC).
-// Returns whether the grant actually happened (false when already granted
-// today) and the new total exp.
-func (r *UserRepository) GrantDailyBonus(userID int64, amount int64, loc *time.Location) (bool, int64, error) {
-	if loc == nil {
-		loc = time.UTC
-	}
-	tx, err := database.DB.Begin()
+// UpdateLocale updates the user's region preference and server-message display
+// language. The region name drives the client's timezone and language defaults;
+// the lang override is stored so server-pushed notifications can be localized
+// per user.
+func (r *UserRepository) UpdateLocale(userID int64, region, lang string) (*model.User, error) {
+	user, err := scanUser(database.DB.QueryRow(
+		"UPDATE users SET region = $2, lang = $3, updated_at = NOW() WHERE id = $1 RETURNING "+userColumns,
+		userID, region, lang,
+	))
 	if err != nil {
-		return false, 0, err
+		return nil, fmt.Errorf("failed to update locale: %w", err)
 	}
-	defer tx.Rollback()
-
-	var lastBonusAt *time.Time
-	var exp int64
-	if err := tx.QueryRow(
-		"SELECT last_daily_bonus_at, exp FROM users WHERE id = $1 FOR UPDATE",
-		userID,
-	).Scan(&lastBonusAt, &exp); err != nil {
-		return false, 0, fmt.Errorf("failed to load user for bonus: %w", err)
-	}
-	if lastBonusAt != nil && isSameUTCDay(*lastBonusAt, time.Now().UTC(), loc) {
-		return false, exp, nil
-	}
-	if _, err := tx.Exec(
-		"UPDATE users SET exp = exp + $2, last_daily_bonus_at = NOW(), updated_at = NOW() WHERE id = $1",
-		userID, amount,
-	); err != nil {
-		return false, 0, fmt.Errorf("failed to grant daily bonus: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return false, 0, err
-	}
-	return true, exp + amount, nil
+	return user, nil
 }
 
 // AdjustExp is an admin-only manual adjustment of a user's experience points.

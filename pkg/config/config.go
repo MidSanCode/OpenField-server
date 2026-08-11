@@ -92,6 +92,13 @@ type GameConfig struct {
 	// DailyBonusExp is the amount of exp granted once per server-day on the
 	// user's first authenticated request. Defaults to 100.
 	DailyBonusExp int64 `yaml:"daily_bonus_exp"`
+	// DailyBonusCurrency is the amount of currency granted together with the
+	// daily sign-in exp. Defaults to 20.
+	DailyBonusCurrency int64 `yaml:"daily_bonus_currency"`
+	// MakeupCost is the currency price the user pays for a make-up sign-in
+	// (补签). A make-up only renews the streak and grants exp — it never
+	// awards the daily currency. Defaults to 100.
+	MakeupCost int64 `yaml:"makeup_cost"`
 	// Timezone is the IANA timezone name (e.g. "Asia/Shanghai") the server
 	// uses to compute "calendar day" for the daily bonus. Defaults to UTC.
 	Timezone string `yaml:"timezone"`
@@ -211,6 +218,12 @@ func (c *Config) overrideFromEnv() {
 	if v := os.Getenv("GAME_DAILY_BONUS_EXP"); v != "" {
 		fmt.Sscanf(v, "%d", &c.Game.DailyBonusExp)
 	}
+	if v := os.Getenv("GAME_DAILY_BONUS_CURRENCY"); v != "" {
+		fmt.Sscanf(v, "%d", &c.Game.DailyBonusCurrency)
+	}
+	if v := os.Getenv("GAME_MAKEUP_COST"); v != "" {
+		fmt.Sscanf(v, "%d", &c.Game.MakeupCost)
+	}
 	if v := os.Getenv("GAME_TIMEZONE"); v != "" {
 		c.Game.Timezone = v
 	}
@@ -268,11 +281,29 @@ func (c *Config) Address() string {
 // EffectiveDailyBonus returns the configured daily login exp grant, or 100
 // when unset / non-positive so a missing key still gives the documented
 // baseline behavior.
-func (c *Config) EffectiveDailyBonus() int64 {
-	if c.Game.DailyBonusExp <= 0 {
+func (g GameConfig) EffectiveDailyBonus() int64 {
+	if g.DailyBonusExp <= 0 {
 		return 100
 	}
-	return c.Game.DailyBonusExp
+	return g.DailyBonusExp
+}
+
+// EffectiveDailyCurrency returns the configured daily sign-in currency grant,
+// or 20 when unset / non-positive.
+func (g GameConfig) EffectiveDailyCurrency() int64 {
+	if g.DailyBonusCurrency <= 0 {
+		return 20
+	}
+	return g.DailyBonusCurrency
+}
+
+// EffectiveMakeupCost returns the configured make-up sign-in price, or 100
+// when unset / non-positive.
+func (g GameConfig) EffectiveMakeupCost() int64 {
+	if g.MakeupCost <= 0 {
+		return 100
+	}
+	return g.MakeupCost
 }
 
 // Location returns the IANA timezone configured for the daily bonus, or UTC

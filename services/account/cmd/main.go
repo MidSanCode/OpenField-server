@@ -4,12 +4,14 @@ import (
 	"flag"
 	"log"
 	"os"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/openfield/server/pkg/config"
 	"github.com/openfield/server/pkg/database"
 	"github.com/openfield/server/pkg/logger"
 	"github.com/openfield/server/pkg/middleware"
+	"github.com/openfield/server/pkg/repository"
 	"github.com/openfield/server/pkg/storage"
 	"github.com/openfield/server/services/account/internal/auth"
 	"github.com/openfield/server/services/account/internal/handler"
@@ -67,6 +69,12 @@ func main() {
 	userHandler.SetGameConfig(cfg.Game)
 	walletHandler := handler.NewWalletHandler()
 	capabilitiesHandler := handler.NewCapabilitiesHandler(buildVersion)
+	taskHandler := handler.NewTaskHandler()
+	taskHandler.SetGameConfig(cfg.Game)
+	transferHandler := handler.NewTransferHandler()
+
+	// Background sweeper: refund pending transfers that are 24h unanswered.
+	go startTransferSweeper()
 
 	r := gin.New()
 	r.Use(middleware.Recovery())
@@ -74,11 +82,30 @@ func main() {
 	r.NoRoute(middleware.NotFound())
 	r.NoMethod(middleware.MethodNotAllowed())
 
-	handler.RegisterRoutes(r, authHandler, userHandler, walletHandler, capabilitiesHandler)
+	handler.RegisterRoutes(r, authHandler, userHandler, walletHandler, capabilitiesHandler, taskHandler, transferHandler)
 
 	addr := "127.0.0.1:" + cfg.ServicePort("ACCOUNT")
 	logger.Log.Info("account service starting", "address", addr)
 	if err := r.Run(addr); err != nil {
 		log.Fatalf("failed to start account service: %v", err)
+	}
+}
+
+// startTransferSweeper periodically refunds pending transfers that the
+// recipient left unanswered past the 24-hour window.
+func startTransferSweeper() {
+	ticker := time.NewTicker(30 * time.Minute)
+	defer ticker.Stop()
+
+	repo := repository.NewTransferRepository()
+	for range ticker.C {
+		refunded, err := repo.RefundExpired(time.Now())
+		if err != nil {
+			logger.Log.Error("failed to sweep expired transfers", "error", err)
+			continue
+		}
+		if refunded > 0 {
+			logger.Log.Info("refunded expired transfers", "count", refunded)
+		}
 	}
 }

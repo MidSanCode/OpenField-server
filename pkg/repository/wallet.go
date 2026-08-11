@@ -13,6 +13,52 @@ import (
 // zero. Zero balance is always allowed; negative balances are rejected.
 var ErrInsufficientBalance = errors.New("insufficient balance")
 
+// adjustBalanceTx applies a signed balance delta within an existing transaction,
+// recording a wallet transaction row. It is shared by AdjustBalance and other
+// flows (sign-in make-up, transfers) that need atomic wallet writes.
+type txRunner interface {
+	QueryRow(query string, args ...interface{}) *sql.Row
+	Exec(query string, args ...interface{}) (sql.Result, error)
+}
+
+// adjustBalanceTx runs against the caller's transaction and uses the plain
+// *sql.Tx-compatible interface.
+func adjustBalanceTx(tx txRunner, userID, amount, operatorID int64, txType, description string) error {
+	if _, err := tx.Exec(
+		`INSERT INTO wallets (user_id, balance) VALUES ($1, 0) ON CONFLICT (user_id) DO NOTHING`,
+		userID,
+	); err != nil {
+		return fmt.Errorf("failed to ensure wallet: %w", err)
+	}
+
+	var balance int64
+	err := tx.QueryRow(
+		"SELECT balance FROM wallets WHERE user_id = $1 FOR UPDATE",
+		userID,
+	).Scan(&balance)
+	if err != nil {
+		return fmt.Errorf("failed to lock wallet: %w", err)
+	}
+	newBalance := balance + amount
+	if newBalance < 0 {
+		return ErrInsufficientBalance
+	}
+	if _, err := tx.Exec(
+		"UPDATE wallets SET balance = $2, updated_at = NOW() WHERE user_id = $1",
+		userID, newBalance,
+	); err != nil {
+		return fmt.Errorf("failed to update balance: %w", err)
+	}
+	if _, err := tx.Exec(
+		`INSERT INTO wallet_transactions (user_id, amount, balance_after, type, description, operator_id)
+		 VALUES ($1, $2, $3, $4, $5, $6)`,
+		userID, amount, newBalance, txType, description, operatorID,
+	); err != nil {
+		return fmt.Errorf("failed to insert wallet transaction: %w", err)
+	}
+	return nil
+}
+
 // WalletRepository handles user wallet balances and transactions.
 type WalletRepository struct{}
 

@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/openfield/server/pkg/config"
@@ -19,6 +20,7 @@ type UserHandler struct {
 	followRepo *repository.FollowRepository
 	permRepo   *repository.PermissionRepository
 	attRepo    *repository.AttachmentRepository
+	taskRepo   *repository.TaskRepository
 	store      *storage.Store
 	cfg        config.StorageConfig
 	gameCfg    config.GameConfig
@@ -31,6 +33,7 @@ func NewUserHandler(store *storage.Store, cfg config.StorageConfig) *UserHandler
 		followRepo: repository.NewFollowRepository(),
 		permRepo:   repository.NewPermissionRepository(),
 		attRepo:    repository.NewAttachmentRepository(),
+		taskRepo:   repository.NewTaskRepository(),
 		store:      store,
 		cfg:        cfg,
 	}
@@ -454,32 +457,63 @@ func (h *UserHandler) ListFollowing(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"users": users, "page": page, "limit": limit})
 }
 
-// ClaimDailyBonus grants the day's experience bonus to the authenticated
-// user. Idempotent: returns {granted: false} when already claimed today. The
-// call is intentionally cheap so the client can fire it once per session.
+// ClaimDailyBonus grants the day's experience + currency bonus to the
+// authenticated user and updates the consecutive sign-in streak. Idempotent:
+// returns {granted: false} when already claimed today. Delegates to the shared
+// check-in logic so the daily task, exp history and wallet are all consistent.
 func (h *UserHandler) ClaimDailyBonus(c *gin.Context) {
 	userID, ok := middleware.GetUserID(c)
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
-	amount := h.gameCfg.DailyBonusExp
-	if amount <= 0 {
-		amount = 100
-	}
 	loc := h.gameCfg.Location()
-	granted, newExp, err := h.userRepo.GrantDailyBonus(userID, amount, loc)
+	expAmt := h.gameCfg.EffectiveDailyBonus()
+	curAmt := h.gameCfg.EffectiveDailyCurrency()
+	granted, streak, err := h.taskRepo.Checkin(userID, expAmt, curAmt, 0, false, loc, time.Now())
 	if err != nil {
 		logger.Log.Error("failed to grant daily bonus", "error", err, "user_id", userID)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to grant daily bonus"})
 		return
 	}
+	newExp, _ := h.userRepo.GetByID(userID)
+	if newExp == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load user"})
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{
-		"granted": granted,
-		"amount":  amount,
-		"exp":     newExp,
-		"level":   model.LevelForExp(newExp),
+		"granted":  granted,
+		"amount":   expAmt,
+		"currency": curAmt,
+		"exp":      newExp.Exp,
+		"level":    model.LevelForExp(newExp.Exp),
+		"streak":   streak,
 	})
+}
+
+// UpdateLocale stores the user's region preference and display language for
+// server-pushed notifications.
+func (h *UserHandler) UpdateLocale(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	var req struct {
+		Region string `json:"region"`
+		Lang   string `json:"lang"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+	user, err := h.userRepo.UpdateLocale(userID, req.Region, req.Lang)
+	if err != nil {
+		logger.Log.Error("failed to update locale", "error", err, "user_id", userID)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update locale"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"region": user.Region, "lang": user.Lang})
 }
 
 // AdjustExp is an admin-only endpoint to add or subtract experience from a
@@ -493,6 +527,8 @@ func (h *UserHandler) AdjustExp(c *gin.Context) {
 	}
 	var req struct {
 		Delta int64 `json:"delta"`
+		// Description is an optional note recorded in the exp history.
+		Description string `json:"description"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
@@ -503,6 +539,16 @@ func (h *UserHandler) AdjustExp(c *gin.Context) {
 		logger.Log.Error("failed to adjust exp", "error", err, "user_id", userID, "delta", req.Delta)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to adjust exp"})
 		return
+	}
+	if req.Delta != 0 {
+		desc := req.Description
+		if desc == "" {
+			desc = "管理员调整"
+		}
+		expRepo := repository.NewExpRepository()
+		if err := expRepo.Add(userID, req.Delta, model.ExpReasonAdjust, desc); err != nil {
+			logger.Log.Warn("failed to record exp history", "error", err, "user_id", userID)
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{"exp": exp, "level": model.LevelForExp(exp)})
 }

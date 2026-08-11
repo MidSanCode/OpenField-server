@@ -145,6 +145,7 @@ func main() {
 		{http.MethodPost, "/api/v1/users/me/avatar", cfg.Services.Account, authPermission, "account.avatar.edit"},
 		{http.MethodPost, "/api/v1/users/me/banner", cfg.Services.Account, authPermission, "account.banner.edit"},
 		{http.MethodPost, "/api/v1/users/me/claim-daily-bonus", cfg.Services.Account, authRequired, ""},
+		{http.MethodPut, "/api/v1/users/me/locale", cfg.Services.Account, authRequired, ""},
 		{http.MethodGet, "/api/v1/users/search", cfg.Services.Account, authRequired, ""},
 		{http.MethodGet, "/api/v1/users/:user_id", cfg.Services.Account, authPublic, ""},
 		{http.MethodPut, "/api/v1/users/:user_id/exp", cfg.Services.Account, authPermission, "user.adjust_exp"},
@@ -183,6 +184,17 @@ func main() {
 		// ---- wallet ----
 		{http.MethodGet, "/api/v1/wallet", cfg.Services.Account, authPermission, "wallet.view"},
 		{http.MethodPost, "/api/v1/wallet/adjust", cfg.Services.Account, authPermission, "wallet.manage"},
+
+		// ---- tasks / experience / transfers ----
+		{http.MethodGet, "/api/v1/tasks", cfg.Services.Account, authRequired, ""},
+		{http.MethodPost, "/api/v1/tasks/daily-login/claim", cfg.Services.Account, authRequired, ""},
+		{http.MethodPost, "/api/v1/tasks/daily-login/makeup", cfg.Services.Account, authRequired, ""},
+		{http.MethodPost, "/api/v1/tasks/:code/claim", cfg.Services.Account, authRequired, ""},
+		{http.MethodGet, "/api/v1/exp/history", cfg.Services.Account, authRequired, ""},
+		{http.MethodGet, "/api/v1/transfers", cfg.Services.Account, authRequired, ""},
+		{http.MethodPost, "/api/v1/transfers", cfg.Services.Account, authRequired, ""},
+		{http.MethodPost, "/api/v1/transfers/:id/accept", cfg.Services.Account, authRequired, ""},
+		{http.MethodPost, "/api/v1/transfers/:id/decline", cfg.Services.Account, authRequired, ""},
 
 		// ---- chat ----
 		{http.MethodGet, "/api/v1/consent-requests", cfg.Services.Chat, authPermission, "chat.request.approve"},

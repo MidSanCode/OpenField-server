@@ -44,6 +44,15 @@ type User struct {
 	// E2EEPublicKey is the X25519 public key this user publishes for
 	// end-to-end-encrypted conversations (empty when not set).
 	E2EEPublicKey string `json:"e2ee_public_key,omitempty"`
+	// CheckinStreak is the user's current consecutive daily-sign-in streak.
+	CheckinStreak int64 `json:"checkin_streak,omitempty"`
+	// Region is the user's locale region name (e.g. "中国"), used to derive
+	// the timezone for day boundaries and the display language for server
+	// notifications. Empty string means the server defaults apply.
+	Region string `json:"region,omitempty"`
+	// Lang is the display language override for server messages, derived from
+	// the region when not set explicitly.
+	Lang string `json:"lang,omitempty"`
 }
 
 // Post represents a text post with optional attachments.

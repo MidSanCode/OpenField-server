@@ -28,7 +28,63 @@ type migration struct {
 // baseline. The list is append-only: never edit or renumber an existing entry,
 // always add a new higher-version entry. Because each step is recorded in
 // schema_migrations and only runs once, future steps may be non-idempotent.
-var versionedMigrations = []migration{}
+var versionedMigrations = []migration{
+	{
+		version: 2,
+		name:    "tasks-exp-history-transfers",
+		sql: `
+			ALTER TABLE users ADD COLUMN IF NOT EXISTS checkin_streak BIGINT NOT NULL DEFAULT 0;
+			ALTER TABLE users ADD COLUMN IF NOT EXISTS region VARCHAR(32) NOT NULL DEFAULT '';
+			ALTER TABLE users ADD COLUMN IF NOT EXISTS lang VARCHAR(8) NOT NULL DEFAULT '';
+
+			CREATE TABLE IF NOT EXISTS exp_history (
+				id BIGSERIAL PRIMARY KEY,
+				user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+				amount BIGINT NOT NULL,
+				reason VARCHAR(64) NOT NULL,
+				description TEXT NOT NULL DEFAULT '',
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			);
+			CREATE INDEX IF NOT EXISTS idx_exp_history_user ON exp_history(user_id, id DESC);
+
+			CREATE TABLE IF NOT EXISTS tasks (
+				id BIGSERIAL PRIMARY KEY,
+				code VARCHAR(64) NOT NULL UNIQUE,
+				kind VARCHAR(16) NOT NULL,
+				name VARCHAR(255) NOT NULL,
+				description TEXT NOT NULL DEFAULT '',
+				reward_exp BIGINT NOT NULL DEFAULT 0,
+				reward_currency BIGINT NOT NULL DEFAULT 0,
+				target INT NOT NULL DEFAULT 0,
+				sort INT NOT NULL DEFAULT 0
+			);
+
+			CREATE TABLE IF NOT EXISTS task_completions (
+				id BIGSERIAL PRIMARY KEY,
+				user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+				task_id BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+				cycle_key VARCHAR(64) NOT NULL DEFAULT '',
+				completed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+				UNIQUE (user_id, task_id, cycle_key)
+			);
+			CREATE INDEX IF NOT EXISTS idx_task_completions_user ON task_completions(user_id, task_id);
+
+			CREATE TABLE IF NOT EXISTS transfers (
+				id BIGSERIAL PRIMARY KEY,
+				sender_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+				recipient_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+				amount BIGINT NOT NULL,
+				status VARCHAR(16) NOT NULL DEFAULT 'pending',
+				note TEXT NOT NULL DEFAULT '',
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+				decided_at TIMESTAMPTZ,
+				refunded_at TIMESTAMPTZ
+			);
+			CREATE INDEX IF NOT EXISTS idx_transfers_recipient ON transfers(recipient_id, status, id DESC);
+			CREATE INDEX IF NOT EXISTS idx_transfers_sender ON transfers(sender_id, id DESC);
+		`,
+	},
+}
 
 // latestMigrationVersion returns the newest schema version the code knows
 // about. The legacy baseline is always version 1.
@@ -331,6 +387,9 @@ func RunMigrations() error {
 	if err := seedDefaultGroup(); err != nil {
 		return err
 	}
+	if err := seedTasks(); err != nil {
+		return err
+	}
 
 	logger.Log.Info("database migrations completed", "version", latest)
 	return nil
@@ -557,4 +616,94 @@ func createDefaultGroup() (int64, error) {
 		return 0, fmt.Errorf("failed to seed default group: %w", err)
 	}
 	return groupID, nil
+}
+
+// seedTask is one built-in task definition written into the tasks table.
+type seedTask struct {
+	code, kind, name, description string
+	rewardExp, rewardCurrency     int64
+	target, sort                  int
+}
+
+// taskSeeds is the built-in task catalog: one-time achievements (once) and a
+// repeatable sign-in streak task (streak) whose target is the streak length.
+// Seeding is upsert-by-code so operators may tweak entries without duplicating
+// rows, and new codes are added to existing installs on the next migration run.
+var taskSeeds = []seedTask{
+	{
+		code: "daily_login", kind: "streak", name: "每日签到",
+		description: "每日登录签到，连续签到可累积天数，连续 7 天奖励更多经验与金币",
+		rewardExp:   10, rewardCurrency: 5, target: 1, sort: 10,
+	},
+	{
+		code: "login_3", kind: "streak", name: "连续签到 3 天",
+		description: "累计连续签到达到 3 天",
+		rewardExp:   30, rewardCurrency: 20, target: 3, sort: 20,
+	},
+	{
+		code: "login_7", kind: "streak", name: "连续签到 7 天",
+		description: "累计连续签到达到 7 天",
+		rewardExp:   120, rewardCurrency: 60, target: 7, sort: 21,
+	},
+	{
+		code: "login_30", kind: "streak", name: "连续签到 30 天",
+		description: "累计连续签到达到 30 天",
+		rewardExp:   600, rewardCurrency: 300, target: 30, sort: 22,
+	},
+	{
+		code: "first_post", kind: "once", name: "发布第一篇动态",
+		description: "发布你的第一篇文字动态",
+		rewardExp:   30, rewardCurrency: 10, target: 1, sort: 100,
+	},
+	{
+		code: "first_reply", kind: "once", name: "发表第一条回复",
+		description: "在任意动态下发表第一条回复",
+		rewardExp:   20, rewardCurrency: 10, target: 1, sort: 101,
+	},
+	{
+		code: "first_follow", kind: "once", name: "关注第一位用户",
+		description: "关注任意一位用户",
+		rewardExp:   20, rewardCurrency: 10, target: 1, sort: 102,
+	},
+	{
+		code: "first_upload", kind: "once", name: "上传第一个文件",
+		description: "上传一张图片或一个文件到你的动态",
+		rewardExp:   30, rewardCurrency: 20, target: 1, sort: 103,
+	},
+	{
+		code: "first_chat", kind: "once", name: "发起第一条私聊",
+		description: "给任意用户发起一条私聊消息",
+		rewardExp:   30, rewardCurrency: 20, target: 1, sort: 104,
+	},
+	{
+		code: "follow_10", kind: "once", name: "关注 10 位用户",
+		description: "累计关注 10 位用户",
+		rewardExp:   100, rewardCurrency: 50, target: 10, sort: 105,
+	},
+	{
+		code: "posts_10", kind: "once", name: "发布 10 篇动态",
+		description: "累计发布 10 篇动态",
+		rewardExp:   150, rewardCurrency: 80, target: 10, sort: 106,
+	},
+}
+
+func seedTasks() error {
+	for _, t := range taskSeeds {
+		if _, err := DB.Exec(
+			`INSERT INTO tasks (code, kind, name, description, reward_exp, reward_currency, target, sort)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			 ON CONFLICT (code) DO UPDATE SET
+			   kind = EXCLUDED.kind,
+			   name = EXCLUDED.name,
+			   description = EXCLUDED.description,
+			   reward_exp = EXCLUDED.reward_exp,
+			   reward_currency = EXCLUDED.reward_currency,
+			   target = EXCLUDED.target,
+			   sort = EXCLUDED.sort`,
+			t.code, t.kind, t.name, t.description, t.rewardExp, t.rewardCurrency, t.target, t.sort,
+		); err != nil {
+			return fmt.Errorf("failed to seed task %s: %w", t.code, err)
+		}
+	}
+	return nil
 }
