@@ -2,6 +2,7 @@ package repository
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 
 	"github.com/lib/pq"
@@ -17,6 +18,22 @@ func NewMessageRepository() *MessageRepository {
 	return &MessageRepository{}
 }
 
+// parseMentions decodes the JSONB mentions column (a JSON array of user ids)
+// into a []int64. Empty/missing data yields an empty, non-nil slice.
+func parseMentions(data []byte) ([]int64, error) {
+	if len(data) == 0 {
+		return []int64{}, nil
+	}
+	var mentions []int64
+	if err := json.Unmarshal(data, &mentions); err != nil {
+		return nil, err
+	}
+	if mentions == nil {
+		mentions = []int64{}
+	}
+	return mentions, nil
+}
+
 // Create inserts a new message with optional attachments and returns it with sender info.
 // [mentions] is the list of explicitly mentioned user IDs, plus -1 when
 // @everyone is used; an empty/nil slice means no mentions.
@@ -24,14 +41,20 @@ func (r *MessageRepository) Create(conversationID, senderID int64, content strin
 	if mentions == nil {
 		mentions = []int64{}
 	}
-	msg := &model.Message{}
-	err := database.DB.QueryRow(
-		`INSERT INTO messages (conversation_id, sender_id, content, reply_to_id, mentions)
-		 VALUES ($1, $2, $3, $4, $5)
-		 RETURNING id, conversation_id, sender_id, content, reply_to_id, edited_at, deleted_at, created_at`,
-		conversationID, senderID, content, replyToID, pq.Array(mentions),
-	).Scan(&msg.ID, &msg.ConversationID, &msg.SenderID, &msg.Content, &msg.ReplyToID, &msg.EditedAt, &msg.DeletedAt, &msg.CreatedAt)
+	// The mentions column is JSONB. Store it as a JSON array of user ids so it
+	// round-trips with the JSON decoder below (pq.Array/pq.Int64Array expect a
+	// Postgres "{...}" literal, which does not match the stored JSON).
+	mentionsJSON, err := json.Marshal(mentions)
 	if err != nil {
+		return nil, fmt.Errorf("failed to marshal mentions: %w", err)
+	}
+	msg := &model.Message{}
+	if err := database.DB.QueryRow(
+		`INSERT INTO messages (conversation_id, sender_id, content, reply_to_id, mentions)
+		 VALUES ($1, $2, $3, $4, $5::jsonb)
+		 RETURNING id, conversation_id, sender_id, content, reply_to_id, edited_at, deleted_at, created_at`,
+		conversationID, senderID, content, replyToID, string(mentionsJSON),
+	).Scan(&msg.ID, &msg.ConversationID, &msg.SenderID, &msg.Content, &msg.ReplyToID, &msg.EditedAt, &msg.DeletedAt, &msg.CreatedAt); err != nil {
 		return nil, fmt.Errorf("failed to create message: %w", err)
 	}
 	msg.Mentions = append([]int64(nil), mentions...)
@@ -93,13 +116,13 @@ func (r *MessageRepository) ListByConversation(conversationID int64, beforeID in
 	var msgIDs []int64
 	for rows.Next() {
 		var m model.Message
-		var mentions pq.Int64Array
-		if err := rows.Scan(&m.ID, &m.ConversationID, &m.SenderID, &m.Kind, &m.Content, &m.ReplyToID, &m.EditedAt, &m.DeletedAt, &m.CreatedAt, &mentions, &m.SenderName, &m.SenderAvatar, &m.SenderVerified); err != nil {
+		var mentionsData []byte
+		if err := rows.Scan(&m.ID, &m.ConversationID, &m.SenderID, &m.Kind, &m.Content, &m.ReplyToID, &m.EditedAt, &m.DeletedAt, &m.CreatedAt, &mentionsData, &m.SenderName, &m.SenderAvatar, &m.SenderVerified); err != nil {
 			return nil, fmt.Errorf("failed to scan message: %w", err)
 		}
-		m.Mentions = []int64(mentions)
-		if m.Mentions == nil {
-			m.Mentions = []int64{}
+		m.Mentions, err = parseMentions(mentionsData)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse message mentions: %w", err)
 		}
 		msgs = append(msgs, m)
 		msgIDs = append(msgIDs, m.ID)
@@ -125,7 +148,7 @@ func (r *MessageRepository) ListByConversation(conversationID int64, beforeID in
 
 func (r *MessageRepository) getWithSender(id int64) (*model.Message, error) {
 	msg := &model.Message{}
-	var mentions pq.Int64Array
+	var mentionsData []byte
 	err := database.DB.QueryRow(
 		`SELECT m.id, m.conversation_id, m.sender_id, m.kind, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at, m.mentions,
 		        u.username, u.avatar_url, u.is_verified
@@ -133,13 +156,13 @@ func (r *MessageRepository) getWithSender(id int64) (*model.Message, error) {
 		 JOIN users u ON m.sender_id = u.id
 		 WHERE m.id = $1`,
 		id,
-	).Scan(&msg.ID, &msg.ConversationID, &msg.SenderID, &msg.Kind, &msg.Content, &msg.ReplyToID, &msg.EditedAt, &msg.DeletedAt, &msg.CreatedAt, &mentions, &msg.SenderName, &msg.SenderAvatar, &msg.SenderVerified)
+	).Scan(&msg.ID, &msg.ConversationID, &msg.SenderID, &msg.Kind, &msg.Content, &msg.ReplyToID, &msg.EditedAt, &msg.DeletedAt, &msg.CreatedAt, &mentionsData, &msg.SenderName, &msg.SenderAvatar, &msg.SenderVerified)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get message: %w", err)
 	}
-	msg.Mentions = []int64(mentions)
-	if msg.Mentions == nil {
-		msg.Mentions = []int64{}
+	msg.Mentions, err = parseMentions(mentionsData)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse message mentions: %w", err)
 	}
 
 	if err := r.populateReplyPreview(msg); err != nil {
