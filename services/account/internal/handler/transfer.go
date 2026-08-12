@@ -10,6 +10,7 @@ import (
 	"github.com/openfield/server/pkg/middleware"
 	"github.com/openfield/server/pkg/model"
 	"github.com/openfield/server/pkg/repository"
+	"github.com/openfield/server/pkg/security"
 )
 
 // TransferHandler handles user-to-user currency transfers.
@@ -39,6 +40,7 @@ func (h *TransferHandler) CreateTransfer(c *gin.Context) {
 		Recipient int64  `json:"recipient_id" binding:"required"`
 		Amount    int64  `json:"amount" binding:"required"`
 		Note      string `json:"note"`
+		Pin       string `json:"pin"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
@@ -46,6 +48,23 @@ func (h *TransferHandler) CreateTransfer(c *gin.Context) {
 	}
 	if req.Amount <= 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "amount must be positive"})
+		return
+	}
+
+	// Payment PIN authorizes outgoing transfers. A user without a PIN must set
+	// one first (the client shows the set-up prompt on the first payment).
+	pinHash, err := h.userRepo.GetPinHash(userID)
+	if err != nil {
+		logger.Log.Error("failed to load sender pin", "error", err, "user_id", userID)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load payment pin"})
+		return
+	}
+	if pinHash == "" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "payment pin not set"})
+		return
+	}
+	if !security.VerifyPin(req.Pin, pinHash) {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid payment pin"})
 		return
 	}
 

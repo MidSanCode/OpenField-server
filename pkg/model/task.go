@@ -65,6 +65,19 @@ type ExpEntry struct {
 	CreatedAt   time.Time `json:"created_at"`
 }
 
+// CheckinCalendar describes the days a user has signed in, from their
+// registration date through the current server day, plus the make-up price the
+// client shows beside each missed date.
+type CheckinCalendar struct {
+	// RegisteredAt is the user's account creation date (date part, in the
+	// configured timezone). Days before this are not shown / cannot be made up.
+	RegisteredAt time.Time `json:"registered_at"`
+	// Today is the current server day.
+	Today time.Time `json:"today"`
+	// Signed holds the signed-in dates ("YYYY-MM-DD") leading up to Today.
+	Signed []string `json:"signed"`
+}
+
 // TransferStatus is the lifecycle state of a user-to-user transfer.
 type TransferStatus string
 

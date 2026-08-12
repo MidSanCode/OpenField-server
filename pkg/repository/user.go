@@ -18,15 +18,16 @@ func NewUserRepository() *UserRepository {
 	return &UserRepository{}
 }
 
-const userColumns = "id, username, nickname, email, avatar_url, banner_url, role, password_hash, needs_registration, bio, is_verified, storage_quota, oauth2_provider, oauth2_id, oauth2_username, verified_note, verified_by, e2ee_public_key, exp, last_daily_bonus_at, checkin_streak, region, lang, created_at, updated_at"
+const userColumns = "id, username, nickname, email, avatar_url, banner_url, role, password_hash, needs_registration, bio, is_verified, storage_quota, oauth2_provider, oauth2_id, oauth2_username, verified_note, verified_by, e2ee_public_key, exp, last_daily_bonus_at, checkin_streak, pin_hash, region, lang, created_at, updated_at"
 
 func scanUser(row interface{ Scan(...any) error }) (*model.User, error) {
 	user := &model.User{}
-	err := row.Scan(&user.ID, &user.Username, &user.Nickname, &user.Email, &user.AvatarURL, &user.BannerURL, &user.Role, &user.PasswordHash, &user.NeedsRegistration, &user.Bio, &user.IsVerified, &user.StorageQuota, &user.OAuth2Provider, &user.OAuth2ID, &user.OAuth2Username, &user.VerifiedNote, &user.VerifiedBy, &user.E2EEPublicKey, &user.Exp, &user.LastDailyBonusAt, &user.CheckinStreak, &user.Region, &user.Lang, &user.CreatedAt, &user.UpdatedAt)
+	err := row.Scan(&user.ID, &user.Username, &user.Nickname, &user.Email, &user.AvatarURL, &user.BannerURL, &user.Role, &user.PasswordHash, &user.NeedsRegistration, &user.Bio, &user.IsVerified, &user.StorageQuota, &user.OAuth2Provider, &user.OAuth2ID, &user.OAuth2Username, &user.VerifiedNote, &user.VerifiedBy, &user.E2EEPublicKey, &user.Exp, &user.LastDailyBonusAt, &user.CheckinStreak, &user.PinHash, &user.Region, &user.Lang, &user.CreatedAt, &user.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
 	user.Level = model.LevelForExp(user.Exp)
+	user.HasPin = user.PinHash != ""
 	return user, nil
 }
 
@@ -168,6 +169,31 @@ func (r *UserRepository) AdjustExp(userID int64, delta int64) (int64, error) {
 		return 0, fmt.Errorf("failed to adjust exp: %w", err)
 	}
 	return exp, nil
+}
+
+// GetPinHash returns the bcrypt hash of the user's payment PIN ("" when unset).
+func (r *UserRepository) GetPinHash(userID int64) (string, error) {
+	var hash string
+	if err := database.DB.QueryRow(
+		"SELECT COALESCE(pin_hash, '') FROM users WHERE id = $1", userID,
+	).Scan(&hash); err != nil {
+		if err == sql.ErrNoRows {
+			return "", ErrNotFound
+		}
+		return "", fmt.Errorf("failed to get pin hash: %w", err)
+	}
+	return hash, nil
+}
+
+// SetPinHash stores the bcrypt hash of the user's payment PIN.
+func (r *UserRepository) SetPinHash(userID int64, hash string) error {
+	if _, err := database.DB.Exec(
+		"UPDATE users SET pin_hash = $2, updated_at = NOW() WHERE id = $1",
+		userID, hash,
+	); err != nil {
+		return fmt.Errorf("failed to set pin hash: %w", err)
+	}
+	return nil
 }
 
 // isSameUTCDay reports whether two timestamps fall on the same calendar day

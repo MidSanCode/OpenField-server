@@ -84,6 +84,13 @@ var versionedMigrations = []migration{
 			CREATE INDEX IF NOT EXISTS idx_transfers_sender ON transfers(sender_id, id DESC);
 		`,
 	},
+	{
+		version: 3,
+		name:    "pin-hash",
+		sql: `
+			ALTER TABLE users ADD COLUMN IF NOT EXISTS pin_hash VARCHAR(255) NOT NULL DEFAULT '';
+		`,
+	},
 }
 
 // latestMigrationVersion returns the newest schema version the code knows

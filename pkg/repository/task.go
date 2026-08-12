@@ -21,6 +21,16 @@ var ErrNotEligible = errors.New("task not eligible")
 // is too far in the past to sensibly renew.
 var ErrMakeupGapTooLarge = errors.New("makeup gap too large")
 
+// ErrMakeupToday reports trying to make up today (it must be claimed directly).
+var ErrMakeupToday = errors.New("today must be claimed via the normal sign-in")
+
+// ErrMakeupFuture reports trying to make up a date after today.
+var ErrMakeupFuture = errors.New("cannot make up a future date")
+
+// ErrMakeupBeforeRegistration reports trying to make up a date that precedes
+// the user's account creation.
+var ErrMakeupBeforeRegistration = errors.New("cannot make up a date before registration")
+
 // TaskRepository handles the tasks catalog, the daily sign-in streak and task
 // claim rewards.
 type TaskRepository struct {
@@ -34,6 +44,11 @@ func NewTaskRepository() *TaskRepository {
 		userRepo: NewUserRepository(),
 		expRepo:  NewExpRepository(),
 	}
+}
+
+// UserRepo exposes the underlying user repository (e.g. to load calendar data).
+func (r *TaskRepository) UserRepo() *UserRepository {
+	return r.userRepo
 }
 
 // ListTaskCodes maps a task code to an SQL count used to derive one-time
@@ -281,6 +296,182 @@ func (r *TaskRepository) Checkin(userID, expAmount, currencyAmount, makeupCost i
 // MakeupCheckin is a convenience wrapper for a paid make-up sign-in.
 func (r *TaskRepository) MakeupCheckin(userID, expAmount, makeupCost int64, loc *time.Location, now time.Time) (bool, int64, error) {
 	return r.Checkin(userID, expAmount, 0, makeupCost, true, loc, now)
+}
+
+// ListSignedDates returns the calendar days ("YYYY-MM-DD") the user has already
+// signed in on, from the daily_login task completions, oldest first.
+func ListSignedDates(userID int64) ([]string, error) {
+	t, err := getTaskByCode("daily_login")
+	if err != nil {
+		return nil, err
+	}
+	rows, err := database.DB.Query(
+		`SELECT cycle_key FROM task_completions
+		 WHERE user_id = $1 AND task_id = $2
+		   AND cycle_key ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+		 ORDER BY cycle_key ASC`,
+		userID, t.ID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query signed dates: %w", err)
+	}
+	defer rows.Close()
+	dates := make([]string, 0)
+	for rows.Next() {
+		var d string
+		if err := rows.Scan(&d); err != nil {
+			return nil, fmt.Errorf("failed to scan signed date: %w", err)
+		}
+		dates = append(dates, d)
+	}
+	return dates, rows.Err()
+}
+
+// RecomputeStreak derives the consecutive sign-in streak from the recorded
+// signed dates: it counts how many days back from today (or yesterday when
+// today is not yet signed) are all signed in a row.
+func RecomputeStreak(signed []string, loc *time.Location, now time.Time) int64 {
+	signedSet := make(map[string]struct{}, len(signed))
+	for _, d := range signed {
+		signedSet[d] = struct{}{}
+	}
+
+	start := now.In(loc)
+	if _, ok := signedSet[cycleKeyFor(start)]; !ok {
+		// Today not signed yet: the running streak still counts from yesterday.
+		start = start.AddDate(0, 0, -1)
+	}
+
+	var streak int64
+	for {
+		if _, ok := signedSet[cycleKeyFor(start)]; !ok {
+			break
+		}
+		streak++
+		start = start.AddDate(0, 0, -1)
+	}
+	return streak
+}
+
+// MakeupByDate pays to sign in a specific past calendar day that was missed.
+//
+//	dateKey: "YYYY-MM-DD" of the missed day (must be before today and after the
+//	user's registration; today is handled by Checkin).
+//	expAmount: exp granted for the made-up day.
+//	makeupCost: currency charged for the make-up.
+//
+// It records the day as signed, refunds/propagates the streak accordingly and
+// is idempotent: signing an already-signed day returns granted=false.
+func (r *TaskRepository) MakeupByDate(userID int64, dateKey string, expAmount, makeupCost int64, loc *time.Location, now time.Time) (bool, int64, error) {
+	if loc == nil {
+		loc = time.UTC
+	}
+	if _, err := time.ParseInLocation("2006-01-02", dateKey, loc); err != nil {
+		return false, 0, fmt.Errorf("invalid makeup date: %w", err)
+	}
+	todayKey := cycleKeyFor(now.In(loc))
+	if dateKey == todayKey {
+		return false, 0, ErrMakeupToday
+	}
+	if dateKey > todayKey {
+		return false, 0, ErrMakeupFuture
+	}
+
+	user, err := r.userRepo.GetByID(userID)
+	if err != nil {
+		return false, 0, err
+	}
+	if user == nil {
+		return false, 0, ErrNotFound
+	}
+	regKey := cycleKeyFor(user.CreatedAt.In(loc))
+	if dateKey < regKey {
+		return false, 0, ErrMakeupBeforeRegistration
+	}
+
+	t, err := getTaskByCode("daily_login")
+	if err != nil {
+		return false, 0, err
+	}
+
+	tx, err := database.DB.Begin()
+	if err != nil {
+		return false, 0, fmt.Errorf("failed to begin makeup: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Insert the completion first: the unique constraint makes the check-and-
+	// charge atomic, so a concurrent duplicate never charges twice.
+	res, err := tx.Exec(
+		`INSERT INTO task_completions (user_id, task_id, cycle_key) VALUES ($1, $2, $3)`,
+		userID, t.ID, dateKey,
+	)
+	if err != nil {
+		if isUniqueViolation(err) {
+			signed, listErr := ListSignedDates(userID)
+			if listErr != nil {
+				return false, 0, listErr
+			}
+			return false, RecomputeStreak(signed, loc, now), nil
+		}
+		return false, 0, fmt.Errorf("failed to record makeup day: %w", err)
+	}
+	if n, err := res.RowsAffected(); err != nil || n == 0 {
+		signed, listErr := ListSignedDates(userID)
+		if listErr != nil {
+			return false, 0, listErr
+		}
+		return false, RecomputeStreak(signed, loc, now), nil
+	}
+
+	// Charge the make-up price (fails when the wallet is too empty).
+	if err := adjustBalanceTx(tx, userID, -makeupCost, userID, "makeup", "补签扣款"); err != nil {
+		return false, 0, err
+	}
+	if _, err := tx.Exec(
+		"UPDATE users SET exp = exp + $2, updated_at = NOW() WHERE id = $1",
+		userID, expAmount,
+	); err != nil {
+		return false, 0, fmt.Errorf("failed to grant makeup exp: %w", err)
+	}
+
+	// Recompute the streak from all signed days inside the transaction so the
+	// made-up day is reflected consistently.
+	var signed []string
+	signedTx, err := tx.Query(
+		`SELECT cycle_key FROM task_completions
+		 WHERE user_id = $1 AND task_id = $2
+		   AND cycle_key ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'`,
+		userID, t.ID,
+	)
+	if err != nil {
+		return false, 0, fmt.Errorf("failed to query signed days after makeup: %w", err)
+	}
+	for signedTx.Next() {
+		var d string
+		if err := signedTx.Scan(&d); err != nil {
+			signedTx.Close()
+			return false, 0, fmt.Errorf("failed to scan signed day: %w", err)
+		}
+		signed = append(signed, d)
+	}
+	signedTx.Close()
+	newStreak := RecomputeStreak(signed, loc, now)
+	if _, err := tx.Exec(
+		"UPDATE users SET checkin_streak = $2 WHERE id = $1",
+		userID, newStreak,
+	); err != nil {
+		return false, 0, fmt.Errorf("failed to update streak after makeup: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return false, 0, err
+	}
+
+	_ = r.expRepo.Add(userID, expAmount, model.ExpReasonMakeup, "补签 "+dateKey)
+	_ = r.awardMilestones(userID, newStreak)
+
+	return true, newStreak, nil
 }
 
 // recordCompletion marks a task as completed for the requested cycle.

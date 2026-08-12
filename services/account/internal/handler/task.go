@@ -113,6 +113,131 @@ func (h *TaskHandler) MakeupCheckin(c *gin.Context) {
 	})
 }
 
+// CheckinCalendar returns the user's sign-in history as a calendar: the date
+// range (registration → today), which days are already signed, and today's
+// claim status.
+func (h *TaskHandler) CheckinCalendar(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	loc := h.gameCfg.Location()
+	now := time.Now()
+
+	user, err := h.taskRepo.UserRepo().GetByID(userID)
+	if err != nil {
+		logger.Log.Error("failed to load user for calendar", "error", err, "user_id", userID)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load user"})
+		return
+	}
+	if user == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+		return
+	}
+
+	signed, err := repository.ListSignedDates(userID)
+	if err != nil {
+		logger.Log.Error("failed to list signed dates", "error", err, "user_id", userID)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list signed dates"})
+		return
+	}
+
+	today := now.In(loc)
+	reg := user.CreatedAt.In(loc)
+
+	// Build the calendar grid: all dates from registration through today.
+	type calendarDay struct {
+		Date    string `json:"date"`
+		Weekday string `json:"weekday"`
+		Signed  bool   `json:"signed"`
+		IsToday bool   `json:"is_today"`
+		DaysAgo int    `json:"days_ago"`
+		Before  bool   `json:"before"` // not yet reachable (future)
+	}
+	signedSet := make(map[string]bool, len(signed))
+	for _, d := range signed {
+		signedSet[d] = true
+	}
+
+	from := time.Date(reg.Year(), reg.Month(), reg.Day(), 0, 0, 0, 0, loc)
+	to := time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, loc)
+	if to.Before(from) {
+		to = from
+	}
+
+	todayKey := cycleKeyHelp(to)
+	days := make([]calendarDay, 0)
+	for d := from; !d.After(to); d = d.AddDate(0, 0, 1) {
+		key := cycleKeyHelp(d)
+		days = append(days, calendarDay{
+			Date:    d.Format("2006-01-02"),
+			Weekday: d.Format("Mon"),
+			Signed:  signedSet[key],
+			IsToday: key == todayKey,
+			Before:  false,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"registered_at": reg.Format("2006-01-02"),
+		"today":         todayKey,
+		"signed":        signed,
+		"streak":        repository.RecomputeStreak(signed, loc, now),
+		"makeup_cost":   h.gameCfg.EffectiveMakeupCost(),
+		"makeup_exp":    h.gameCfg.EffectiveDailyBonus(),
+		"days":          days,
+	})
+}
+
+// MakeupByDate pays to sign in a specific missed past calendar day.
+func (h *TaskHandler) MakeupByDate(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	loc := h.gameCfg.Location()
+
+	var body struct {
+		Date string `json:"date"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil || body.Date == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "date is required"})
+		return
+	}
+
+	expAmt := h.gameCfg.EffectiveDailyBonus()
+	cost := h.gameCfg.EffectiveMakeupCost()
+	granted, streak, err := h.taskRepo.MakeupByDate(userID, body.Date, expAmt, cost, loc, time.Now())
+	if err != nil {
+		if err == repository.ErrInsufficientBalance {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "insufficient balance"})
+			return
+		}
+		if err == repository.ErrMakeupToday ||
+			err == repository.ErrMakeupFuture ||
+			err == repository.ErrMakeupBeforeRegistration {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		logger.Log.Error("failed to make up date", "error", err, "user_id", userID, "date", body.Date)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to make up checkin"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"granted":   granted,
+		"date":      body.Date,
+		"exp":       expAmt,
+		"cost":      cost,
+		"streak":    streak,
+	})
+}
+
+func cycleKeyHelp(t time.Time) string {
+	return t.Format("2006-01-02")
+}
+
 // ClaimOneTime claims a one-time achievement task reward.
 func (h *TaskHandler) ClaimOneTime(c *gin.Context) {
 	userID, ok := middleware.GetUserID(c)

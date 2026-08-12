@@ -7,7 +7,7 @@ import (
 
 // RegisterRoutes registers all account service routes.
 // Public auth endpoints and protected user endpoints.
-func RegisterRoutes(r *gin.Engine, authHandler *AuthHandler, userHandler *UserHandler, walletHandler *WalletHandler, capabilitiesHandler *CapabilitiesHandler, taskHandler *TaskHandler, transferHandler *TransferHandler) {
+func RegisterRoutes(r *gin.Engine, authHandler *AuthHandler, userHandler *UserHandler, walletHandler *WalletHandler, capabilitiesHandler *CapabilitiesHandler, taskHandler *TaskHandler, transferHandler *TransferHandler, pinHandler *PinHandler) {
 	api := r.Group("/api/v1")
 	{
 		// Public capabilities introspection — unauthenticated so the client
@@ -37,6 +37,8 @@ func RegisterRoutes(r *gin.Engine, authHandler *AuthHandler, userHandler *UserHa
 			users.POST("/me/claim-daily-bonus", userHandler.ClaimDailyBonus)
 			users.PUT("/me/locale", userHandler.UpdateLocale)
 			users.GET("/search", userHandler.SearchUsers)
+			users.POST("/me/pin", pinHandler.SetPin)
+			users.POST("/me/pin/verify", pinHandler.VerifyPin)
 		}
 		// Public profile lookup (used to view other users' public profiles).
 		api.GET("/users/:id", userHandler.GetUser)
@@ -65,8 +67,10 @@ func RegisterRoutes(r *gin.Engine, authHandler *AuthHandler, userHandler *UserHa
 		tasks.Use(middleware.GatewayAuthMiddleware())
 		{
 			tasks.GET("", taskHandler.ListTasks)
+			tasks.GET("/daily-login/calendar", taskHandler.CheckinCalendar)
 			tasks.POST("/daily-login/claim", taskHandler.ClaimDailyLogin)
 			tasks.POST("/daily-login/makeup", taskHandler.MakeupCheckin)
+			tasks.POST("/daily-login/makeup-date", taskHandler.MakeupByDate)
 			tasks.POST("/:code/claim", taskHandler.ClaimOneTime)
 		}
 

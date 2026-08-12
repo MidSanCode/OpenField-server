@@ -46,6 +46,12 @@ type User struct {
 	E2EEPublicKey string `json:"e2ee_public_key,omitempty"`
 	// CheckinStreak is the user's current consecutive daily-sign-in streak.
 	CheckinStreak int64 `json:"checkin_streak,omitempty"`
+	// PinHash is the bcrypt hash of the user's payment PIN, used only to
+	// authorize outgoing payments (transfers). Never serialized to clients.
+	PinHash string `json:"-"`
+	// HasPin reports whether the user has set a payment PIN. Prompts the client
+	// to set one before the first payment.
+	HasPin bool `json:"has_pin"`
 	// Region is the user's locale region name (e.g. "中国"), used to derive
 	// the timezone for day boundaries and the display language for server
 	// notifications. Empty string means the server defaults apply.
