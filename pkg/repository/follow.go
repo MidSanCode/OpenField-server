@@ -3,10 +3,16 @@ package repository
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 
 	"github.com/openfield/server/pkg/database"
 	"github.com/openfield/server/pkg/model"
 )
+
+// userColumns joined against user_follows (or any table sharing column names
+// such as created_at), qualified with the aliased users table to avoid
+// ambiguous column references.
+var joinUserColumns = "u." + strings.ReplaceAll(userColumns, ", ", ", u.")
 
 // FollowRepository handles user-to-user follow relationships.
 type FollowRepository struct{}
@@ -89,7 +95,7 @@ func (r *FollowRepository) ListFollowers(userID int64, page, limit int) ([]model
 	offset := (page - 1) * limit
 
 	rows, err := database.DB.Query(
-		"SELECT "+userColumns+` FROM users u
+		"SELECT "+joinUserColumns+` FROM users u
 		 JOIN user_follows f ON f.follower_id = u.id
 		 WHERE f.followee_id = $1
 		 ORDER BY f.created_at DESC
@@ -115,7 +121,7 @@ func (r *FollowRepository) ListFollowing(userID int64, page, limit int) ([]model
 	offset := (page - 1) * limit
 
 	rows, err := database.DB.Query(
-		"SELECT "+userColumns+` FROM users u
+		"SELECT "+joinUserColumns+` FROM users u
 		 JOIN user_follows f ON f.followee_id = u.id
 		 WHERE f.follower_id = $1
 		 ORDER BY f.created_at DESC
