@@ -8,6 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/openfield/server/pkg/logger"
 	"github.com/openfield/server/pkg/middleware"
+	"github.com/openfield/server/pkg/model"
 	"github.com/openfield/server/pkg/repository"
 )
 
@@ -69,10 +70,10 @@ func (h *WalletHandler) AdjustWallet(c *gin.Context) {
 	}
 
 	var req struct {
-		UserID      int64  `json:"user_id" binding:"required"`
-		Amount      int64  `json:"amount" binding:"required"`
-		Type        string `json:"type"`
-		Description string `json:"description"`
+		UserID      int64       `json:"user_id" binding:"required"`
+		Amount      model.Cents `json:"amount" binding:"required"`
+		Type        string      `json:"type"`
+		Description string      `json:"description"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -107,7 +108,7 @@ func (h *WalletHandler) AdjustWallet(c *gin.Context) {
 		}
 	}
 
-	wallet, txn, err := h.walletRepo.AdjustBalance(req.UserID, req.Amount, operatorID, req.Type, req.Description)
+	wallet, txn, err := h.walletRepo.AdjustBalance(req.UserID, req.Amount.Int64(), operatorID, req.Type, req.Description)
 	if err != nil {
 		if errors.Is(err, repository.ErrInsufficientBalance) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "insufficient balance"})

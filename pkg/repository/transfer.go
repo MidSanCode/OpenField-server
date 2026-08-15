@@ -78,7 +78,7 @@ func (r *TransferRepository) Create(senderID, recipientID, amount int64, note st
 		ID:          transferID,
 		SenderID:    senderID,
 		RecipientID: recipientID,
-		Amount:      amount,
+		Amount:      model.NewCents(amount),
 		Status:      model.TransferPending,
 		Note:        note,
 		CreatedAt:   time.Now(),
@@ -105,7 +105,7 @@ func (r *TransferRepository) Accept(transferID, recipientID int64) (*model.Trans
 		return nil, ErrTransferNotPending
 	}
 
-	if err := adjustBalanceTx(tx, recipientID, transfer.Amount, transfer.SenderID, "transfer_receive", "收到转账"); err != nil {
+	if err := adjustBalanceTx(tx, recipientID, int64(transfer.Amount), transfer.SenderID, "transfer_receive", "收到转账"); err != nil {
 		return nil, err
 	}
 	if _, err := tx.Exec(
@@ -140,7 +140,7 @@ func (r *TransferRepository) Decline(transferID, recipientID int64) (*model.Tran
 		return nil, ErrTransferNotPending
 	}
 
-	if err := adjustBalanceTx(tx, transfer.SenderID, transfer.Amount, transfer.SenderID, "transfer_refund", "转账退回"); err != nil {
+	if err := adjustBalanceTx(tx, transfer.SenderID, int64(transfer.Amount), transfer.SenderID, "transfer_refund", "转账退回"); err != nil {
 		return nil, err
 	}
 	if _, err := tx.Exec(
@@ -197,7 +197,7 @@ func (r *TransferRepository) RefundExpired(now time.Time) (int64, error) {
 			tx.Commit()
 			continue
 		}
-		if err := adjustBalanceTx(tx, transfer.SenderID, transfer.Amount, transfer.SenderID, "transfer_refund", "转账超时退回"); err != nil {
+		if err := adjustBalanceTx(tx, transfer.SenderID, int64(transfer.Amount), transfer.SenderID, "transfer_refund", "转账超时退回"); err != nil {
 			tx.Rollback()
 			continue
 		}

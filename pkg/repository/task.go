@@ -206,6 +206,9 @@ func getTaskByCode(code string) (*model.Task, error) {
 //	gives exp but never the daily currency.
 //	isMakeup: whether this is a paid make-up sign-in.
 //
+// currencyAmount and makeupCost are coin-denominated (e.g. 5 for 5 金币);
+// they are scaled to cents when the wallet is adjusted.
+//
 // It is idempotent per calendar day (in the user's timezone): the second call
 // within the same day returns granted=false without side effects.
 func (r *TaskRepository) Checkin(userID, expAmount, currencyAmount, makeupCost int64, isMakeup bool, loc *time.Location, now time.Time) (granted bool, streak int64, err error) {
@@ -251,12 +254,12 @@ func (r *TaskRepository) Checkin(userID, expAmount, currencyAmount, makeupCost i
 
 	if isMakeup {
 		// Charge the make-up price from the sender wallet.
-		if err := adjustBalanceTx(tx, userID, -makeupCost, userID, "makeup", "补签扣款"); err != nil {
+		if err := adjustBalanceTx(tx, userID, -model.MoneyScale*makeupCost, userID, "makeup", "补签扣款"); err != nil {
 			return false, currentStreak, err
 		}
 	} else {
 		// Grant the daily currency.
-		if err := adjustBalanceTx(tx, userID, currencyAmount, userID, "checkin", "每日签到奖励"); err != nil {
+		if err := adjustBalanceTx(tx, userID, model.MoneyScale*currencyAmount, userID, "checkin", "每日签到奖励"); err != nil {
 			return false, currentStreak, err
 		}
 	}
@@ -425,7 +428,7 @@ func (r *TaskRepository) MakeupByDate(userID int64, dateKey string, expAmount, m
 	}
 
 	// Charge the make-up price (fails when the wallet is too empty).
-	if err := adjustBalanceTx(tx, userID, -makeupCost, userID, "makeup", "补签扣款"); err != nil {
+	if err := adjustBalanceTx(tx, userID, -model.MoneyScale*makeupCost, userID, "makeup", "补签扣款"); err != nil {
 		return false, 0, err
 	}
 	if _, err := tx.Exec(
@@ -574,7 +577,7 @@ func (r *TaskRepository) grantTaskReward(userID int64, t *model.Task, cycleKey s
 		return fmt.Errorf("failed to grant task exp: %w", err)
 	}
 	if t.RewardCurrency > 0 {
-		if err := adjustBalanceTx(tx, userID, t.RewardCurrency, userID, "task_reward", t.Name); err != nil {
+		if err := adjustBalanceTx(tx, userID, model.MoneyScale*t.RewardCurrency, userID, "task_reward", t.Name); err != nil {
 			return err
 		}
 	}

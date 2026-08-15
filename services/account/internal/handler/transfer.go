@@ -37,10 +37,10 @@ func (h *TransferHandler) CreateTransfer(c *gin.Context) {
 	}
 
 	var req struct {
-		Recipient int64  `json:"recipient_id" binding:"required"`
-		Amount    int64  `json:"amount" binding:"required"`
-		Note      string `json:"note"`
-		Pin       string `json:"pin"`
+		Recipient int64       `json:"recipient_id" binding:"required"`
+		Amount    model.Cents `json:"amount" binding:"required"`
+		Note      string      `json:"note"`
+		Pin       string      `json:"pin"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
@@ -83,7 +83,7 @@ func (h *TransferHandler) CreateTransfer(c *gin.Context) {
 		return
 	}
 
-	transfer, err := h.transferRepo.Create(userID, recipient.ID, req.Amount, req.Note)
+	transfer, err := h.transferRepo.Create(userID, recipient.ID, req.Amount.Int64(), req.Note)
 	if err != nil {
 		if errors.Is(err, repository.ErrInsufficientBalance) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "insufficient balance"})

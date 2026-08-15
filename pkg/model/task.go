@@ -93,7 +93,7 @@ type Transfer struct {
 	ID              int64          `json:"id"`
 	SenderID        int64          `json:"sender_id"`
 	RecipientID     int64          `json:"recipient_id"`
-	Amount          int64          `json:"amount"`
+	Amount          Cents          `json:"amount"`
 	Status          TransferStatus `json:"status"`
 	Note            string         `json:"note"`
 	CreatedAt       time.Time      `json:"created_at"`

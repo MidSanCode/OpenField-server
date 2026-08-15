@@ -160,12 +160,12 @@ func (r *WalletRepository) AdjustBalance(userID, amount, operatorID int64, txTyp
 		return nil, nil, fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
-	wallet := &model.Wallet{UserID: userID, Balance: newBalance}
+	wallet := &model.Wallet{UserID: userID, Balance: model.NewCents(newBalance)}
 	txn := &model.WalletTransaction{
 		ID:           txnID,
 		UserID:       userID,
-		Amount:       amount,
-		BalanceAfter: newBalance,
+		Amount:       model.NewCents(amount),
+		BalanceAfter: model.NewCents(newBalance),
 		Type:         txType,
 		Description:  description,
 		OperatorID:   operatorID,

@@ -261,7 +261,7 @@ type Permission struct {
 // Wallet represents a user's balance.
 type Wallet struct {
 	UserID    int64     `json:"user_id"`
-	Balance   int64     `json:"balance"`
+	Balance   Cents     `json:"balance"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -270,8 +270,8 @@ type Wallet struct {
 type WalletTransaction struct {
 	ID           int64     `json:"id"`
 	UserID       int64     `json:"user_id"`
-	Amount       int64     `json:"amount"`
-	BalanceAfter int64     `json:"balance_after"`
+	Amount       Cents     `json:"amount"`
+	BalanceAfter Cents     `json:"balance_after"`
 	Type         string    `json:"type"`
 	Description  string    `json:"description"`
 	OperatorID   int64     `json:"operator_id"`
