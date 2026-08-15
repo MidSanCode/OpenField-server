@@ -21,6 +21,45 @@ var allowedReactions = map[string]bool{
 	"haha": true, "wow": true, "sad": true, "angry": true,
 }
 
+// Post visibility values.
+const (
+	visibilityPublic  = "public"
+	visibilityLogin   = "login"
+	visibilityFriends = "friends"
+	visibilityPrivate = "private"
+)
+
+// allowedVisibilities is the fixed set of post visibility values.
+var allowedVisibilities = map[string]bool{
+	visibilityPublic:  true,
+	visibilityLogin:   true,
+	visibilityFriends: true,
+	visibilityPrivate: true,
+}
+
+// canViewPost reports whether the viewer may see a post based on its
+// visibility: public for everyone, login for any authenticated user, friends
+// for mutual follows, private for the author only.
+func canViewPost(post *model.Post, viewerID int64) bool {
+	switch post.Visibility {
+	case visibilityPrivate:
+		return viewerID > 0 && viewerID == post.UserID
+	case visibilityFriends:
+		if viewerID <= 0 {
+			return false
+		}
+		if viewerID == post.UserID {
+			return true
+		}
+		mutual, err := repository.NewFollowRepository().AreMutual(viewerID, post.UserID)
+		return err == nil && mutual
+	case visibilityLogin:
+		return viewerID > 0
+	default:
+		return true
+	}
+}
+
 // PostHandler handles post and reply requests.
 type PostHandler struct {
 	postRepo  *repository.PostRepository
@@ -45,6 +84,7 @@ func (h *PostHandler) CreatePost(c *gin.Context) {
 
 	var req struct {
 		Content       string  `json:"content" binding:"required"`
+		Visibility    string  `json:"visibility"`
 		AttachmentIDs []int64 `json:"attachment_ids"`
 	}
 
@@ -65,8 +105,15 @@ func (h *PostHandler) CreatePost(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "too many attachments (max 9)"})
 		return
 	}
+	if req.Visibility == "" {
+		req.Visibility = visibilityPublic
+	}
+	if !allowedVisibilities[req.Visibility] {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unknown visibility"})
+		return
+	}
 
-	post, err := h.postRepo.Create(userID, req.Content, req.AttachmentIDs)
+	post, err := h.postRepo.Create(userID, req.Content, req.Visibility, req.AttachmentIDs)
 	if err != nil {
 		logger.Log.Error("failed to create post", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create post"})
@@ -94,7 +141,7 @@ func (h *PostHandler) GetPost(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get post"})
 		return
 	}
-	if post == nil {
+	if post == nil || !canViewPost(post, viewer) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "post not found"})
 		return
 	}
@@ -135,15 +182,16 @@ func (h *PostHandler) ListPosts(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
 	query := strings.TrimSpace(c.Query("q"))
+	viewer := requesterID(c)
 
 	var (
 		posts []model.Post
 		err   error
 	)
 	if query != "" {
-		posts, err = h.postRepo.Search(query, page, limit)
+		posts, err = h.postRepo.Search(query, page, limit, viewer)
 	} else {
-		posts, err = h.postRepo.List(page, limit)
+		posts, err = h.postRepo.List(page, limit, viewer)
 	}
 	if err != nil {
 		logger.Log.Error("failed to list posts", "error", err)
@@ -170,7 +218,7 @@ func (h *PostHandler) ListPostsByUser(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
 
-	posts, err := h.postRepo.ListByUser(userID, page, limit)
+	posts, err := h.postRepo.ListByUser(userID, page, limit, requesterID(c))
 	if err != nil {
 		logger.Log.Error("failed to list user posts", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list posts"})
@@ -182,6 +230,231 @@ func (h *PostHandler) ListPostsByUser(c *gin.Context) {
 		"page":  page,
 		"limit": limit,
 	})
+}
+
+// ListFavoritePosts retrieves the current user's favorited posts.
+func (h *PostHandler) ListFavoritePosts(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	targetID, err := strconv.ParseInt(c.Param("user_id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user ID"})
+		return
+	}
+	if targetID != userID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "cannot view another user's favorites"})
+		return
+	}
+
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+
+	posts, err := h.postRepo.ListFavoritePosts(userID, page, limit)
+	if err != nil {
+		logger.Log.Error("failed to list favorite posts", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list favorite posts"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"posts": posts,
+		"page":  page,
+		"limit": limit,
+	})
+}
+
+// ListFavoriteReplies retrieves the current user's favorited replies.
+func (h *PostHandler) ListFavoriteReplies(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	targetID, err := strconv.ParseInt(c.Param("user_id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user ID"})
+		return
+	}
+	if targetID != userID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "cannot view another user's favorites"})
+		return
+	}
+
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+
+	replies, err := h.replyRepo.ListFavoriteReplies(userID, page, limit)
+	if err != nil {
+		logger.Log.Error("failed to list favorite replies", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list favorite replies"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"replies": replies,
+		"page":    page,
+		"limit":   limit,
+	})
+}
+
+// FavoritePost marks the current user's favorite on a post.
+func (h *PostHandler) FavoritePost(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	postID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid post ID"})
+		return
+	}
+
+	post, err := h.postRepo.GetByIDWithViewer(postID, userID)
+	if err != nil {
+		logger.Log.Error("failed to get post", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to favorite post"})
+		return
+	}
+	if post == nil || !canViewPost(post, userID) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "post not found"})
+		return
+	}
+
+	if err := h.postRepo.FavoritePost(postID, userID); err != nil {
+		logger.Log.Error("failed to favorite post", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to favorite post"})
+		return
+	}
+
+	post, err = h.postRepo.GetByIDWithViewer(postID, userID)
+	if err != nil || post == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load post"})
+		return
+	}
+	c.JSON(http.StatusOK, post)
+}
+
+// UnfavoritePost removes the current user's favorite from a post.
+func (h *PostHandler) UnfavoritePost(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	postID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid post ID"})
+		return
+	}
+
+	if err := h.postRepo.UnfavoritePost(postID, userID); err != nil {
+		logger.Log.Error("failed to unfavorite post", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to unfavorite post"})
+		return
+	}
+
+	post, err := h.postRepo.GetByIDWithViewer(postID, userID)
+	if err != nil || post == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load post"})
+		return
+	}
+	c.JSON(http.StatusOK, post)
+}
+
+// FavoriteReply marks the current user's favorite on a reply.
+func (h *PostHandler) FavoriteReply(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	postID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid post ID"})
+		return
+	}
+	replyID, err := strconv.ParseInt(c.Param("reply_id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid reply ID"})
+		return
+	}
+
+	reply, err := h.replyRepo.GetByID(replyID)
+	if err != nil {
+		logger.Log.Error("failed to get reply", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to favorite reply"})
+		return
+	}
+	if reply == nil || reply.PostID != postID {
+		c.JSON(http.StatusNotFound, gin.H{"error": "reply not found"})
+		return
+	}
+
+	if err := h.replyRepo.FavoriteReply(replyID, userID); err != nil {
+		logger.Log.Error("failed to favorite reply", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to favorite reply"})
+		return
+	}
+
+	reply, err = h.replyRepo.GetByIDWithViewer(replyID, userID)
+	if err != nil || reply == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load reply"})
+		return
+	}
+	c.JSON(http.StatusOK, reply)
+}
+
+// UnfavoriteReply removes the current user's favorite from a reply.
+func (h *PostHandler) UnfavoriteReply(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	postID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid post ID"})
+		return
+	}
+	replyID, err := strconv.ParseInt(c.Param("reply_id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid reply ID"})
+		return
+	}
+
+	reply, err := h.replyRepo.GetByID(replyID)
+	if err != nil {
+		logger.Log.Error("failed to get reply", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to unfavorite reply"})
+		return
+	}
+	if reply == nil || reply.PostID != postID {
+		c.JSON(http.StatusNotFound, gin.H{"error": "reply not found"})
+		return
+	}
+
+	if err := h.replyRepo.UnfavoriteReply(replyID, userID); err != nil {
+		logger.Log.Error("failed to unfavorite reply", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to unfavorite reply"})
+		return
+	}
+
+	reply, err = h.replyRepo.GetByIDWithViewer(replyID, userID)
+	if err != nil || reply == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load reply"})
+		return
+	}
+	c.JSON(http.StatusOK, reply)
 }
 
 // DeletePost deletes a post by ID (owner only).
@@ -228,6 +501,7 @@ func (h *PostHandler) UpdatePost(c *gin.Context) {
 
 	var req struct {
 		Content       string  `json:"content" binding:"required"`
+		Visibility    string  `json:"visibility"`
 		AttachmentIDs []int64 `json:"attachment_ids"`
 	}
 
@@ -248,8 +522,15 @@ func (h *PostHandler) UpdatePost(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "too many attachments (max 9)"})
 		return
 	}
+	if req.Visibility == "" {
+		req.Visibility = visibilityPublic
+	}
+	if !allowedVisibilities[req.Visibility] {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unknown visibility"})
+		return
+	}
 
-	post, err := h.postRepo.Update(postID, userID, req.Content, req.AttachmentIDs)
+	post, err := h.postRepo.Update(postID, userID, req.Content, req.Visibility, req.AttachmentIDs)
 	if err != nil {
 		if errors.Is(err, repository.ErrNoSuchRow) {
 			c.JSON(http.StatusForbidden, gin.H{"error": "post not found or you don't have permission to edit it"})
@@ -283,7 +564,7 @@ func (h *PostHandler) CreateReply(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create reply"})
 		return
 	}
-	if post == nil {
+	if post == nil || !canViewPost(post, userID) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "post not found"})
 		return
 	}
@@ -346,10 +627,22 @@ func (h *PostHandler) ListReplies(c *gin.Context) {
 		return
 	}
 
+	viewer := requesterID(c)
+	post, err := h.postRepo.GetByID(postID)
+	if err != nil {
+		logger.Log.Error("failed to get post", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list replies"})
+		return
+	}
+	if post == nil || !canViewPost(post, viewer) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "post not found"})
+		return
+	}
+
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
 
-	replies, err := h.replyRepo.ListByPost(postID, page, limit)
+	replies, err := h.replyRepo.ListByPost(postID, page, limit, viewer)
 	if err != nil {
 		logger.Log.Error("failed to list replies", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list replies"})

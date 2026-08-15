@@ -76,6 +76,9 @@ func (h *UserHandler) populateFollowStats(user *model.User, requester int64) {
 		if following, err := h.followRepo.IsFollowing(requester, user.ID); err == nil {
 			user.IsFollowing = following
 		}
+		if isFriend, err := h.followRepo.AreMutual(requester, user.ID); err == nil {
+			user.IsFriend = isFriend
+		}
 	}
 }
 
@@ -446,6 +449,32 @@ func (h *UserHandler) ListFollowing(c *gin.Context) {
 	if err != nil {
 		logger.Log.Error("failed to list following", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list following"})
+		return
+	}
+
+	requester := requesterID(c)
+	for i := range users {
+		h.populateFollowStats(&users[i], requester)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"users": users, "page": page, "limit": limit})
+}
+
+// ListFriends returns the users who mutually follow the given user.
+func (h *UserHandler) ListFriends(c *gin.Context) {
+	userID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user ID"})
+		return
+	}
+
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+
+	users, err := h.followRepo.ListFriends(userID, page, limit)
+	if err != nil {
+		logger.Log.Error("failed to list friends", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list friends"})
 		return
 	}
 

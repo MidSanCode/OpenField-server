@@ -26,6 +26,12 @@ func RegisterRoutes(r *gin.Engine, postHandler *PostHandler) {
 			auth.DELETE("/posts/:id/replies/:reply_id", postHandler.DeleteReply)
 			auth.PUT("/posts/:id/reactions", postHandler.SetPostReaction)
 			auth.DELETE("/posts/:id/reactions", postHandler.RemovePostReaction)
+			auth.POST("/posts/:id/favorite", postHandler.FavoritePost)
+			auth.DELETE("/posts/:id/favorite", postHandler.UnfavoritePost)
+			auth.POST("/posts/:id/replies/:reply_id/favorite", postHandler.FavoriteReply)
+			auth.DELETE("/posts/:id/replies/:reply_id/favorite", postHandler.UnfavoriteReply)
+			auth.GET("/users/:user_id/favorites/posts", postHandler.ListFavoritePosts)
+			auth.GET("/users/:user_id/favorites/replies", postHandler.ListFavoriteReplies)
 		}
 	}
 }

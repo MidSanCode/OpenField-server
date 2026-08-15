@@ -52,6 +52,7 @@ func RegisterRoutes(r *gin.Engine, authHandler *AuthHandler, userHandler *UserHa
 			follow.DELETE("/follow", middleware.GatewayAuthMiddleware(), userHandler.UnfollowUser)
 			follow.GET("/followers", userHandler.ListFollowers)
 			follow.GET("/following", userHandler.ListFollowing)
+			follow.GET("/friends", userHandler.ListFriends)
 		}
 
 		// Wallet: read requires auth; balance adjustments require the

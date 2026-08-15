@@ -21,13 +21,34 @@ func NewPostRepository() *PostRepository {
 	}
 }
 
+// visibilityCondition returns the SQL predicate limiting posts to those the
+// viewer may see, referencing the viewer id as the given placeholder (e.g.
+// "$2"). The placeholder must hold the viewer id (0 for anonymous readers) and
+// is always referenced with an explicit ::bigint cast so its type is
+// deterministic regardless of the surrounding query.
+func visibilityCondition(viewerID int64, prefix, viewerParam string) string {
+	if viewerID <= 0 {
+		// Anonymous viewers may only see public posts. The viewer param is
+		// still referenced (guaranteed 0) so PostgreSQL can infer its type.
+		return fmt.Sprintf("(%svisibility = 'public' AND (%s::bigint = 0))", prefix, viewerParam)
+	}
+	return fmt.Sprintf(`(%[1]suser_id = %[2]s
+		OR %[1]svisibility = 'public'
+		OR %[1]svisibility = 'login'
+		OR (%[1]svisibility = 'friends' AND EXISTS (
+			SELECT 1 FROM user_follows f1
+			JOIN user_follows f2 ON f1.follower_id = f2.followee_id AND f2.follower_id = f1.followee_id
+			WHERE f1.follower_id = %[2]s AND f1.followee_id = %[1]suser_id
+		)))`, prefix, viewerParam)
+}
+
 // Create creates a new post with optional attachments.
-func (r *PostRepository) Create(userID int64, content string, attachmentIDs []int64) (*model.Post, error) {
+func (r *PostRepository) Create(userID int64, content, visibility string, attachmentIDs []int64) (*model.Post, error) {
 	post := &model.Post{}
 	err := database.DB.QueryRow(
-		"INSERT INTO posts (user_id, content) VALUES ($1, $2) RETURNING id, user_id, content, created_at, updated_at",
-		userID, content,
-	).Scan(&post.ID, &post.UserID, &post.Content, &post.CreatedAt, &post.UpdatedAt)
+		"INSERT INTO posts (user_id, content, visibility) VALUES ($1, $2, $3) RETURNING id, user_id, content, visibility, created_at, updated_at",
+		userID, content, visibility,
+	).Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create post: %w", err)
 	}
@@ -56,12 +77,13 @@ func (r *PostRepository) Create(userID int64, content string, attachmentIDs []in
 func (r *PostRepository) GetByID(id int64) (*model.Post, error) {
 	post := &model.Post{}
 	err := database.DB.QueryRow(
-		`SELECT p.id, p.user_id, p.content, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url, u.is_verified
+		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url, u.is_verified,
+		        (SELECT COUNT(*) FROM post_favorites pf WHERE pf.post_id = p.id) AS favorite_count
 		 FROM posts p
 		 JOIN users u ON p.user_id = u.id
 		 WHERE p.id = $1`,
 		id,
-	).Scan(&post.ID, &post.UserID, &post.Content, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified)
+	).Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.FavoriteCount)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -84,7 +106,7 @@ func (r *PostRepository) GetByID(id int64) (*model.Post, error) {
 }
 
 // GetByIDWithViewer retrieves a post by ID, additionally populating the
-// viewer's own reaction so the client can render active reaction state.
+// viewer's own reaction and favorite state so the client can render active state.
 func (r *PostRepository) GetByIDWithViewer(id, viewerID int64) (*model.Post, error) {
 	post, err := r.GetByID(id)
 	if err != nil || post == nil {
@@ -92,6 +114,10 @@ func (r *PostRepository) GetByIDWithViewer(id, viewerID int64) (*model.Post, err
 	}
 	if viewerID > 0 {
 		post.MyReaction, err = r.GetMyReaction(post.ID, viewerID)
+		if err != nil {
+			return nil, err
+		}
+		post.Favorited, err = r.IsPostFavorited(post.ID, viewerID)
 		if err != nil {
 			return nil, err
 		}
@@ -238,8 +264,9 @@ func (r *PostRepository) populateStats(posts []model.Post, postIDs []int64) erro
 	return nil
 }
 
-// List retrieves paginated posts with author info, attachments and reply counts.
-func (r *PostRepository) List(page, limit int) ([]model.Post, error) {
+// List retrieves paginated posts with author info, attachments and reply counts,
+// restricted to posts the viewer may see based on their visibility.
+func (r *PostRepository) List(page, limit int, viewerID int64) ([]model.Post, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -249,13 +276,15 @@ func (r *PostRepository) List(page, limit int) ([]model.Post, error) {
 	offset := (page - 1) * limit
 
 	rows, err := database.DB.Query(
-		`SELECT p.id, p.user_id, p.content, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url, u.is_verified,
-		        (SELECT COUNT(*) FROM post_replies pr WHERE pr.post_id = p.id AND pr.deleted_at IS NULL) AS reply_count
+		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url, u.is_verified,
+		        (SELECT COUNT(*) FROM post_replies pr WHERE pr.post_id = p.id AND pr.deleted_at IS NULL) AS reply_count,
+		        (SELECT COUNT(*) FROM post_favorites pf WHERE pf.post_id = p.id) AS favorite_count
 		 FROM posts p
 		 JOIN users u ON p.user_id = u.id
+		 WHERE `+visibilityCondition(viewerID, "p.", "$1")+`
 		 ORDER BY p.created_at DESC
-		 LIMIT $1 OFFSET $2`,
-		limit, offset,
+		 LIMIT $2 OFFSET $3`,
+		viewerID, limit, offset,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list posts: %w", err)
@@ -266,7 +295,7 @@ func (r *PostRepository) List(page, limit int) ([]model.Post, error) {
 	var postIDs []int64
 	for rows.Next() {
 		var post model.Post
-		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.ReplyCount); err != nil {
+		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.ReplyCount, &post.FavoriteCount); err != nil {
 			return nil, fmt.Errorf("failed to scan post: %w", err)
 		}
 		posts = append(posts, post)
@@ -282,13 +311,17 @@ func (r *PostRepository) List(page, limit int) ([]model.Post, error) {
 	if err := r.populateStats(posts, postIDs); err != nil {
 		return nil, err
 	}
+	if err := r.populateFavorited(posts, postIDs, viewerID); err != nil {
+		return nil, err
+	}
 	return posts, nil
 }
 
-// Search retrieves paginated posts whose content matches query (ILIKE).
-func (r *PostRepository) Search(query string, page, limit int) ([]model.Post, error) {
+// Search retrieves paginated posts whose content matches query (ILIKE),
+// restricted to posts the viewer may see based on their visibility.
+func (r *PostRepository) Search(query string, page, limit int, viewerID int64) ([]model.Post, error) {
 	if query == "" {
-		return r.List(page, limit)
+		return r.List(page, limit, viewerID)
 	}
 	if page < 1 {
 		page = 1
@@ -300,14 +333,15 @@ func (r *PostRepository) Search(query string, page, limit int) ([]model.Post, er
 	pattern := "%" + query + "%"
 
 	rows, err := database.DB.Query(
-		`SELECT p.id, p.user_id, p.content, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url, u.is_verified,
-		        (SELECT COUNT(*) FROM post_replies pr WHERE pr.post_id = p.id AND pr.deleted_at IS NULL) AS reply_count
+		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url, u.is_verified,
+		        (SELECT COUNT(*) FROM post_replies pr WHERE pr.post_id = p.id AND pr.deleted_at IS NULL) AS reply_count,
+		        (SELECT COUNT(*) FROM post_favorites pf WHERE pf.post_id = p.id) AS favorite_count
 		 FROM posts p
 		 JOIN users u ON p.user_id = u.id
-		 WHERE p.content ILIKE $1
+		 WHERE p.content ILIKE $1 AND `+visibilityCondition(viewerID, "p.", "$2")+`
 		 ORDER BY p.created_at DESC
-		 LIMIT $2 OFFSET $3`,
-		pattern, limit, offset,
+		 LIMIT $3 OFFSET $4`,
+		pattern, viewerID, limit, offset,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to search posts: %w", err)
@@ -318,9 +352,117 @@ func (r *PostRepository) Search(query string, page, limit int) ([]model.Post, er
 	var postIDs []int64
 	for rows.Next() {
 		var post model.Post
-		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.ReplyCount); err != nil {
+		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.ReplyCount, &post.FavoriteCount); err != nil {
 			return nil, fmt.Errorf("failed to scan post: %w", err)
 		}
+		posts = append(posts, post)
+		postIDs = append(postIDs, post.ID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows error: %w", err)
+	}
+
+	if err := r.populateAttachments(posts, postIDs); err != nil {
+		return nil, err
+	}
+	if err := r.populateStats(posts, postIDs); err != nil {
+		return nil, err
+	}
+	if err := r.populateFavorited(posts, postIDs, viewerID); err != nil {
+		return nil, err
+	}
+	return posts, nil
+}
+
+// ListByUser retrieves paginated posts by a specific user, restricted to posts
+// the viewer may see based on their visibility.
+func (r *PostRepository) ListByUser(userID int64, page, limit int, viewerID int64) ([]model.Post, error) {
+	if page < 1 {
+		page = 1
+	}
+	if limit < 1 {
+		limit = 20
+	}
+	offset := (page - 1) * limit
+
+	rows, err := database.DB.Query(
+		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url, u.is_verified,
+		        (SELECT COUNT(*) FROM post_replies pr WHERE pr.post_id = p.id AND pr.deleted_at IS NULL) AS reply_count,
+		        (SELECT COUNT(*) FROM post_favorites pf WHERE pf.post_id = p.id) AS favorite_count
+		 FROM posts p
+		 JOIN users u ON p.user_id = u.id
+		 WHERE p.user_id = $1 AND `+visibilityCondition(viewerID, "p.", "$2")+`
+		 ORDER BY p.created_at DESC
+		 LIMIT $3 OFFSET $4`,
+		userID, viewerID, limit, offset,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list user posts: %w", err)
+	}
+	defer rows.Close()
+
+	posts := make([]model.Post, 0)
+	var postIDs []int64
+	for rows.Next() {
+		var post model.Post
+		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.ReplyCount, &post.FavoriteCount); err != nil {
+			return nil, fmt.Errorf("failed to scan post: %w", err)
+		}
+		posts = append(posts, post)
+		postIDs = append(postIDs, post.ID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows error: %w", err)
+	}
+
+	if err := r.populateAttachments(posts, postIDs); err != nil {
+		return nil, err
+	}
+	if err := r.populateStats(posts, postIDs); err != nil {
+		return nil, err
+	}
+	if err := r.populateFavorited(posts, postIDs, viewerID); err != nil {
+		return nil, err
+	}
+	return posts, nil
+}
+
+// ListFavoritePosts retrieves the posts favorited by the given user, most
+// recently favorited first.
+func (r *PostRepository) ListFavoritePosts(userID int64, page, limit int) ([]model.Post, error) {
+	if page < 1 {
+		page = 1
+	}
+	if limit < 1 {
+		limit = 20
+	}
+	offset := (page - 1) * limit
+
+	rows, err := database.DB.Query(
+		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url, u.is_verified,
+		        (SELECT COUNT(*) FROM post_replies pr WHERE pr.post_id = p.id AND pr.deleted_at IS NULL) AS reply_count,
+		        (SELECT COUNT(*) FROM post_favorites pf WHERE pf.post_id = p.id) AS favorite_count
+		 FROM posts p
+		 JOIN users u ON p.user_id = u.id
+		 JOIN post_favorites fv ON fv.post_id = p.id
+		 WHERE fv.user_id = $1 AND `+visibilityCondition(userID, "p.", "$1")+`
+		 ORDER BY fv.created_at DESC
+		 LIMIT $2 OFFSET $3`,
+		userID, limit, offset,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list favorite posts: %w", err)
+	}
+	defer rows.Close()
+
+	posts := make([]model.Post, 0)
+	var postIDs []int64
+	for rows.Next() {
+		var post model.Post
+		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.ReplyCount, &post.FavoriteCount); err != nil {
+			return nil, fmt.Errorf("failed to scan post: %w", err)
+		}
+		post.Favorited = true
 		posts = append(posts, post)
 		postIDs = append(postIDs, post.ID)
 	}
@@ -337,52 +479,72 @@ func (r *PostRepository) Search(query string, page, limit int) ([]model.Post, er
 	return posts, nil
 }
 
-// ListByUser retrieves paginated posts by a specific user.
-func (r *PostRepository) ListByUser(userID int64, page, limit int) ([]model.Post, error) {
-	if page < 1 {
-		page = 1
+// FavoritePost records the user's favorite on a post (idempotent).
+func (r *PostRepository) FavoritePost(postID, userID int64) error {
+	if _, err := database.DB.Exec(
+		"INSERT INTO post_favorites (post_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+		postID, userID,
+	); err != nil {
+		return fmt.Errorf("failed to favorite post: %w", err)
 	}
-	if limit < 1 {
-		limit = 20
+	return nil
+}
+
+// UnfavoritePost removes the user's favorite from a post (idempotent).
+func (r *PostRepository) UnfavoritePost(postID, userID int64) error {
+	if _, err := database.DB.Exec(
+		"DELETE FROM post_favorites WHERE post_id = $1 AND user_id = $2",
+		postID, userID,
+	); err != nil {
+		return fmt.Errorf("failed to unfavorite post: %w", err)
 	}
-	offset := (page - 1) * limit
+	return nil
+}
+
+// IsPostFavorited reports whether the user favorited the given post.
+func (r *PostRepository) IsPostFavorited(postID, userID int64) (bool, error) {
+	var exists bool
+	err := database.DB.QueryRow(
+		"SELECT EXISTS (SELECT 1 FROM post_favorites WHERE post_id = $1 AND user_id = $2)",
+		postID, userID,
+	).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("failed to check post favorite: %w", err)
+	}
+	return exists, nil
+}
+
+// populateFavorited marks which of the given posts the viewer favorited.
+func (r *PostRepository) populateFavorited(posts []model.Post, postIDs []int64, viewerID int64) error {
+	if viewerID <= 0 || len(postIDs) == 0 {
+		return nil
+	}
+	byID := make(map[int64]*model.Post, len(posts))
+	for i := range posts {
+		byID[posts[i].ID] = &posts[i]
+	}
 
 	rows, err := database.DB.Query(
-		`SELECT p.id, p.user_id, p.content, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url, u.is_verified,
-		        (SELECT COUNT(*) FROM post_replies pr WHERE pr.post_id = p.id AND pr.deleted_at IS NULL) AS reply_count
-		 FROM posts p
-		 JOIN users u ON p.user_id = u.id
-		 WHERE p.user_id = $1
-		 ORDER BY p.created_at DESC
-		 LIMIT $2 OFFSET $3`,
-		userID, limit, offset,
+		"SELECT post_id FROM post_favorites WHERE post_id = ANY($1) AND user_id = $2",
+		pq.Array(postIDs), viewerID,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list user posts: %w", err)
+		return fmt.Errorf("failed to query post favorites: %w", err)
 	}
 	defer rows.Close()
-
-	posts := make([]model.Post, 0)
-	var postIDs []int64
 	for rows.Next() {
-		var post model.Post
-		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.ReplyCount); err != nil {
-			return nil, fmt.Errorf("failed to scan post: %w", err)
+		var postID int64
+		if err := rows.Scan(&postID); err != nil {
+			return fmt.Errorf("failed to scan post favorite: %w", err)
 		}
-		posts = append(posts, post)
-		postIDs = append(postIDs, post.ID)
+		if p, ok := byID[postID]; ok {
+			p.Favorited = true
+		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("rows error: %w", err)
+		return fmt.Errorf("rows error: %w", err)
 	}
-
-	if err := r.populateAttachments(posts, postIDs); err != nil {
-		return nil, err
-	}
-	if err := r.populateStats(posts, postIDs); err != nil {
-		return nil, err
-	}
-	return posts, nil
+	return nil
 }
 
 func (r *PostRepository) populateAttachments(posts []model.Post, postIDs []int64) error {
@@ -412,9 +574,12 @@ func (r *PostRepository) Delete(id, userID int64) error {
 	return nil
 }
 
-// Update updates a post's content and attachments (only by owner).
-func (r *PostRepository) Update(id, userID int64, content string, attachmentIDs []int64) (*model.Post, error) {
-	result, err := database.DB.Exec("UPDATE posts SET content = $3, updated_at = NOW() WHERE id = $1 AND user_id = $2", id, userID, content)
+// Update updates a post's content, visibility and attachments (only by owner).
+func (r *PostRepository) Update(id, userID int64, content, visibility string, attachmentIDs []int64) (*model.Post, error) {
+	result, err := database.DB.Exec(
+		"UPDATE posts SET content = $3, visibility = $4, updated_at = NOW() WHERE id = $1 AND user_id = $2",
+		id, userID, content, visibility,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update post: %w", err)
 	}

@@ -39,6 +39,9 @@ type User struct {
 	FollowingCount int64 `json:"following_count,omitempty"`
 	// IsFollowing is whether the requesting user follows this user.
 	IsFollowing bool `json:"is_following,omitempty"`
+	// IsFriend is whether the requesting user and this user follow each
+	// other (friends).
+	IsFriend bool `json:"is_friend,omitempty"`
 	// Permissions are populated on /users/me when requested.
 	Permissions []string `json:"permissions,omitempty"`
 	// E2EEPublicKey is the X25519 public key this user publishes for
@@ -66,6 +69,7 @@ type Post struct {
 	ID          int64     `json:"id"`
 	UserID      int64     `json:"user_id"`
 	Content     string    `json:"content"`
+	Visibility  string    `json:"visibility,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 	ReplyCount  int64     `json:"reply_count,omitempty"`
@@ -74,12 +78,16 @@ type Post struct {
 	// Reactions holds reaction counts keyed by reaction type (e.g. like).
 	Reactions map[string]int64 `json:"reactions,omitempty"`
 	// MyReaction is the authenticated viewer's own reaction, when present.
-	MyReaction  string       `json:"my_reaction,omitempty"`
-	Username    string       `json:"username,omitempty"`
-	Nickname    string       `json:"nickname,omitempty"`
-	AvatarURL   string       `json:"avatar_url,omitempty"`
-	IsVerified  bool         `json:"is_verified,omitempty"`
-	Attachments []Attachment `json:"attachments,omitempty"`
+	MyReaction string `json:"my_reaction,omitempty"`
+	// Favorited reports whether the authenticated viewer favorited this post.
+	Favorited bool `json:"favorited,omitempty"`
+	// FavoriteCount is the total number of users who favorited this post.
+	FavoriteCount int64 `json:"favorite_count,omitempty"`
+	Username      string `json:"username,omitempty"`
+	Nickname      string `json:"nickname,omitempty"`
+	AvatarURL     string `json:"avatar_url,omitempty"`
+	IsVerified    bool   `json:"is_verified,omitempty"`
+	Attachments   []Attachment `json:"attachments,omitempty"`
 }
 
 // PostReply represents a reply to a post.
@@ -99,8 +107,12 @@ type PostReply struct {
 	// ParentContent is a preview of the parent reply's content (for nested threads).
 	ParentContent string `json:"parent_content,omitempty"`
 	// ParentName is the parent reply author's display name.
-	ParentName  string       `json:"parent_name,omitempty"`
-	Attachments []Attachment `json:"attachments,omitempty"`
+	ParentName string `json:"parent_name,omitempty"`
+	// Favorited reports whether the authenticated viewer favorited this reply.
+	Favorited bool `json:"favorited,omitempty"`
+	// FavoriteCount is the total number of users who favorited this reply.
+	FavoriteCount int64        `json:"favorite_count,omitempty"`
+	Attachments   []Attachment `json:"attachments,omitempty"`
 }
 
 // Attachment represents a file stored in RustFS.

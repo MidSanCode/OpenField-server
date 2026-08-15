@@ -60,6 +60,23 @@ func (r *FollowRepository) IsFollowing(followerID, followeeID int64) (bool, erro
 	return exists, nil
 }
 
+// AreMutual reports whether userA and userB follow each other (friends).
+func (r *FollowRepository) AreMutual(a, b int64) (bool, error) {
+	var exists bool
+	err := database.DB.QueryRow(
+		`SELECT EXISTS (
+			SELECT 1 FROM user_follows f1
+			JOIN user_follows f2 ON f1.follower_id = f2.followee_id AND f2.follower_id = f1.followee_id
+			WHERE f1.follower_id = $1 AND f1.followee_id = $2
+		)`,
+		a, b,
+	).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("failed to check mutual follow status: %w", err)
+	}
+	return exists, nil
+}
+
 // CountFollowers returns how many users follow the given user.
 func (r *FollowRepository) CountFollowers(userID int64) (int64, error) {
 	var count int64
@@ -130,6 +147,34 @@ func (r *FollowRepository) ListFollowing(userID int64, page, limit int) ([]model
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list following: %w", err)
+	}
+	defer rows.Close()
+
+	return scanUsers(rows)
+}
+
+// ListFriends returns the users who mutually follow the given user (friends),
+// ordered by when the mutual relationship was established.
+func (r *FollowRepository) ListFriends(userID int64, page, limit int) ([]model.User, error) {
+	if page < 1 {
+		page = 1
+	}
+	if limit < 1 {
+		limit = 20
+	}
+	offset := (page - 1) * limit
+
+	rows, err := database.DB.Query(
+		"SELECT "+joinUserColumns+` FROM users u
+		 JOIN user_follows f1 ON f1.followee_id = u.id
+		 JOIN user_follows f2 ON f2.follower_id = u.id AND f2.followee_id = $1
+		 WHERE f1.follower_id = $1
+		 ORDER BY f1.created_at DESC
+		 LIMIT $2 OFFSET $3`,
+		userID, limit, offset,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list friends: %w", err)
 	}
 	defer rows.Close()
 

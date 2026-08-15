@@ -43,9 +43,11 @@ var ServerCapabilities = map[string]bool{
 	"chat.notify_level":      true,
 	"chat.member_titles":     true,
 	// Posts
-	"posts.create":    true,
-	"posts.replies":   true,
-	"posts.reactions": true,
+	"posts.create":     true,
+	"posts.replies":    true,
+	"posts.reactions":  true,
+	"posts.favorites":  true,
+	"posts.visibility": true,
 	// Storage
 	"storage.uploads":         true,
 	"storage.chunked_uploads": true,

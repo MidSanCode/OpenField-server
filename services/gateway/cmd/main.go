@@ -174,12 +174,19 @@ func main() {
 		{http.MethodGet, "/api/v1/users/:user_id/posts", cfg.Services.Posts, authPublic, ""},
 		{http.MethodPut, "/api/v1/posts/:id/reactions", cfg.Services.Posts, authPermission, "posts.react"},
 		{http.MethodDelete, "/api/v1/posts/:id/reactions", cfg.Services.Posts, authPermission, "posts.react"},
+		{http.MethodPost, "/api/v1/posts/:id/favorite", cfg.Services.Posts, authPermission, "posts.favorite"},
+		{http.MethodDelete, "/api/v1/posts/:id/favorite", cfg.Services.Posts, authPermission, "posts.favorite"},
+		{http.MethodPost, "/api/v1/posts/:id/replies/:reply_id/favorite", cfg.Services.Posts, authPermission, "posts.favorite"},
+		{http.MethodDelete, "/api/v1/posts/:id/replies/:reply_id/favorite", cfg.Services.Posts, authPermission, "posts.favorite"},
+		{http.MethodGet, "/api/v1/users/:user_id/favorites/posts", cfg.Services.Posts, authRequired, ""},
+		{http.MethodGet, "/api/v1/users/:user_id/favorites/replies", cfg.Services.Posts, authRequired, ""},
 
 		// ---- follows ----
 		{http.MethodPost, "/api/v1/users/:user_id/follow", cfg.Services.Account, authPermission, "account.follow"},
 		{http.MethodDelete, "/api/v1/users/:user_id/follow", cfg.Services.Account, authPermission, "account.follow"},
 		{http.MethodGet, "/api/v1/users/:user_id/followers", cfg.Services.Account, authPublic, ""},
 		{http.MethodGet, "/api/v1/users/:user_id/following", cfg.Services.Account, authPublic, ""},
+		{http.MethodGet, "/api/v1/users/:user_id/friends", cfg.Services.Account, authPublic, ""},
 
 		// ---- wallet ----
 		{http.MethodGet, "/api/v1/wallet", cfg.Services.Account, authPermission, "wallet.view"},

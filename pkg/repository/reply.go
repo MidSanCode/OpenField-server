@@ -40,35 +40,21 @@ func (r *PostReplyRepository) Create(postID, userID int64, content string, paren
 		}
 	}
 
-	return r.getWithDetails(reply.ID)
+	return r.getWithDetails(reply.ID, 0)
 }
 
 // GetByID retrieves a reply by ID.
 func (r *PostReplyRepository) GetByID(id int64) (*model.PostReply, error) {
-	reply := &model.PostReply{}
-	err := database.DB.QueryRow(
-		`SELECT pr.id, pr.post_id, pr.user_id, pr.content, pr.parent_id, pr.created_at, pr.updated_at, pr.deleted_at,
-		        u.username, u.nickname, u.avatar_url, u.is_verified
-		 FROM post_replies pr
-		 JOIN users u ON pr.user_id = u.id
-		 WHERE pr.id = $1`,
-		id,
-	).Scan(&reply.ID, &reply.PostID, &reply.UserID, &reply.Content, &reply.ParentID, &reply.CreatedAt, &reply.UpdatedAt, &reply.DeletedAt, &reply.Username, &reply.Nickname, &reply.AvatarURL, &reply.IsVerified)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
+	return r.getWithDetails(id, 0)
+}
 
-	if err := r.populateDetails([]*model.PostReply{reply}); err != nil {
-		return nil, err
-	}
-	return reply, nil
+// GetByIDWithViewer retrieves a reply by ID, populating the viewer's favorite state.
+func (r *PostReplyRepository) GetByIDWithViewer(id, viewerID int64) (*model.PostReply, error) {
+	return r.getWithDetails(id, viewerID)
 }
 
 // ListByPost retrieves replies for a post, excluding soft-deleted ones.
-func (r *PostReplyRepository) ListByPost(postID int64, page, limit int) ([]model.PostReply, error) {
+func (r *PostReplyRepository) ListByPost(postID int64, page, limit int, viewerID int64) ([]model.PostReply, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -107,6 +93,9 @@ func (r *PostReplyRepository) ListByPost(postID int64, page, limit int) ([]model
 	}
 
 	if err := r.populateDetails(ptrReplies); err != nil {
+		return nil, err
+	}
+	if err := r.populateFavorited(ptrReplies, viewerID); err != nil {
 		return nil, err
 	}
 	return replies, nil
@@ -166,7 +155,7 @@ func (r *PostReplyRepository) Delete(id, userID int64) error {
 }
 
 // getWithDetails fetches a reply with author info, parent preview and attachments.
-func (r *PostReplyRepository) getWithDetails(id int64) (*model.PostReply, error) {
+func (r *PostReplyRepository) getWithDetails(id, viewerID int64) (*model.PostReply, error) {
 	reply := &model.PostReply{}
 	err := database.DB.QueryRow(
 		`SELECT pr.id, pr.post_id, pr.user_id, pr.content, pr.parent_id, pr.created_at, pr.updated_at, pr.deleted_at,
@@ -177,13 +166,165 @@ func (r *PostReplyRepository) getWithDetails(id int64) (*model.PostReply, error)
 		id,
 	).Scan(&reply.ID, &reply.PostID, &reply.UserID, &reply.Content, &reply.ParentID, &reply.CreatedAt, &reply.UpdatedAt, &reply.DeletedAt, &reply.Username, &reply.Nickname, &reply.AvatarURL, &reply.IsVerified)
 	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("failed to get reply: %w", err)
 	}
 
 	if err := r.populateDetails([]*model.PostReply{reply}); err != nil {
 		return nil, err
 	}
+	if err := r.populateFavorited([]*model.PostReply{reply}, viewerID); err != nil {
+		return nil, err
+	}
 	return reply, nil
+}
+
+// FavoriteReply records the user's favorite on a reply (idempotent).
+func (r *PostReplyRepository) FavoriteReply(replyID, userID int64) error {
+	if _, err := database.DB.Exec(
+		"INSERT INTO reply_favorites (reply_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+		replyID, userID,
+	); err != nil {
+		return fmt.Errorf("failed to favorite reply: %w", err)
+	}
+	return nil
+}
+
+// UnfavoriteReply removes the user's favorite from a reply (idempotent).
+func (r *PostReplyRepository) UnfavoriteReply(replyID, userID int64) error {
+	if _, err := database.DB.Exec(
+		"DELETE FROM reply_favorites WHERE reply_id = $1 AND user_id = $2",
+		replyID, userID,
+	); err != nil {
+		return fmt.Errorf("failed to unfavorite reply: %w", err)
+	}
+	return nil
+}
+
+// IsReplyFavorited reports whether the user favorited the given reply.
+func (r *PostReplyRepository) IsReplyFavorited(replyID, userID int64) (bool, error) {
+	var exists bool
+	err := database.DB.QueryRow(
+		"SELECT EXISTS (SELECT 1 FROM reply_favorites WHERE reply_id = $1 AND user_id = $2)",
+		replyID, userID,
+	).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("failed to check reply favorite: %w", err)
+	}
+	return exists, nil
+}
+
+// ListFavoriteReplies retrieves the replies favorited by the given user.
+func (r *PostReplyRepository) ListFavoriteReplies(userID int64, page, limit int) ([]model.PostReply, error) {
+	if page < 1 {
+		page = 1
+	}
+	if limit < 1 {
+		limit = 50
+	}
+	offset := (page - 1) * limit
+
+	rows, err := database.DB.Query(
+		`SELECT pr.id, pr.post_id, pr.user_id, pr.content, pr.parent_id, pr.created_at, pr.updated_at, pr.deleted_at,
+		        u.username, u.nickname, u.avatar_url, u.is_verified
+		 FROM post_replies pr
+		 JOIN users u ON pr.user_id = u.id
+		 JOIN reply_favorites fv ON fv.reply_id = pr.id
+		 WHERE fv.user_id = $1
+		 ORDER BY fv.created_at DESC
+		 LIMIT $2 OFFSET $3`,
+		userID, limit, offset,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list favorite replies: %w", err)
+	}
+	defer rows.Close()
+
+	replies := make([]model.PostReply, 0)
+	ptrReplies := make([]*model.PostReply, 0)
+	for rows.Next() {
+		var reply model.PostReply
+		if err := rows.Scan(&reply.ID, &reply.PostID, &reply.UserID, &reply.Content, &reply.ParentID, &reply.CreatedAt, &reply.UpdatedAt, &reply.DeletedAt, &reply.Username, &reply.Nickname, &reply.AvatarURL, &reply.IsVerified); err != nil {
+			return nil, fmt.Errorf("failed to scan reply: %w", err)
+		}
+		reply.Favorited = true
+		replies = append(replies, reply)
+		ptrReplies = append(ptrReplies, &replies[len(replies)-1])
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows error: %w", err)
+	}
+
+	if err := r.populateDetails(ptrReplies); err != nil {
+		return nil, err
+	}
+	if err := r.populateFavorited(ptrReplies, userID); err != nil {
+		return nil, err
+	}
+	return replies, nil
+}
+
+// populateFavorited marks which of the given replies the viewer favorited and
+// fills total favorite counts.
+func (r *PostReplyRepository) populateFavorited(replies []*model.PostReply, viewerID int64) error {
+	if len(replies) == 0 {
+		return nil
+	}
+	replyIDs := make([]int64, 0, len(replies))
+	byID := make(map[int64]*model.PostReply, len(replies))
+	for _, rp := range replies {
+		replyIDs = append(replyIDs, rp.ID)
+		byID[rp.ID] = rp
+	}
+
+	rows, err := database.DB.Query(
+		"SELECT reply_id, COUNT(*) FROM reply_favorites WHERE reply_id = ANY($1) GROUP BY reply_id",
+		pq.Array(replyIDs),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to count reply favorites: %w", err)
+	}
+	for rows.Next() {
+		var replyID, count int64
+		if err := rows.Scan(&replyID, &count); err != nil {
+			rows.Close()
+			return fmt.Errorf("failed to scan reply favorite count: %w", err)
+		}
+		if rp, ok := byID[replyID]; ok {
+			rp.FavoriteCount = count
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("rows error: %w", err)
+	}
+
+	if viewerID > 0 {
+		favRows, err := database.DB.Query(
+			"SELECT reply_id FROM reply_favorites WHERE reply_id = ANY($1) AND user_id = $2",
+			pq.Array(replyIDs), viewerID,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to query reply favorites: %w", err)
+		}
+		for favRows.Next() {
+			var replyID int64
+			if err := favRows.Scan(&replyID); err != nil {
+				favRows.Close()
+				return fmt.Errorf("failed to scan reply favorite: %w", err)
+			}
+			if rp, ok := byID[replyID]; ok {
+				rp.Favorited = true
+			}
+		}
+		favRows.Close()
+		if err := favRows.Err(); err != nil {
+			return fmt.Errorf("rows error: %w", err)
+		}
+	}
+	return nil
 }
 
 // populateDetails fills parent preview and attachments for the given replies.

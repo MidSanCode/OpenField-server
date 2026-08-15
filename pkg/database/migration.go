@@ -91,6 +91,29 @@ var versionedMigrations = []migration{
 			ALTER TABLE users ADD COLUMN IF NOT EXISTS pin_hash VARCHAR(255) NOT NULL DEFAULT '';
 		`,
 	},
+	{
+		version: 4,
+		name:    "posts-visibility-favorites",
+		sql: `
+			ALTER TABLE posts ADD COLUMN IF NOT EXISTS visibility VARCHAR(16) NOT NULL DEFAULT 'public';
+
+			CREATE TABLE IF NOT EXISTS post_favorites (
+				post_id BIGINT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+				user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+				PRIMARY KEY (post_id, user_id)
+			);
+			CREATE INDEX IF NOT EXISTS idx_post_favorites_user ON post_favorites(user_id, created_at DESC);
+
+			CREATE TABLE IF NOT EXISTS reply_favorites (
+				reply_id BIGINT NOT NULL REFERENCES post_replies(id) ON DELETE CASCADE,
+				user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+				PRIMARY KEY (reply_id, user_id)
+			);
+			CREATE INDEX IF NOT EXISTS idx_reply_favorites_user ON reply_favorites(user_id, created_at DESC);
+		`,
+	},
 }
 
 // latestMigrationVersion returns the newest schema version the code knows
