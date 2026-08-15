@@ -18,11 +18,11 @@ func NewUserRepository() *UserRepository {
 	return &UserRepository{}
 }
 
-const userColumns = "id, username, nickname, email, avatar_url, banner_url, role, password_hash, needs_registration, bio, is_verified, storage_quota, oauth2_provider, oauth2_id, oauth2_username, verified_note, verified_by, e2ee_public_key, exp, last_daily_bonus_at, checkin_streak, pin_hash, region, lang, created_at, updated_at"
+const userColumns = "id, username, nickname, email, avatar_url, banner_url, role, password_hash, needs_registration, bio, is_verified, storage_quota, oauth2_provider, oauth2_id, oauth2_username, verified_note, verified_by, e2ee_public_key, exp, last_daily_bonus_at, checkin_streak, pin_hash, region, lang, member_level, member_expires_at, created_at, updated_at"
 
 func scanUser(row interface{ Scan(...any) error }) (*model.User, error) {
 	user := &model.User{}
-	err := row.Scan(&user.ID, &user.Username, &user.Nickname, &user.Email, &user.AvatarURL, &user.BannerURL, &user.Role, &user.PasswordHash, &user.NeedsRegistration, &user.Bio, &user.IsVerified, &user.StorageQuota, &user.OAuth2Provider, &user.OAuth2ID, &user.OAuth2Username, &user.VerifiedNote, &user.VerifiedBy, &user.E2EEPublicKey, &user.Exp, &user.LastDailyBonusAt, &user.CheckinStreak, &user.PinHash, &user.Region, &user.Lang, &user.CreatedAt, &user.UpdatedAt)
+	err := row.Scan(&user.ID, &user.Username, &user.Nickname, &user.Email, &user.AvatarURL, &user.BannerURL, &user.Role, &user.PasswordHash, &user.NeedsRegistration, &user.Bio, &user.IsVerified, &user.StorageQuota, &user.OAuth2Provider, &user.OAuth2ID, &user.OAuth2Username, &user.VerifiedNote, &user.VerifiedBy, &user.E2EEPublicKey, &user.Exp, &user.LastDailyBonusAt, &user.CheckinStreak, &user.PinHash, &user.Region, &user.Lang, &user.MemberLevel, &user.MemberExpiresAt, &user.CreatedAt, &user.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}

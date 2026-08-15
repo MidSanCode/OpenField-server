@@ -499,7 +499,7 @@ func (h *UserHandler) ClaimDailyBonus(c *gin.Context) {
 	loc := h.gameCfg.Location()
 	expAmt := h.gameCfg.EffectiveDailyBonus()
 	curAmt := h.gameCfg.EffectiveDailyCurrency()
-	granted, streak, err := h.taskRepo.Checkin(userID, expAmt, curAmt, 0, false, loc, time.Now())
+	granted, expGranted, streak, err := h.taskRepo.Checkin(userID, expAmt, curAmt, 0, false, loc, time.Now())
 	if err != nil {
 		logger.Log.Error("failed to grant daily bonus", "error", err, "user_id", userID)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to grant daily bonus"})
@@ -512,7 +512,7 @@ func (h *UserHandler) ClaimDailyBonus(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"granted":  granted,
-		"amount":   expAmt,
+		"amount":   expGranted,
 		"currency": curAmt,
 		"exp":      newExp.Exp,
 		"level":    model.LevelForExp(newExp.Exp),
@@ -546,8 +546,9 @@ func (h *UserHandler) UpdateLocale(c *gin.Context) {
 }
 
 // AdjustExp is an admin-only endpoint to add or subtract experience from a
-// user's account. Requires the user.adjust_exp permission (enforced by the
-// gateway).
+// user's account. Positive adjustments are scaled by the user's active
+// membership multiplier; negative (penalty) adjustments always pass through
+// unchanged. Requires the user.adjust_exp permission (enforced by the gateway).
 func (h *UserHandler) AdjustExp(c *gin.Context) {
 	userID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
@@ -563,19 +564,39 @@ func (h *UserHandler) AdjustExp(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
 		return
 	}
-	exp, err := h.userRepo.AdjustExp(userID, req.Delta)
+
+	user, err := h.userRepo.GetByID(userID)
 	if err != nil {
-		logger.Log.Error("failed to adjust exp", "error", err, "user_id", userID, "delta", req.Delta)
+		logger.Log.Error("failed to load user for exp adjust", "error", err, "user_id", userID)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to adjust exp"})
 		return
 	}
-	if req.Delta != 0 {
+	if user == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+		return
+	}
+
+	// Positive grants from the admin are treated like every other exp source:
+	// they benefit from the membership multiplier. Negative deltas subtract the
+	// requested amount verbatim.
+	delta := req.Delta
+	if delta > 0 {
+		delta = model.ApplyMemberExp(delta, user.MemberLevel, user.MemberExpiresAt, time.Now())
+	}
+
+	exp, err := h.userRepo.AdjustExp(userID, delta)
+	if err != nil {
+		logger.Log.Error("failed to adjust exp", "error", err, "user_id", userID, "delta", delta)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to adjust exp"})
+		return
+	}
+	if delta != 0 {
 		desc := req.Description
 		if desc == "" {
 			desc = "管理员调整"
 		}
 		expRepo := repository.NewExpRepository()
-		if err := expRepo.Add(userID, req.Delta, model.ExpReasonAdjust, desc); err != nil {
+		if err := expRepo.Add(userID, delta, model.ExpReasonAdjust, desc); err != nil {
 			logger.Log.Warn("failed to record exp history", "error", err, "user_id", userID)
 		}
 	}

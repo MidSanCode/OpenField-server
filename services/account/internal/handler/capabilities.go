@@ -33,6 +33,8 @@ var ServerCapabilities = map[string]bool{
 	"user.exp_levels":        true,
 	"user.daily_bonus":       true,
 	"user.adjust_exp":        true,
+	"user.exp_history":       true,
+	"user.membership":        true,
 	// Chat features
 	"chat.private_chat":      true,
 	"chat.group_chat":        true,

@@ -55,6 +55,14 @@ type User struct {
 	// HasPin reports whether the user has set a payment PIN. Prompts the client
 	// to set one before the first payment.
 	HasPin bool `json:"has_pin"`
+	// MemberLevel is the user's purchased membership tier (0 = none). While the
+	// membership is active (MemberExpiresAt in the future) every exp grant is
+	// scaled by the tier multiplier; the level stays stored after expiry so a
+	// renewal can extend from where the user left off.
+	MemberLevel int64 `json:"member_level"`
+	// MemberExpiresAt is when the membership expires (null when the user has
+	// never had an active membership).
+	MemberExpiresAt *time.Time `json:"member_expires_at,omitempty"`
 	// Region is the user's locale region name (e.g. "中国"), used to derive
 	// the timezone for day boundaries and the display language for server
 	// notifications. Empty string means the server defaults apply.
@@ -82,11 +90,11 @@ type Post struct {
 	// Favorited reports whether the authenticated viewer favorited this post.
 	Favorited bool `json:"favorited,omitempty"`
 	// FavoriteCount is the total number of users who favorited this post.
-	FavoriteCount int64 `json:"favorite_count,omitempty"`
-	Username      string `json:"username,omitempty"`
-	Nickname      string `json:"nickname,omitempty"`
-	AvatarURL     string `json:"avatar_url,omitempty"`
-	IsVerified    bool   `json:"is_verified,omitempty"`
+	FavoriteCount int64        `json:"favorite_count,omitempty"`
+	Username      string       `json:"username,omitempty"`
+	Nickname      string       `json:"nickname,omitempty"`
+	AvatarURL     string       `json:"avatar_url,omitempty"`
+	IsVerified    bool         `json:"is_verified,omitempty"`
 	Attachments   []Attachment `json:"attachments,omitempty"`
 }
 

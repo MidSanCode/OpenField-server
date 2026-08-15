@@ -211,7 +211,7 @@ func getTaskByCode(code string) (*model.Task, error) {
 //
 // It is idempotent per calendar day (in the user's timezone): the second call
 // within the same day returns granted=false without side effects.
-func (r *TaskRepository) Checkin(userID, expAmount, currencyAmount, makeupCost int64, isMakeup bool, loc *time.Location, now time.Time) (granted bool, streak int64, err error) {
+func (r *TaskRepository) Checkin(userID, expAmount, currencyAmount, makeupCost int64, isMakeup bool, loc *time.Location, now time.Time) (granted bool, expGranted int64, streak int64, err error) {
 	if loc == nil {
 		loc = time.UTC
 	}
@@ -219,23 +219,25 @@ func (r *TaskRepository) Checkin(userID, expAmount, currencyAmount, makeupCost i
 
 	tx, err := database.DB.Begin()
 	if err != nil {
-		return false, 0, fmt.Errorf("failed to begin checkin: %w", err)
+		return false, 0, 0, fmt.Errorf("failed to begin checkin: %w", err)
 	}
 	defer tx.Rollback()
 
 	var exp int64
 	var currentStreak int64
 	var lastBonusAt *time.Time
+	var memberLevel int64
+	var memberExpiresAt *time.Time
 	if err := tx.QueryRow(
-		"SELECT exp, checkin_streak, last_daily_bonus_at FROM users WHERE id = $1 FOR UPDATE",
+		"SELECT exp, checkin_streak, last_daily_bonus_at, member_level, member_expires_at FROM users WHERE id = $1 FOR UPDATE",
 		userID,
-	).Scan(&exp, &currentStreak, &lastBonusAt); err != nil {
-		return false, 0, fmt.Errorf("failed to load user for checkin: %w", err)
+	).Scan(&exp, &currentStreak, &lastBonusAt, &memberLevel, &memberExpiresAt); err != nil {
+		return false, 0, 0, fmt.Errorf("failed to load user for checkin: %w", err)
 	}
 
 	alreadyToday := lastBonusAt != nil && isSameUTCDay(*lastBonusAt, now, loc)
 	if alreadyToday {
-		return false, currentStreak, nil
+		return false, 0, currentStreak, nil
 	}
 
 	newStreak := currentStreak
@@ -245,7 +247,7 @@ func (r *TaskRepository) Checkin(userID, expAmount, currencyAmount, makeupCost i
 		// A make-up renews the streak for the missed day even when the last
 		// sign-in was more than a day ago, as long as it is not ancient.
 		if lastBonusAt == nil || now.Sub(*lastBonusAt).Hours() > 72 {
-			return false, currentStreak, ErrMakeupGapTooLarge
+			return false, 0, currentStreak, ErrMakeupGapTooLarge
 		}
 		newStreak = currentStreak + 1
 	} else {
@@ -255,25 +257,25 @@ func (r *TaskRepository) Checkin(userID, expAmount, currencyAmount, makeupCost i
 	if isMakeup {
 		// Charge the make-up price from the sender wallet.
 		if err := adjustBalanceTx(tx, userID, -model.MoneyScale*makeupCost, userID, "makeup", "补签扣款"); err != nil {
-			return false, currentStreak, err
+			return false, 0, currentStreak, err
 		}
 	} else {
 		// Grant the daily currency.
 		if err := adjustBalanceTx(tx, userID, model.MoneyScale*currencyAmount, userID, "checkin", "每日签到奖励"); err != nil {
-			return false, currentStreak, err
+			return false, 0, currentStreak, err
 		}
 	}
 
-	delta := expAmount
+	delta := model.ApplyMemberExp(expAmount, memberLevel, memberExpiresAt, now)
 	if _, err := tx.Exec(
 		"UPDATE users SET exp = exp + $2, checkin_streak = $3, last_daily_bonus_at = NOW(), updated_at = NOW() WHERE id = $1",
 		userID, delta, newStreak,
 	); err != nil {
-		return false, currentStreak, fmt.Errorf("failed to update user streak: %w", err)
+		return false, 0, currentStreak, fmt.Errorf("failed to update user streak: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
-		return false, currentStreak, err
+		return false, 0, currentStreak, err
 	}
 
 	reason := model.ExpReasonDailyBonus
@@ -288,16 +290,16 @@ func (r *TaskRepository) Checkin(userID, expAmount, currencyAmount, makeupCost i
 	// the wallet transaction so uniqueness collisions never roll back rewards.
 	if t, err := getTaskByCode("daily_login"); err == nil {
 		if err := r.recordCompletion(userID, t.ID, today); err != nil {
-			return false, newStreak, err
+			return false, 0, newStreak, err
 		}
 		_ = r.awardMilestones(userID, newStreak)
 	}
 
-	return true, newStreak, nil
+	return true, delta, newStreak, nil
 }
 
 // MakeupCheckin is a convenience wrapper for a paid make-up sign-in.
-func (r *TaskRepository) MakeupCheckin(userID, expAmount, makeupCost int64, loc *time.Location, now time.Time) (bool, int64, error) {
+func (r *TaskRepository) MakeupCheckin(userID, expAmount, makeupCost int64, loc *time.Location, now time.Time) (bool, int64, int64, error) {
 	return r.Checkin(userID, expAmount, 0, makeupCost, true, loc, now)
 }
 
@@ -365,41 +367,41 @@ func RecomputeStreak(signed []string, loc *time.Location, now time.Time) int64 {
 //
 // It records the day as signed, refunds/propagates the streak accordingly and
 // is idempotent: signing an already-signed day returns granted=false.
-func (r *TaskRepository) MakeupByDate(userID int64, dateKey string, expAmount, makeupCost int64, loc *time.Location, now time.Time) (bool, int64, error) {
+func (r *TaskRepository) MakeupByDate(userID int64, dateKey string, expAmount, makeupCost int64, loc *time.Location, now time.Time) (bool, int64, int64, error) {
 	if loc == nil {
 		loc = time.UTC
 	}
 	if _, err := time.ParseInLocation("2006-01-02", dateKey, loc); err != nil {
-		return false, 0, fmt.Errorf("invalid makeup date: %w", err)
+		return false, 0, 0, fmt.Errorf("invalid makeup date: %w", err)
 	}
 	todayKey := cycleKeyFor(now.In(loc))
 	if dateKey == todayKey {
-		return false, 0, ErrMakeupToday
+		return false, 0, 0, ErrMakeupToday
 	}
 	if dateKey > todayKey {
-		return false, 0, ErrMakeupFuture
+		return false, 0, 0, ErrMakeupFuture
 	}
 
 	user, err := r.userRepo.GetByID(userID)
 	if err != nil {
-		return false, 0, err
+		return false, 0, 0, err
 	}
 	if user == nil {
-		return false, 0, ErrNotFound
+		return false, 0, 0, ErrNotFound
 	}
 	regKey := cycleKeyFor(user.CreatedAt.In(loc))
 	if dateKey < regKey {
-		return false, 0, ErrMakeupBeforeRegistration
+		return false, 0, 0, ErrMakeupBeforeRegistration
 	}
 
 	t, err := getTaskByCode("daily_login")
 	if err != nil {
-		return false, 0, err
+		return false, 0, 0, err
 	}
 
 	tx, err := database.DB.Begin()
 	if err != nil {
-		return false, 0, fmt.Errorf("failed to begin makeup: %w", err)
+		return false, 0, 0, fmt.Errorf("failed to begin makeup: %w", err)
 	}
 	defer tx.Rollback()
 
@@ -413,29 +415,30 @@ func (r *TaskRepository) MakeupByDate(userID int64, dateKey string, expAmount, m
 		if isUniqueViolation(err) {
 			signed, listErr := ListSignedDates(userID)
 			if listErr != nil {
-				return false, 0, listErr
+				return false, 0, 0, listErr
 			}
-			return false, RecomputeStreak(signed, loc, now), nil
+			return false, 0, RecomputeStreak(signed, loc, now), nil
 		}
-		return false, 0, fmt.Errorf("failed to record makeup day: %w", err)
+		return false, 0, 0, fmt.Errorf("failed to record makeup day: %w", err)
 	}
 	if n, err := res.RowsAffected(); err != nil || n == 0 {
 		signed, listErr := ListSignedDates(userID)
 		if listErr != nil {
-			return false, 0, listErr
+			return false, 0, 0, listErr
 		}
-		return false, RecomputeStreak(signed, loc, now), nil
+		return false, 0, RecomputeStreak(signed, loc, now), nil
 	}
 
 	// Charge the make-up price (fails when the wallet is too empty).
 	if err := adjustBalanceTx(tx, userID, -model.MoneyScale*makeupCost, userID, "makeup", "补签扣款"); err != nil {
-		return false, 0, err
+		return false, 0, 0, err
 	}
+	delta := model.ApplyMemberExp(expAmount, user.MemberLevel, user.MemberExpiresAt, now)
 	if _, err := tx.Exec(
 		"UPDATE users SET exp = exp + $2, updated_at = NOW() WHERE id = $1",
-		userID, expAmount,
+		userID, delta,
 	); err != nil {
-		return false, 0, fmt.Errorf("failed to grant makeup exp: %w", err)
+		return false, 0, 0, fmt.Errorf("failed to grant makeup exp: %w", err)
 	}
 
 	// Recompute the streak from all signed days inside the transaction so the
@@ -448,13 +451,13 @@ func (r *TaskRepository) MakeupByDate(userID int64, dateKey string, expAmount, m
 		userID, t.ID,
 	)
 	if err != nil {
-		return false, 0, fmt.Errorf("failed to query signed days after makeup: %w", err)
+		return false, 0, 0, fmt.Errorf("failed to query signed days after makeup: %w", err)
 	}
 	for signedTx.Next() {
 		var d string
 		if err := signedTx.Scan(&d); err != nil {
 			signedTx.Close()
-			return false, 0, fmt.Errorf("failed to scan signed day: %w", err)
+			return false, 0, 0, fmt.Errorf("failed to scan signed day: %w", err)
 		}
 		signed = append(signed, d)
 	}
@@ -464,17 +467,17 @@ func (r *TaskRepository) MakeupByDate(userID int64, dateKey string, expAmount, m
 		"UPDATE users SET checkin_streak = $2 WHERE id = $1",
 		userID, newStreak,
 	); err != nil {
-		return false, 0, fmt.Errorf("failed to update streak after makeup: %w", err)
+		return false, 0, 0, fmt.Errorf("failed to update streak after makeup: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
-		return false, 0, err
+		return false, 0, 0, err
 	}
 
-	_ = r.expRepo.Add(userID, expAmount, model.ExpReasonMakeup, "补签 "+dateKey)
+	_ = r.expRepo.Add(userID, delta, model.ExpReasonMakeup, "补签 "+dateKey)
 	_ = r.awardMilestones(userID, newStreak)
 
-	return true, newStreak, nil
+	return true, delta, newStreak, nil
 }
 
 // recordCompletion marks a task as completed for the requested cycle.
@@ -540,19 +543,21 @@ func (r *TaskRepository) ClaimOnce(userID int64, code string) (int64, int64, err
 	if done {
 		return 0, 0, ErrAlreadyClaimed
 	}
-	if err := r.grantTaskReward(userID, t, ""); err != nil {
+	expGranted, err := r.grantTaskReward(userID, t, "")
+	if err != nil {
 		return 0, 0, err
 	}
-	return t.RewardExp, t.RewardCurrency, nil
+	return expGranted, t.RewardCurrency, nil
 }
 
 // grantTaskReward atomically credits exp + currency and records completion.
 // A unique violation on the completion insert (a concurrent claim won) aborts
-// the whole write so rewards are never double-granted.
-func (r *TaskRepository) grantTaskReward(userID int64, t *model.Task, cycleKey string) error {
+// the whole write so rewards are never double-granted. It returns the exp
+// actually granted (the task reward scaled by the member multiplier).
+func (r *TaskRepository) grantTaskReward(userID int64, t *model.Task, cycleKey string) (int64, error) {
 	tx, err := database.DB.Begin()
 	if err != nil {
-		return fmt.Errorf("failed to begin task reward: %w", err)
+		return 0, fmt.Errorf("failed to begin task reward: %w", err)
 	}
 	defer tx.Rollback()
 
@@ -562,28 +567,38 @@ func (r *TaskRepository) grantTaskReward(userID int64, t *model.Task, cycleKey s
 	)
 	if err != nil {
 		if isUniqueViolation(err) {
-			return ErrAlreadyClaimed
+			return 0, ErrAlreadyClaimed
 		}
-		return fmt.Errorf("failed to record completion: %w", err)
+		return 0, fmt.Errorf("failed to record completion: %w", err)
 	}
 	if n, err := res.RowsAffected(); err != nil || n == 0 {
-		return ErrAlreadyClaimed
+		return 0, ErrAlreadyClaimed
 	}
+
+	var memberLevel int64
+	var memberExpiresAt *time.Time
+	if err := tx.QueryRow(
+		"SELECT member_level, member_expires_at FROM users WHERE id = $1 FOR UPDATE",
+		userID,
+	).Scan(&memberLevel, &memberExpiresAt); err != nil {
+		return 0, fmt.Errorf("failed to load user membership for task reward: %w", err)
+	}
+	delta := model.ApplyMemberExp(t.RewardExp, memberLevel, memberExpiresAt, time.Now())
 
 	if _, err := tx.Exec(
 		"UPDATE users SET exp = exp + $2, updated_at = NOW() WHERE id = $1",
-		userID, t.RewardExp,
+		userID, delta,
 	); err != nil {
-		return fmt.Errorf("failed to grant task exp: %w", err)
+		return 0, fmt.Errorf("failed to grant task exp: %w", err)
 	}
 	if t.RewardCurrency > 0 {
 		if err := adjustBalanceTx(tx, userID, model.MoneyScale*t.RewardCurrency, userID, "task_reward", t.Name); err != nil {
-			return err
+			return 0, err
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit task reward: %w", err)
+		return 0, fmt.Errorf("failed to commit task reward: %w", err)
 	}
-	return r.expRepo.Add(userID, t.RewardExp, model.ExpReasonTask, t.Name)
+	return delta, r.expRepo.Add(userID, delta, model.ExpReasonTask, t.Name)
 }

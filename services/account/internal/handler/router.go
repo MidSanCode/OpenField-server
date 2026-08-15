@@ -7,7 +7,7 @@ import (
 
 // RegisterRoutes registers all account service routes.
 // Public auth endpoints and protected user endpoints.
-func RegisterRoutes(r *gin.Engine, authHandler *AuthHandler, userHandler *UserHandler, walletHandler *WalletHandler, capabilitiesHandler *CapabilitiesHandler, taskHandler *TaskHandler, transferHandler *TransferHandler, pinHandler *PinHandler) {
+func RegisterRoutes(r *gin.Engine, authHandler *AuthHandler, userHandler *UserHandler, walletHandler *WalletHandler, capabilitiesHandler *CapabilitiesHandler, taskHandler *TaskHandler, transferHandler *TransferHandler, pinHandler *PinHandler, membershipHandler *MembershipHandler) {
 	api := r.Group("/api/v1")
 	{
 		// Public capabilities introspection — unauthenticated so the client
@@ -44,6 +44,17 @@ func RegisterRoutes(r *gin.Engine, authHandler *AuthHandler, userHandler *UserHa
 		api.GET("/users/:id", userHandler.GetUser)
 		// Admin exp adjustment (gateway enforces the user.adjust_exp permission).
 		api.PUT("/users/:id/exp", middleware.GatewayAuthMiddleware(), userHandler.AdjustExp)
+		// Admin membership grant (gateway enforces user.membership.grant).
+		api.PUT("/users/:id/membership", middleware.GatewayAuthMiddleware(), membershipHandler.Grant)
+
+		// Membership: the catalog + current state is a protected read; purchases
+		// charge the wallet and require the payment PIN.
+		membership := api.Group("/membership")
+		membership.Use(middleware.GatewayAuthMiddleware())
+		{
+			membership.GET("", membershipHandler.GetMembership)
+			membership.POST("/purchase", membershipHandler.Purchase)
+		}
 
 		// Follow relationships: mutations require auth; lists are public reads.
 		follow := api.Group("/users/:id")

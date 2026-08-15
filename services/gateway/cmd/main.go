@@ -149,6 +149,11 @@ func main() {
 		{http.MethodGet, "/api/v1/users/search", cfg.Services.Account, authRequired, ""},
 		{http.MethodGet, "/api/v1/users/:user_id", cfg.Services.Account, authPublic, ""},
 		{http.MethodPut, "/api/v1/users/:user_id/exp", cfg.Services.Account, authPermission, "user.adjust_exp"},
+		{http.MethodPut, "/api/v1/users/:user_id/membership", cfg.Services.Account, authPermission, "user.membership.grant"},
+
+		// ---- membership ----
+		{http.MethodGet, "/api/v1/membership", cfg.Services.Account, authRequired, ""},
+		{http.MethodPost, "/api/v1/membership/purchase", cfg.Services.Account, authRequired, ""},
 
 		// ---- storage ----
 		{http.MethodPost, "/api/v1/attachments", cfg.Services.Storage, authPermission, "storage.upload"},

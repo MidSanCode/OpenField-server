@@ -114,6 +114,14 @@ var versionedMigrations = []migration{
 			CREATE INDEX IF NOT EXISTS idx_reply_favorites_user ON reply_favorites(user_id, created_at DESC);
 		`,
 	},
+	{
+		version: 5,
+		name:    "membership",
+		sql: `
+			ALTER TABLE users ADD COLUMN IF NOT EXISTS member_level BIGINT NOT NULL DEFAULT 0;
+			ALTER TABLE users ADD COLUMN IF NOT EXISTS member_expires_at TIMESTAMPTZ;
+		`,
+	},
 }
 
 // latestMigrationVersion returns the newest schema version the code knows

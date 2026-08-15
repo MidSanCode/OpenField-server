@@ -66,7 +66,7 @@ func (h *TaskHandler) ClaimDailyLogin(c *gin.Context) {
 	loc := h.gameCfg.Location()
 	expAmt := h.gameCfg.EffectiveDailyBonus()
 	curAmt := h.gameCfg.EffectiveDailyCurrency()
-	granted, streak, err := h.taskRepo.Checkin(userID, expAmt, curAmt, 0, false, loc, time.Now())
+	granted, expGranted, streak, err := h.taskRepo.Checkin(userID, expAmt, curAmt, 0, false, loc, time.Now())
 	if err != nil {
 		logger.Log.Error("failed to claim daily login", "error", err, "user_id", userID)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to claim daily login"})
@@ -74,7 +74,7 @@ func (h *TaskHandler) ClaimDailyLogin(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"granted":  granted,
-		"exp":      expAmt,
+		"exp":      expGranted,
 		"currency": curAmt,
 		"streak":   streak,
 	})
@@ -91,7 +91,7 @@ func (h *TaskHandler) MakeupCheckin(c *gin.Context) {
 	loc := h.gameCfg.Location()
 	expAmt := h.gameCfg.EffectiveDailyBonus()
 	cost := h.gameCfg.EffectiveMakeupCost()
-	granted, streak, err := h.taskRepo.MakeupCheckin(userID, expAmt, cost, loc, time.Now())
+	granted, expGranted, streak, err := h.taskRepo.MakeupCheckin(userID, expAmt, cost, loc, time.Now())
 	if err != nil {
 		if err == repository.ErrInsufficientBalance {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "insufficient balance"})
@@ -107,7 +107,7 @@ func (h *TaskHandler) MakeupCheckin(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"granted": granted,
-		"exp":     expAmt,
+		"exp":     expGranted,
 		"cost":    cost,
 		"streak":  streak,
 	})
@@ -209,7 +209,7 @@ func (h *TaskHandler) MakeupByDate(c *gin.Context) {
 
 	expAmt := h.gameCfg.EffectiveDailyBonus()
 	cost := h.gameCfg.EffectiveMakeupCost()
-	granted, streak, err := h.taskRepo.MakeupByDate(userID, body.Date, expAmt, cost, loc, time.Now())
+	granted, expGranted, streak, err := h.taskRepo.MakeupByDate(userID, body.Date, expAmt, cost, loc, time.Now())
 	if err != nil {
 		if err == repository.ErrInsufficientBalance {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "insufficient balance"})
@@ -226,11 +226,11 @@ func (h *TaskHandler) MakeupByDate(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"granted":   granted,
-		"date":      body.Date,
-		"exp":       expAmt,
-		"cost":      cost,
-		"streak":    streak,
+		"granted": granted,
+		"date":    body.Date,
+		"exp":     expGranted,
+		"cost":    cost,
+		"streak":  streak,
 	})
 }
 
