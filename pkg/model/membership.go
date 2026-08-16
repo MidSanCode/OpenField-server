@@ -1,9 +1,44 @@
 package model
 
 import (
+	"database/sql/driver"
+	"encoding/json"
+	"fmt"
 	"math"
 	"time"
 )
+
+// NameColorList is a JSONB array of hex colors forming a gradient display
+// name. It scans/unmarshals to a []string and marshals back to the same JSON
+// array so the column round-trips cleanly through database/sql.
+type NameColorList []string
+
+// Scan implements sql.Scanner for the JSONB name_colors column.
+func (l *NameColorList) Scan(value interface{}) error {
+	if value == nil {
+		*l = nil
+		return nil
+	}
+	b, ok := value.([]byte)
+	if !ok {
+		s, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type for name_colors: %T", value)
+		}
+		b = []byte(s)
+	}
+	var list []string
+	if err := json.Unmarshal(b, &list); err != nil {
+		return fmt.Errorf("failed to decode name_colors: %w", err)
+	}
+	*l = list
+	return nil
+}
+
+// Value implements driver.Valuer for writing the column.
+func (l NameColorList) Value() (driver.Value, error) {
+	return json.Marshal([]string(l))
+}
 
 // MemberLevel identifies a purchasable membership tier. 0 means the user has no
 // membership. Higher tiers stack on top of lower ones: every tier grants a
@@ -90,14 +125,43 @@ func IsPresetNameColor(s string) bool {
 	return false
 }
 
+// NameGradientDirections is the supported linear-gradient orientations for
+// multi-color display names. The first entry is the default used when a name
+// has multiple colors but no explicit direction.
+var NameGradientDirections = []string{
+	"left_right",
+	"right_left",
+	"top_bottom",
+	"bottom_top",
+	"top_left_bottom_right",
+	"bottom_left_top_right",
+}
+
+// ValidGradientDirection reports whether s is a supported gradient direction.
+func ValidGradientDirection(s string) bool {
+	for _, d := range NameGradientDirections {
+		if d == s {
+			return true
+		}
+	}
+	return false
+}
+
 // MemberNameStyleCap describes what a membership level may set for its display
 // name: Lv.1 = solid preset colors only, Lv.2 = any solid hex, Lv.3 = gradient
-// (two colors), Lv.4 = dynamic (animated) gradient.
+// (two or more colors), Lv.4 = dynamic (animated) gradient.
 type MemberNameStyleCap struct {
-	PresetsOnly  bool // Lv.1: color must be a preset
-	AllowGradient bool // Lv.3+: a second color (name_color_to) is allowed
+	PresetsOnly   bool // Lv.1: color must be a preset
+	AllowGradient bool // Lv.3+: two or more colors (gradient) are allowed
 	AllowDynamic  bool // Lv.4: the dynamic animated gradient is allowed
+	// MaxColors is the largest gradient color list a tier may set (1 for solid
+	// tiers, up to 6 for gradient tiers). Kept in sync with the client editor.
+	MaxColors int
 }
+
+// MemberMaxNameColors is the upper bound on gradient color stops, shared by the
+// name-style validation and the client editor.
+const MemberMaxNameColors = 6
 
 // MemberNameStyle allowed for a level when the membership is active. Returns
 // zero value (no styling) for non-members / expired memberships.
@@ -107,13 +171,13 @@ func MemberNameStyleAllowed(level int64, expiresAt *time.Time, now time.Time) Me
 	}
 	switch level {
 	case 1:
-		return MemberNameStyleCap{PresetsOnly: true}
+		return MemberNameStyleCap{PresetsOnly: true, MaxColors: 1}
 	case 2:
-		return MemberNameStyleCap{}
+		return MemberNameStyleCap{MaxColors: 1}
 	case 3:
-		return MemberNameStyleCap{AllowGradient: true}
+		return MemberNameStyleCap{AllowGradient: true, MaxColors: MemberMaxNameColors}
 	case 4:
-		return MemberNameStyleCap{AllowGradient: true, AllowDynamic: true}
+		return MemberNameStyleCap{AllowGradient: true, AllowDynamic: true, MaxColors: MemberMaxNameColors}
 	default:
 		return MemberNameStyleCap{}
 	}
@@ -171,6 +235,17 @@ type MembershipStatus struct {
 	Tiers       []MemberTier `json:"tiers"`
 	MemberDays  int64        `json:"member_days"`
 	MemberPrice int64        `json:"member_price,omitempty"`
+}
+
+// MembershipPurchase is one recorded membership purchase/renewal/upgrade row,
+// returned by GET /membership/purchases.
+type MembershipPurchase struct {
+	ID         int64     `json:"id"`
+	Level      int64     `json:"level"`
+	TierName   string    `json:"tier_name"`
+	PriceCoins int64     `json:"price_coins"`
+	Kind       string    `json:"kind"` // purchase | renew | upgrade
+	CreatedAt  time.Time `json:"created_at"`
 }
 
 // MemberTiers returns the static membership catalog.

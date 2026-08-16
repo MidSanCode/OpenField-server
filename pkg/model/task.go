@@ -100,7 +100,9 @@ type Transfer struct {
 	DecidedAt       *time.Time     `json:"decided_at,omitempty"`
 	RefundedAt      *time.Time     `json:"refunded_at,omitempty"`
 	SenderName      string         `json:"sender_name,omitempty"`
+	SenderUsername  string         `json:"sender_username,omitempty"`
 	SenderAvatar    string         `json:"sender_avatar,omitempty"`
 	RecipientName   string         `json:"recipient_name,omitempty"`
+	RecipientUsername string       `json:"recipient_username,omitempty"`
 	RecipientAvatar string         `json:"recipient_avatar,omitempty"`
 }

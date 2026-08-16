@@ -72,12 +72,32 @@ func (r *MembershipRepository) GetForUser(userID int64, now time.Time) (*model.M
 	return membershipStatus(user, now), nil
 }
 
+// PurchaseResult describes a completed membership purchase: the new state plus
+// what was actually charged (the price difference when upgrading) and the kind
+// of purchase (purchase | renew | upgrade).
+type PurchaseResult struct {
+	Status *model.MembershipStatus
+	Paid   int64  `json:"paid"`
+	Kind   string `json:"kind"` // purchase | renew | upgrade
+}
+
 // Purchase buys a membership for a user: it deducts the tier's coin price from
-// the wallet (in cents) and extends/starts the membership. Buying a higher tier
-// while already active upgrades the level; buying any tier while active renews
-// from the current expiry. The wallet debit and membership write share one
-// transaction so a rejected payment never grants membership.
-func (r *MembershipRepository) Purchase(userID, level int64, now time.Time) (*model.MembershipStatus, error) {
+// the wallet (in cents), extends/starts the membership and records a purchase
+// history row. Pricing rules:
+//
+//   - New purchase (no active membership): full price of the target tier,
+//     30 days from today.
+//   - Renewal (buying the currently active tier again): full price, 30 days
+//     added to the current expiry.
+//   - Upgrade (buying a higher tier while active): only the price difference
+//     is charged and the remaining membership time is kept; the level moves to
+//     the higher tier without adding extra days.
+//
+// Buying a lower tier than the currently active one is rejected.
+//
+// The wallet debit and membership write share one transaction so a rejected
+// payment never grants membership.
+func (r *MembershipRepository) Purchase(userID, level int64, now time.Time) (*PurchaseResult, error) {
 	if level < 1 || level > int64(model.MemberLoneStar) {
 		return nil, ErrInvalidMemberLevel
 	}
@@ -101,21 +121,42 @@ func (r *MembershipRepository) Purchase(userID, level int64, now time.Time) (*mo
 		return nil, fmt.Errorf("failed to lock user for membership: %w", err)
 	}
 
-	// Renewal base: the current expiry when it is still in the future,
-	// otherwise today. An upgrade always extends from today's purchase.
-	base := now
 	active := currentLevel > 0 && expiresAt.Valid && now.Before(expiresAt.Time)
-	if active {
-		base = expiresAt.Time
-	}
-	newLevel := level
-	if active && currentLevel > level {
+
+	var (
+		newLevel   int64
+		newExpiry  time.Time
+		charge     int64
+		kind       string
+	)
+	if !active {
+		// Fresh purchase: full price, 30 days from today.
+		newLevel = level
+		newExpiry = now.AddDate(0, 0, model.MemberDurationDays)
+		charge = price
+		kind = "purchase"
+	} else if level == currentLevel {
+		// Renewal: full price, 30 days added to the current expiry.
 		newLevel = currentLevel
+		newExpiry = expiresAt.Time.AddDate(0, 0, model.MemberDurationDays)
+		charge = price
+		kind = "renew"
+	} else if level > currentLevel {
+		// Upgrade by price difference: keep the remaining time.
+		currentPrice := model.MemberPrice(currentLevel)
+		charge = price - currentPrice
+		if charge <= 0 {
+			return nil, ErrInvalidMemberLevel
+		}
+		newLevel = level
+		newExpiry = expiresAt.Time
+		kind = "upgrade"
+	} else {
+		return nil, ErrInvalidMemberLevel
 	}
-	newExpiry := base.AddDate(0, 0, model.MemberDurationDays)
 
 	// Debit the wallet (fails on insufficient balance, rolling back everything).
-	if err := adjustBalanceTx(tx, userID, -model.MoneyScale*price, userID, "membership", "购买会员"); err != nil {
+	if err := adjustBalanceTx(tx, userID, -model.MoneyScale*charge, userID, "membership", "购买会员"); err != nil {
 		return nil, err
 	}
 	if _, err := tx.Exec(
@@ -124,17 +165,70 @@ func (r *MembershipRepository) Purchase(userID, level int64, now time.Time) (*mo
 	); err != nil {
 		return nil, fmt.Errorf("failed to grant membership: %w", err)
 	}
+	if _, err := tx.Exec(
+		`INSERT INTO membership_purchases (user_id, level, price_coins, kind)
+		 VALUES ($1, $2, $3, $4)`,
+		userID, newLevel, charge, kind,
+	); err != nil {
+		return nil, fmt.Errorf("failed to record membership purchase: %w", err)
+	}
 
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("failed to commit membership purchase: %w", err)
 	}
 
-	return r.GetForUser(userID, now)
+	status, err := r.GetForUser(userID, now)
+	if err != nil {
+		return nil, err
+	}
+	return &PurchaseResult{Status: status, Paid: charge, Kind: kind}, nil
+}
+
+// ListPurchases returns the user's membership purchase history, newest first.
+func (r *MembershipRepository) ListPurchases(userID int64, page, limit int) ([]model.MembershipPurchase, error) {
+	if page < 1 {
+		page = 1
+	}
+	if limit < 1 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	offset := (page - 1) * limit
+
+	rows, err := database.DB.Query(
+		`SELECT id, level, price_coins, kind, created_at
+		 FROM membership_purchases
+		 WHERE user_id = $1
+		 ORDER BY id DESC
+		 LIMIT $2 OFFSET $3`,
+		userID, limit, offset,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list membership purchases: %w", err)
+	}
+	defer rows.Close()
+
+	purchases := make([]model.MembershipPurchase, 0)
+	for rows.Next() {
+		var p model.MembershipPurchase
+		if err := rows.Scan(&p.ID, &p.Level, &p.PriceCoins, &p.Kind, &p.CreatedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan membership purchase: %w", err)
+		}
+		if tier, ok := model.MemberTierForLevel(p.Level); ok {
+			p.TierName = tier.Name
+		}
+		purchases = append(purchases, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows error: %w", err)
+	}
+	return purchases, nil
 }
 
 // membershipStatus builds a MembershipStatus from a loaded user row.
-func membershipStatus(user *model.User, now time.Time) *model.MembershipStatus {
-	active := user.MemberLevel > 0 && user.MemberExpiresAt != nil && now.Before(*user.MemberExpiresAt)
+func membershipStatus(user *model.User, now time.Time) *model.MembershipStatus {	active := user.MemberLevel > 0 && user.MemberExpiresAt != nil && now.Before(*user.MemberExpiresAt)
 	mult := model.MemberMultiplierAt(user.MemberLevel, user.MemberExpiresAt, now)
 	status := &model.MembershipStatus{
 		Level:       user.MemberLevel,

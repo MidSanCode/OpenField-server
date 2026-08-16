@@ -3,6 +3,7 @@ package repository
 import (
 	"database/sql"
 	"fmt"
+	"time"
 
 	"github.com/lib/pq"
 	"github.com/openfield/server/pkg/database"
@@ -18,7 +19,7 @@ type PostRepository struct {
 // JOIN, kept in sync with the model.Post/Member fields scanned alongside it.
 // It is appended after u.is_verified so every post query carries the author's
 // membership tier and display-name styling to the client.
-const authorMemberCols = ", u.member_level, u.member_expires_at, u.name_color, u.name_color_to, u.name_dynamic, u.avatar_frame"
+const authorMemberCols = ", u.member_level, u.member_expires_at, u.name_color, u.name_color_to, u.name_dynamic, u.name_colors, u.name_gradient_direction, u.avatar_frame"
 
 // applyMemberStatus fills the denormalized active-member flag from the scanned
 // level/expiry so callers don't recompute it in every query site.
@@ -95,7 +96,7 @@ func (r *PostRepository) GetByID(id int64) (*model.Post, error) {
 		 JOIN users u ON p.user_id = u.id
 		 WHERE p.id = $1`,
 		id,
-	).Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.AvatarFrame, &post.FavoriteCount)
+	).Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.NameColors, &post.NameGradientDirection, &post.AvatarFrame, &post.FavoriteCount)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -308,7 +309,7 @@ func (r *PostRepository) List(page, limit int, viewerID int64) ([]model.Post, er
 	var postIDs []int64
 	for rows.Next() {
 		var post model.Post
-		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.AvatarFrame, &post.ReplyCount, &post.FavoriteCount); err != nil {
+		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.NameColors, &post.NameGradientDirection, &post.AvatarFrame, &post.ReplyCount, &post.FavoriteCount); err != nil {
 			return nil, fmt.Errorf("failed to scan post: %w", err)
 		}
 		applyMemberStatus(&post.MemberLevel, &post.MemberExpiresAt, &post.MemberActive)
@@ -366,7 +367,7 @@ func (r *PostRepository) Search(query string, page, limit int, viewerID int64) (
 	var postIDs []int64
 	for rows.Next() {
 		var post model.Post
-		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.AvatarFrame, &post.ReplyCount, &post.FavoriteCount); err != nil {
+		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.NameColors, &post.NameGradientDirection, &post.AvatarFrame, &post.ReplyCount, &post.FavoriteCount); err != nil {
 			return nil, fmt.Errorf("failed to scan post: %w", err)
 		}
 		applyMemberStatus(&post.MemberLevel, &post.MemberExpiresAt, &post.MemberActive)
@@ -420,7 +421,7 @@ func (r *PostRepository) ListByUser(userID int64, page, limit int, viewerID int6
 	var postIDs []int64
 	for rows.Next() {
 		var post model.Post
-		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.AvatarFrame, &post.ReplyCount, &post.FavoriteCount); err != nil {
+		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.NameColors, &post.NameGradientDirection, &post.AvatarFrame, &post.ReplyCount, &post.FavoriteCount); err != nil {
 			return nil, fmt.Errorf("failed to scan post: %w", err)
 		}
 		applyMemberStatus(&post.MemberLevel, &post.MemberExpiresAt, &post.MemberActive)
@@ -475,7 +476,7 @@ func (r *PostRepository) ListFavoritePosts(userID int64, page, limit int) ([]mod
 	var postIDs []int64
 	for rows.Next() {
 		var post model.Post
-		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.AvatarFrame, &post.ReplyCount, &post.FavoriteCount); err != nil {
+		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.NameColors, &post.NameGradientDirection, &post.AvatarFrame, &post.ReplyCount, &post.FavoriteCount); err != nil {
 			return nil, fmt.Errorf("failed to scan post: %w", err)
 		}
 		applyMemberStatus(&post.MemberLevel, &post.MemberExpiresAt, &post.MemberActive)

@@ -117,7 +117,7 @@ func (r *MessageRepository) ListByConversation(conversationID int64, beforeID in
 	for rows.Next() {
 		var m model.Message
 		var mentionsData []byte
-		if err := rows.Scan(&m.ID, &m.ConversationID, &m.SenderID, &m.Kind, &m.Content, &m.ReplyToID, &m.EditedAt, &m.DeletedAt, &m.CreatedAt, &mentionsData, &m.SenderName, &m.SenderAvatar, &m.SenderVerified, &m.SenderMemberLevel, &m.SenderMemberExpiresAt, &m.SenderNameColor, &m.SenderNameColorTo, &m.SenderNameDynamic, &m.SenderAvatarFrame); err != nil {
+		if err := rows.Scan(&m.ID, &m.ConversationID, &m.SenderID, &m.Kind, &m.Content, &m.ReplyToID, &m.EditedAt, &m.DeletedAt, &m.CreatedAt, &mentionsData, &m.SenderName, &m.SenderAvatar, &m.SenderVerified, &m.SenderMemberLevel, &m.SenderMemberExpiresAt, &m.SenderNameColor, &m.SenderNameColorTo, &m.SenderNameDynamic, &m.SenderNameColors, &m.SenderNameGradientDirection, &m.SenderAvatarFrame); err != nil {
 			return nil, fmt.Errorf("failed to scan message: %w", err)
 		}
 		applyMemberStatus(&m.SenderMemberLevel, &m.SenderMemberExpiresAt, &m.SenderMemberActive)
@@ -157,7 +157,7 @@ func (r *MessageRepository) getWithSender(id int64) (*model.Message, error) {
 		 JOIN users u ON m.sender_id = u.id
 		 WHERE m.id = $1`,
 		id,
-	).Scan(&msg.ID, &msg.ConversationID, &msg.SenderID, &msg.Kind, &msg.Content, &msg.ReplyToID, &msg.EditedAt, &msg.DeletedAt, &msg.CreatedAt, &mentionsData, &msg.SenderName, &msg.SenderAvatar, &msg.SenderVerified, &msg.SenderMemberLevel, &msg.SenderMemberExpiresAt, &msg.SenderNameColor, &msg.SenderNameColorTo, &msg.SenderNameDynamic, &msg.SenderAvatarFrame)
+	).Scan(&msg.ID, &msg.ConversationID, &msg.SenderID, &msg.Kind, &msg.Content, &msg.ReplyToID, &msg.EditedAt, &msg.DeletedAt, &msg.CreatedAt, &mentionsData, &msg.SenderName, &msg.SenderAvatar, &msg.SenderVerified, &msg.SenderMemberLevel, &msg.SenderMemberExpiresAt, &msg.SenderNameColor, &msg.SenderNameColorTo, &msg.SenderNameDynamic, &msg.SenderNameColors, &msg.SenderNameGradientDirection, &msg.SenderAvatarFrame)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get message: %w", err)
 	}

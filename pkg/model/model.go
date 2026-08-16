@@ -81,6 +81,14 @@ type User struct {
 	// NameDynamic enables an animated (shifting) gradient display name,
 	// available to Lv.4 members only.
 	NameDynamic bool `json:"name_dynamic,omitempty"`
+	// NameColors is the full gradient color list (1-6 hex colors). When it has
+	// two or more entries it takes precedence over the legacy
+	// NameColor/NameColorTo pair; a single entry behaves like a solid color.
+	NameColors NameColorList `json:"name_colors,omitempty"`
+	// NameGradientDirection is the linear-gradient orientation for multi-color
+	// display names: left_right (default), right_left, top_bottom,
+	// bottom_top, top_left_bottom_right, bottom_left_top_right.
+	NameGradientDirection string `json:"name_gradient_direction,omitempty"`
 	// AvatarFrame is reserved for the upcoming avatar-frame feature. It holds a
 	// frame key (e.g. "gold") while empty means the default frame is used.
 	AvatarFrame string `json:"avatar_frame,omitempty"`
@@ -120,6 +128,8 @@ type Post struct {
 	NameColor   string `json:"name_color,omitempty"`
 	NameColorTo string `json:"name_color_to,omitempty"`
 	NameDynamic bool   `json:"name_dynamic,omitempty"`
+	NameColors  NameColorList `json:"name_colors,omitempty"`
+	NameGradientDirection string `json:"name_gradient_direction,omitempty"`
 	AvatarFrame string `json:"avatar_frame,omitempty"`
 	Attachments   []Attachment `json:"attachments,omitempty"`
 }
@@ -144,6 +154,8 @@ type PostReply struct {
 	NameColor   string    `json:"name_color,omitempty"`
 	NameColorTo string    `json:"name_color_to,omitempty"`
 	NameDynamic bool      `json:"name_dynamic,omitempty"`
+	NameColors  NameColorList `json:"name_colors,omitempty"`
+	NameGradientDirection string `json:"name_gradient_direction,omitempty"`
 	AvatarFrame string    `json:"avatar_frame,omitempty"`
 	// ParentContent is a preview of the parent reply's content (for nested threads).
 	ParentContent string `json:"parent_content,omitempty"`
@@ -225,6 +237,8 @@ type ConversationMember struct {
 	NameColor   string `json:"name_color,omitempty"`
 	NameColorTo string `json:"name_color_to,omitempty"`
 	NameDynamic bool   `json:"name_dynamic,omitempty"`
+	NameColors  NameColorList `json:"name_colors,omitempty"`
+	NameGradientDirection string `json:"name_gradient_direction,omitempty"`
 	AvatarFrame string `json:"avatar_frame,omitempty"`
 	// E2EEPublicKey is the member's published X25519 public key for encrypted
 	// group-key envelopes (empty when the member has no key published).
@@ -275,6 +289,8 @@ type Message struct {
 	SenderNameColor   string  `json:"sender_name_color,omitempty"`
 	SenderNameColorTo string  `json:"sender_name_color_to,omitempty"`
 	SenderNameDynamic bool    `json:"sender_name_dynamic,omitempty"`
+	SenderNameColors  NameColorList `json:"sender_name_colors,omitempty"`
+	SenderNameGradientDirection string `json:"sender_name_gradient_direction,omitempty"`
 	SenderAvatarFrame string  `json:"sender_avatar_frame,omitempty"`
 	// ReplyToName/ReplyToContent are previews of the replied-to message so
 	// clients can render a quote without loading the full thread.

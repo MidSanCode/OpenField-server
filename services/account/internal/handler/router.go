@@ -55,6 +55,7 @@ func RegisterRoutes(r *gin.Engine, authHandler *AuthHandler, userHandler *UserHa
 		{
 			membership.GET("", membershipHandler.GetMembership)
 			membership.POST("/purchase", membershipHandler.Purchase)
+			membership.GET("/purchases", membershipHandler.ListPurchases)
 		}
 
 		// Follow relationships: mutations require auth; lists are public reads.

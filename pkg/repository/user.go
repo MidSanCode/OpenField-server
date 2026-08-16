@@ -18,11 +18,11 @@ func NewUserRepository() *UserRepository {
 	return &UserRepository{}
 }
 
-const userColumns = "id, username, nickname, email, avatar_url, banner_url, role, password_hash, needs_registration, bio, is_verified, storage_quota, oauth2_provider, oauth2_id, oauth2_username, verified_note, verified_by, e2ee_public_key, exp, last_daily_bonus_at, checkin_streak, pin_hash, region, lang, member_level, member_expires_at, name_color, name_color_to, name_dynamic, avatar_frame, created_at, updated_at"
+const userColumns = "id, username, nickname, email, avatar_url, banner_url, role, password_hash, needs_registration, bio, is_verified, storage_quota, oauth2_provider, oauth2_id, oauth2_username, verified_note, verified_by, e2ee_public_key, exp, last_daily_bonus_at, checkin_streak, pin_hash, region, lang, member_level, member_expires_at, name_color, name_color_to, name_dynamic, name_colors, name_gradient_direction, avatar_frame, created_at, updated_at"
 
 func scanUser(row interface{ Scan(...any) error }) (*model.User, error) {
 	user := &model.User{}
-	err := row.Scan(&user.ID, &user.Username, &user.Nickname, &user.Email, &user.AvatarURL, &user.BannerURL, &user.Role, &user.PasswordHash, &user.NeedsRegistration, &user.Bio, &user.IsVerified, &user.StorageQuota, &user.OAuth2Provider, &user.OAuth2ID, &user.OAuth2Username, &user.VerifiedNote, &user.VerifiedBy, &user.E2EEPublicKey, &user.Exp, &user.LastDailyBonusAt, &user.CheckinStreak, &user.PinHash, &user.Region, &user.Lang, &user.MemberLevel, &user.MemberExpiresAt, &user.NameColor, &user.NameColorTo, &user.NameDynamic, &user.AvatarFrame, &user.CreatedAt, &user.UpdatedAt)
+	err := row.Scan(&user.ID, &user.Username, &user.Nickname, &user.Email, &user.AvatarURL, &user.BannerURL, &user.Role, &user.PasswordHash, &user.NeedsRegistration, &user.Bio, &user.IsVerified, &user.StorageQuota, &user.OAuth2Provider, &user.OAuth2ID, &user.OAuth2Username, &user.VerifiedNote, &user.VerifiedBy, &user.E2EEPublicKey, &user.Exp, &user.LastDailyBonusAt, &user.CheckinStreak, &user.PinHash, &user.Region, &user.Lang, &user.MemberLevel, &user.MemberExpiresAt, &user.NameColor, &user.NameColorTo, &user.NameDynamic, &user.NameColors, &user.NameGradientDirection, &user.AvatarFrame, &user.CreatedAt, &user.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -83,13 +83,21 @@ func (r *UserRepository) UpdateProfile(userID int64, username, nickname, bio str
 	return user, nil
 }
 
-// UpdateNameStyle updates a user's display-name styling (color, gradient end
-// color, the dynamic flag) plus the reserved avatar frame. Returns the updated
-// user.
-func (r *UserRepository) UpdateNameStyle(userID int64, color, colorTo string, dynamic bool, avatarFrame string) (*model.User, error) {
+// UpdateNameStyle updates a user's display-name styling (color list, gradient
+// direction, the dynamic flag) plus the reserved avatar frame. Returns the
+// updated user.
+func (r *UserRepository) UpdateNameStyle(userID int64, colors model.NameColorList, direction string, dynamic bool, avatarFrame string) (*model.User, error) {
+	color := ""
+	var colorTo string
+	if len(colors) > 0 {
+		color = colors[0]
+	}
+	if len(colors) > 1 {
+		colorTo = colors[1]
+	}
 	user, err := scanUser(database.DB.QueryRow(
-		"UPDATE users SET name_color = $2, name_color_to = $3, name_dynamic = $4, avatar_frame = $5, updated_at = NOW() WHERE id = $1 RETURNING "+userColumns,
-		userID, color, colorTo, dynamic, avatarFrame,
+		"UPDATE users SET name_color = $2, name_color_to = $3, name_dynamic = $4, name_colors = $5, name_gradient_direction = $6, avatar_frame = $7, updated_at = NOW() WHERE id = $1 RETURNING "+userColumns,
+		userID, color, colorTo, dynamic, colors, direction, avatarFrame,
 	))
 	if err != nil {
 		return nil, fmt.Errorf("failed to update name style: %w", err)

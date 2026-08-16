@@ -549,9 +549,10 @@ func (h *UserHandler) UpdateLocale(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"region": user.Region, "lang": user.Lang})
 }
 
-// UpdateNameStyle stores the current user's display-name styling (one color +
-// optional gradient end-color + optional animated gradient) as permitted by
-// their active membership tier.
+// UpdateNameStyle stores the current user's display-name styling (a gradient
+// color list + optional direction + optional animated flag) as permitted by
+// their active membership tier. Multi-color gradients are gated to Lv.3+ and
+// the animated flag to Lv.4; Lv.1 is restricted to the fixed preset palette.
 func (h *UserHandler) UpdateNameStyle(c *gin.Context) {
 	userID, ok := middleware.GetUserID(c)
 	if !ok {
@@ -559,10 +560,12 @@ func (h *UserHandler) UpdateNameStyle(c *gin.Context) {
 		return
 	}
 	var req struct {
-		Color    string `json:"color"`
-		ColorTo  string `json:"color_to"`
-		Dynamic  bool   `json:"dynamic"`
-		AvatarFrame string `json:"avatar_frame"`
+		Colors      []string `json:"colors"`
+		Color       string   `json:"color"`
+		ColorTo     string   `json:"color_to"`
+		Dynamic     bool     `json:"dynamic"`
+		Direction   string   `json:"direction"`
+		AvatarFrame string   `json:"avatar_frame"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
@@ -576,27 +579,46 @@ func (h *UserHandler) UpdateNameStyle(c *gin.Context) {
 	}
 	now := time.Now()
 	cap := model.MemberNameStyleAllowed(user.MemberLevel, user.MemberExpiresAt, now)
-	if req.Color == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "color is required"})
+
+	colors := model.NameColorList(req.Colors)
+	// Backward-compatible single color: the legacy color field maps to a
+	// one-element list when the new colors array is absent.
+	if len(colors) == 0 {
+		if req.Color == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "color is required"})
+			return
+		}
+		colors = model.NameColorList{req.Color}
+		if req.ColorTo != "" {
+			colors = append(colors, req.ColorTo)
+		}
+	}
+	if len(colors) > cap.MaxColors {
+		c.JSON(http.StatusForbidden, gin.H{"error": "too many gradient colors for this tier"})
 		return
 	}
 	if cap.PresetsOnly {
-		if !model.IsPresetNameColor(req.Color) {
-			c.JSON(http.StatusForbidden, gin.H{"error": "current tier allows preset colors only"})
-			return
+		for _, col := range colors {
+			if !model.IsPresetNameColor(col) {
+				c.JSON(http.StatusForbidden, gin.H{"error": "current tier allows preset colors only"})
+				return
+			}
 		}
-	} else if !model.ValidHexColor(req.Color) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid color"})
-		return
+	} else {
+		for _, col := range colors {
+			if !model.ValidHexColor(col) {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid color"})
+				return
+			}
+		}
 	}
-	colorTo := req.ColorTo
-	if colorTo != "" {
+	if len(colors) > 1 {
 		if !cap.AllowGradient {
 			c.JSON(http.StatusForbidden, gin.H{"error": "current tier does not allow gradients"})
 			return
 		}
-		if !model.ValidHexColor(colorTo) {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid color_to"})
+		if req.Direction != "" && !model.ValidGradientDirection(req.Direction) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid gradient direction"})
 			return
 		}
 	}
@@ -605,17 +627,19 @@ func (h *UserHandler) UpdateNameStyle(c *gin.Context) {
 		return
 	}
 
-	updated, err := h.userRepo.UpdateNameStyle(userID, req.Color, colorTo, req.Dynamic, req.AvatarFrame)
+	updated, err := h.userRepo.UpdateNameStyle(userID, colors, req.Direction, req.Dynamic, req.AvatarFrame)
 	if err != nil {
 		logger.Log.Error("failed to update name style", "error", err, "user_id", userID)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update name style"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"name_color":   updated.NameColor,
-		"name_color_to": updated.NameColorTo,
-		"name_dynamic": updated.NameDynamic,
-		"avatar_frame": updated.AvatarFrame,
+		"name_color":             updated.NameColor,
+		"name_color_to":          updated.NameColorTo,
+		"name_dynamic":           updated.NameDynamic,
+		"name_colors":            updated.NameColors,
+		"name_gradient_direction": updated.NameGradientDirection,
+		"avatar_frame":           updated.AvatarFrame,
 	})
 }
 

@@ -132,6 +132,24 @@ var versionedMigrations = []migration{
 			ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_frame VARCHAR(50) NOT NULL DEFAULT '';
 		`,
 	},
+	{
+		version: 7,
+		name:    "user-name-style-multicolor-purchases",
+		sql: `
+			ALTER TABLE users ADD COLUMN IF NOT EXISTS name_colors JSONB NOT NULL DEFAULT '[]'::jsonb;
+			ALTER TABLE users ADD COLUMN IF NOT EXISTS name_gradient_direction VARCHAR(20) NOT NULL DEFAULT 'left_right';
+
+			CREATE TABLE IF NOT EXISTS membership_purchases (
+				id BIGSERIAL PRIMARY KEY,
+				user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+				level BIGINT NOT NULL,
+				price_coins BIGINT NOT NULL,
+				kind VARCHAR(16) NOT NULL DEFAULT 'purchase',
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			);
+			CREATE INDEX IF NOT EXISTS idx_membership_purchases_user ON membership_purchases(user_id, id DESC);
+		`,
+	},
 }
 
 // latestMigrationVersion returns the newest schema version the code knows

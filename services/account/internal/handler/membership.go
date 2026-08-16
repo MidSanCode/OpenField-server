@@ -95,7 +95,29 @@ func (h *MembershipHandler) Purchase(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to purchase membership"})
 		return
 	}
-	c.JSON(http.StatusOK, status)
+	c.JSON(http.StatusOK, gin.H{
+		"status": status.Status,
+		"paid":   status.Paid,
+		"kind":   status.Kind,
+	})
+}
+
+// ListPurchases returns the authenticated user's membership purchase history.
+func (h *MembershipHandler) ListPurchases(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	purchases, err := h.membershipRepo.ListPurchases(userID, page, limit)
+	if err != nil {
+		logger.Log.Error("failed to list membership purchases", "error", err, "user_id", userID)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list membership purchases"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"purchases": purchases, "page": page, "limit": limit})
 }
 
 // Grant applies a membership level directly to a user, skipping the wallet. An

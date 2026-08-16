@@ -123,7 +123,7 @@ func (r *ConversationRepository) GetMember(conversationID, userID int64) (*model
 		 JOIN users u ON cm.user_id = u.id
 		 WHERE cm.conversation_id = $1 AND cm.user_id = $2`,
 		conversationID, userID,
-	).Scan(&member.ConversationID, &member.UserID, &member.Role, &member.Note, &member.GroupNickname, &member.Title, &member.Status, &member.AddedBy, &member.CreatedAt, &member.MutedUntil, &member.NotifyLevel, &member.Username, &member.Nickname, &member.AvatarURL, &member.IsVerified, &member.E2EEPublicKey, &member.MemberLevel, &member.MemberExpiresAt, &member.NameColor, &member.NameColorTo, &member.NameDynamic, &member.AvatarFrame)
+	).Scan(&member.ConversationID, &member.UserID, &member.Role, &member.Note, &member.GroupNickname, &member.Title, &member.Status, &member.AddedBy, &member.CreatedAt, &member.MutedUntil, &member.NotifyLevel, &member.Username, &member.Nickname, &member.AvatarURL, &member.IsVerified, &member.E2EEPublicKey, &member.MemberLevel, &member.MemberExpiresAt, &member.NameColor, &member.NameColorTo, &member.NameDynamic, &member.NameColors, &member.NameGradientDirection, &member.AvatarFrame)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -154,7 +154,7 @@ func (r *ConversationRepository) ListMembers(conversationID int64) ([]model.Conv
 	members := make([]model.ConversationMember, 0)
 	for rows.Next() {
 		var member model.ConversationMember
-		if err := rows.Scan(&member.ConversationID, &member.UserID, &member.Role, &member.Note, &member.GroupNickname, &member.Title, &member.Status, &member.AddedBy, &member.CreatedAt, &member.MutedUntil, &member.NotifyLevel, &member.Username, &member.Nickname, &member.AvatarURL, &member.IsVerified, &member.E2EEPublicKey, &member.MemberLevel, &member.MemberExpiresAt, &member.NameColor, &member.NameColorTo, &member.NameDynamic, &member.AvatarFrame); err != nil {
+		if err := rows.Scan(&member.ConversationID, &member.UserID, &member.Role, &member.Note, &member.GroupNickname, &member.Title, &member.Status, &member.AddedBy, &member.CreatedAt, &member.MutedUntil, &member.NotifyLevel, &member.Username, &member.Nickname, &member.AvatarURL, &member.IsVerified, &member.E2EEPublicKey, &member.MemberLevel, &member.MemberExpiresAt, &member.NameColor, &member.NameColorTo, &member.NameDynamic, &member.NameColors, &member.NameGradientDirection, &member.AvatarFrame); err != nil {
 			return nil, fmt.Errorf("failed to scan member: %w", err)
 		}
 		applyMemberStatus(&member.MemberLevel, &member.MemberExpiresAt, &member.MemberActive)
@@ -261,7 +261,7 @@ func (r *ConversationRepository) lastMessages(convIDs []int64) (map[int64]model.
 
 	for rows.Next() {
 		var m model.Message
-		if err := rows.Scan(&m.ConversationID, &m.ID, &m.SenderID, &m.Kind, &m.Content, &m.ReplyToID, &m.EditedAt, &m.DeletedAt, &m.CreatedAt, &m.SenderName, &m.SenderAvatar, &m.SenderVerified, &m.SenderMemberLevel, &m.SenderMemberExpiresAt, &m.SenderNameColor, &m.SenderNameColorTo, &m.SenderNameDynamic, &m.SenderAvatarFrame); err != nil {
+		if err := rows.Scan(&m.ConversationID, &m.ID, &m.SenderID, &m.Kind, &m.Content, &m.ReplyToID, &m.EditedAt, &m.DeletedAt, &m.CreatedAt, &m.SenderName, &m.SenderAvatar, &m.SenderVerified, &m.SenderMemberLevel, &m.SenderMemberExpiresAt, &m.SenderNameColor, &m.SenderNameColorTo, &m.SenderNameDynamic, &m.SenderNameColors, &m.SenderNameGradientDirection, &m.SenderAvatarFrame); err != nil {
 			return nil, fmt.Errorf("failed to scan message: %w", err)
 		}
 		applyMemberStatus(&m.SenderMemberLevel, &m.SenderMemberExpiresAt, &m.SenderMemberActive)
@@ -329,7 +329,7 @@ func (r *ConversationRepository) privateDisplay(userID int64, convIDs []int64) (
 
 	for rows.Next() {
 		var member model.ConversationMember
-		if err := rows.Scan(&member.ConversationID, &member.UserID, &member.Role, &member.Note, &member.GroupNickname, &member.Title, &member.Status, &member.AddedBy, &member.CreatedAt, &member.MutedUntil, &member.NotifyLevel, &member.Username, &member.Nickname, &member.AvatarURL, &member.IsVerified, &member.MemberLevel, &member.MemberExpiresAt, &member.NameColor, &member.NameColorTo, &member.NameDynamic, &member.AvatarFrame); err != nil {
+		if err := rows.Scan(&member.ConversationID, &member.UserID, &member.Role, &member.Note, &member.GroupNickname, &member.Title, &member.Status, &member.AddedBy, &member.CreatedAt, &member.MutedUntil, &member.NotifyLevel, &member.Username, &member.Nickname, &member.AvatarURL, &member.IsVerified, &member.MemberLevel, &member.MemberExpiresAt, &member.NameColor, &member.NameColorTo, &member.NameDynamic, &member.NameColors, &member.NameGradientDirection, &member.AvatarFrame); err != nil {
 			return nil, fmt.Errorf("failed to scan member: %w", err)
 		}
 		applyMemberStatus(&member.MemberLevel, &member.MemberExpiresAt, &member.MemberActive)

@@ -157,6 +157,7 @@ func main() {
 		// ---- membership ----
 		{http.MethodGet, "/api/v1/membership", cfg.Services.Account, authRequired, ""},
 		{http.MethodPost, "/api/v1/membership/purchase", cfg.Services.Account, authRequired, ""},
+		{http.MethodGet, "/api/v1/membership/purchases", cfg.Services.Account, authRequired, ""},
 
 		// ---- storage ----
 		{http.MethodPost, "/api/v1/attachments", cfg.Services.Storage, authPermission, "storage.upload"},

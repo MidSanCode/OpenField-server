@@ -347,10 +347,12 @@ func joinTransferUsers(transfers []model.Transfer) []model.Transfer {
 	for i := range transfers {
 		if s, ok := users[transfers[i].SenderID]; ok {
 			transfers[i].SenderName = displayName(s)
+			transfers[i].SenderUsername = s.Username
 			transfers[i].SenderAvatar = s.AvatarURL
 		}
 		if r, ok := users[transfers[i].RecipientID]; ok {
 			transfers[i].RecipientName = displayName(r)
+			transfers[i].RecipientUsername = r.Username
 			transfers[i].RecipientAvatar = r.AvatarURL
 		}
 	}
