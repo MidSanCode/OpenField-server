@@ -147,6 +147,8 @@ func main() {
 		{http.MethodPost, "/api/v1/users/me/claim-daily-bonus", cfg.Services.Account, authRequired, ""},
 		{http.MethodPut, "/api/v1/users/me/locale", cfg.Services.Account, authRequired, ""},
 		{http.MethodPut, "/api/v1/users/me/name-style", cfg.Services.Account, authPermission, "account.profile.edit"},
+		{http.MethodPost, "/api/v1/users/me/pin", cfg.Services.Account, authRequired, ""},
+		{http.MethodPost, "/api/v1/users/me/pin/verify", cfg.Services.Account, authRequired, ""},
 		{http.MethodGet, "/api/v1/users/search", cfg.Services.Account, authRequired, ""},
 		{http.MethodGet, "/api/v1/users/:user_id", cfg.Services.Account, authPublic, ""},
 		{http.MethodPut, "/api/v1/users/:user_id/exp", cfg.Services.Account, authPermission, "user.adjust_exp"},
