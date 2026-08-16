@@ -510,7 +510,7 @@ func (r *TaskRepository) awardMilestones(userID, streak int64) error {
 		if done {
 			continue
 		}
-		if err := r.grantTaskReward(userID, t, ""); err != nil {
+		if _, err := r.grantTaskReward(userID, t, ""); err != nil {
 			return err
 		}
 	}
