@@ -1,5 +1,15 @@
 # OpenField Server Documentation
 
+## Guides
+
+- [Features](features.md) — feature guide for the whole server (auth,
+  membership, wallet, tasks, chat, storage, admin).
+- [Architecture](architecture.md) — service layout, ports, routes and the
+  permission model.
+- [API](API.md) — full REST API reference.
+- [Wallet](wallet.md) — wallet, transfers and currency model.
+- [Token refresh](token-refresh.md) — refresh-token rotation flow.
+
 ## Configuration
 
 The server uses YAML configuration files located in the `config/` directory.
@@ -50,7 +60,21 @@ You can override any config value using environment variables:
 | `STORAGE_SECRET_KEY` | S3 secret key | `minioadmin` |
 | `STORAGE_BUCKET` | S3 bucket name | `openfield` |
 | `STORAGE_REGION` | S3 region (required for AWS S3) | empty |
-| `STORAGE_PUBLIC_BASE_URL` | Public URL prefix for stored objects; auto-derived from endpoint+bucket when empty | `http://localhost:9000/openfield` |
+Stored objects are served from this prefix.|
+
+## Features
+
+The full feature guide lives in [features.md](features.md). Highlights:
+
+- Authentication via OIDC plus password login for local accounts.
+- JWT access + rotating refresh tokens, permission-checked gateway routes.
+- Wallet (integer cents), transfers, payment PIN and membership tiers.
+- Experience, levels, daily sign-in calendar and exp history.
+- Membership name styling (color / gradient / animated) and storage bonus.
+- Posts, replies, reactions, favorites and scoped visibility.
+- RustFS-backed attachments with per-user storage quotas.
+- Consent-based chat with E2E encryption, groups and mentions.
+- A Flask admin panel managing users, groups, permissions and wallets.
 
 ## Database
 
