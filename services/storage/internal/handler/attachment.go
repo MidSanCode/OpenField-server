@@ -8,11 +8,13 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/openfield/server/pkg/config"
 	"github.com/openfield/server/pkg/logger"
 	"github.com/openfield/server/pkg/middleware"
+	"github.com/openfield/server/pkg/model"
 	"github.com/openfield/server/pkg/repository"
 	"github.com/openfield/server/pkg/storage"
 )
@@ -39,19 +41,27 @@ func NewAttachmentHandler(store *storage.Store, cfg config.StorageConfig) *Attac
 }
 
 // checkQuota returns true when the current user may upload size bytes more.
+// Members receive a storage bonus while their membership is active; once it
+// expires they revert to their base quota, so uploads are denied whenever the
+// effective quota has been exceeded.
 func (h *AttachmentHandler) checkQuota(c *gin.Context, userID int64, size int64) (bool, error) {
 	user, err := h.userRepo.GetByID(userID)
 	if err != nil {
 		return false, err
 	}
-	if user == nil || user.StorageQuota <= 0 {
+	if user == nil {
+		return true, nil
+	}
+	now := time.Now()
+	effectiveQuota := user.StorageQuota + model.MemberStorageBonusAt(user.MemberLevel, user.MemberExpiresAt, now)
+	if effectiveQuota <= 0 {
 		return true, nil
 	}
 	used, err := h.attRepo.SumSizeByUser(userID)
 	if err != nil {
 		return false, err
 	}
-	return used+size <= user.StorageQuota, nil
+	return used+size <= effectiveQuota, nil
 }
 
 // storageAvailable writes a 503 response when object storage is not configured

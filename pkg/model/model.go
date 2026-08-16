@@ -70,6 +70,20 @@ type User struct {
 	// Lang is the display language override for server messages, derived from
 	// the region when not set explicitly.
 	Lang string `json:"lang,omitempty"`
+	// NameColor is the hex color the user chose for their display name
+	// (e.g. "#E64A19"). Empty means the default theme color is used. Which
+	// values are allowed depends on the membership tier: Lv.1 members may only
+	// pick from a fixed preset palette, Lv.2+ may type any valid hex.
+	NameColor string `json:"name_color,omitempty"`
+	// NameColorTo is the second hex color of a gradient display name (Lv.3+
+	// members). Empty means the name is a single solid color.
+	NameColorTo string `json:"name_color_to,omitempty"`
+	// NameDynamic enables an animated (shifting) gradient display name,
+	// available to Lv.4 members only.
+	NameDynamic bool `json:"name_dynamic,omitempty"`
+	// AvatarFrame is reserved for the upcoming avatar-frame feature. It holds a
+	// frame key (e.g. "gold") while empty means the default frame is used.
+	AvatarFrame string `json:"avatar_frame,omitempty"`
 }
 
 // Post represents a text post with optional attachments.
@@ -95,6 +109,18 @@ type Post struct {
 	Nickname      string       `json:"nickname,omitempty"`
 	AvatarURL     string       `json:"avatar_url,omitempty"`
 	IsVerified    bool         `json:"is_verified,omitempty"`
+	// MemberLevel/MemberActive are the author's current membership tier (0 =
+	// none) and whether it is still active. Driver-end denormalization so
+	// clients can render the member tier badge next to the author name.
+	MemberLevel     int64      `json:"member_level,omitempty"`
+	MemberActive    bool       `json:"member_active,omitempty"`
+	MemberExpiresAt *time.Time `json:"member_expires_at,omitempty"`
+	// NameColor/NameColorTo/NameDynamic mirror the author's custom display-name
+	// styling so names render identically in feeds and profiles.
+	NameColor   string `json:"name_color,omitempty"`
+	NameColorTo string `json:"name_color_to,omitempty"`
+	NameDynamic bool   `json:"name_dynamic,omitempty"`
+	AvatarFrame string `json:"avatar_frame,omitempty"`
 	Attachments   []Attachment `json:"attachments,omitempty"`
 }
 
@@ -112,6 +138,13 @@ type PostReply struct {
 	Nickname   string     `json:"nickname,omitempty"`
 	AvatarURL  string     `json:"avatar_url,omitempty"`
 	IsVerified bool       `json:"is_verified,omitempty"`
+	MemberLevel int64     `json:"member_level,omitempty"`
+	MemberActive bool     `json:"member_active,omitempty"`
+	MemberExpiresAt *time.Time `json:"member_expires_at,omitempty"`
+	NameColor   string    `json:"name_color,omitempty"`
+	NameColorTo string    `json:"name_color_to,omitempty"`
+	NameDynamic bool      `json:"name_dynamic,omitempty"`
+	AvatarFrame string    `json:"avatar_frame,omitempty"`
 	// ParentContent is a preview of the parent reply's content (for nested threads).
 	ParentContent string `json:"parent_content,omitempty"`
 	// ParentName is the parent reply author's display name.
@@ -184,6 +217,15 @@ type ConversationMember struct {
 	Nickname   string     `json:"nickname,omitempty"`
 	AvatarURL  string     `json:"avatar_url,omitempty"`
 	IsVerified bool       `json:"is_verified,omitempty"`
+	// MemberLevel/MemberActive/name styling mirror the member's user record so
+	// chat listings render the tier badge and colored name without extra joins.
+	MemberLevel     int64      `json:"member_level,omitempty"`
+	MemberActive    bool       `json:"member_active,omitempty"`
+	MemberExpiresAt *time.Time `json:"member_expires_at,omitempty"`
+	NameColor   string `json:"name_color,omitempty"`
+	NameColorTo string `json:"name_color_to,omitempty"`
+	NameDynamic bool   `json:"name_dynamic,omitempty"`
+	AvatarFrame string `json:"avatar_frame,omitempty"`
 	// E2EEPublicKey is the member's published X25519 public key for encrypted
 	// group-key envelopes (empty when the member has no key published).
 	E2EEPublicKey string `json:"e2ee_public_key,omitempty"`
@@ -227,6 +269,13 @@ type Message struct {
 	SenderName     string     `json:"sender_name,omitempty"`
 	SenderAvatar   string     `json:"sender_avatar,omitempty"`
 	SenderVerified bool       `json:"sender_verified,omitempty"`
+	SenderMemberLevel int64   `json:"sender_member_level,omitempty"`
+	SenderMemberActive bool   `json:"sender_member_active,omitempty"`
+	SenderMemberExpiresAt *time.Time `json:"sender_member_expires_at,omitempty"`
+	SenderNameColor   string  `json:"sender_name_color,omitempty"`
+	SenderNameColorTo string  `json:"sender_name_color_to,omitempty"`
+	SenderNameDynamic bool    `json:"sender_name_dynamic,omitempty"`
+	SenderAvatarFrame string  `json:"sender_avatar_frame,omitempty"`
 	// ReplyToName/ReplyToContent are previews of the replied-to message so
 	// clients can render a quote without loading the full thread.
 	ReplyToName    string       `json:"reply_to_name,omitempty"`

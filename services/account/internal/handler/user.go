@@ -269,16 +269,20 @@ func (h *UserHandler) uploadImage(c *gin.Context, kind string) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upload image"})
 		return
 	}
-	if user != nil && user.StorageQuota > 0 {
-		used, err := h.attRepo.SumSizeByUser(userID)
-		if err != nil {
-			logger.Log.Error("failed to check storage quota", "error", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check storage quota"})
-			return
-		}
-		if used+header.Size > user.StorageQuota {
-			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "storage quota exceeded"})
-			return
+	if user != nil {
+		now := time.Now()
+		effectiveQuota := user.StorageQuota + model.MemberStorageBonusAt(user.MemberLevel, user.MemberExpiresAt, now)
+		if effectiveQuota > 0 {
+			used, err := h.attRepo.SumSizeByUser(userID)
+			if err != nil {
+				logger.Log.Error("failed to check storage quota", "error", err)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check storage quota"})
+				return
+			}
+			if used+header.Size > effectiveQuota {
+				c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "storage quota exceeded"})
+				return
+			}
 		}
 	}
 
@@ -543,6 +547,76 @@ func (h *UserHandler) UpdateLocale(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"region": user.Region, "lang": user.Lang})
+}
+
+// UpdateNameStyle stores the current user's display-name styling (one color +
+// optional gradient end-color + optional animated gradient) as permitted by
+// their active membership tier.
+func (h *UserHandler) UpdateNameStyle(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	var req struct {
+		Color    string `json:"color"`
+		ColorTo  string `json:"color_to"`
+		Dynamic  bool   `json:"dynamic"`
+		AvatarFrame string `json:"avatar_frame"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	user, err := h.userRepo.GetByID(userID)
+	if err != nil || user == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load user"})
+		return
+	}
+	now := time.Now()
+	cap := model.MemberNameStyleAllowed(user.MemberLevel, user.MemberExpiresAt, now)
+	if req.Color == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "color is required"})
+		return
+	}
+	if cap.PresetsOnly {
+		if !model.IsPresetNameColor(req.Color) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "current tier allows preset colors only"})
+			return
+		}
+	} else if !model.ValidHexColor(req.Color) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid color"})
+		return
+	}
+	colorTo := req.ColorTo
+	if colorTo != "" {
+		if !cap.AllowGradient {
+			c.JSON(http.StatusForbidden, gin.H{"error": "current tier does not allow gradients"})
+			return
+		}
+		if !model.ValidHexColor(colorTo) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid color_to"})
+			return
+		}
+	}
+	if req.Dynamic && !cap.AllowDynamic {
+		c.JSON(http.StatusForbidden, gin.H{"error": "current tier does not allow dynamic colors"})
+		return
+	}
+
+	updated, err := h.userRepo.UpdateNameStyle(userID, req.Color, colorTo, req.Dynamic, req.AvatarFrame)
+	if err != nil {
+		logger.Log.Error("failed to update name style", "error", err, "user_id", userID)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update name style"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"name_color":   updated.NameColor,
+		"name_color_to": updated.NameColorTo,
+		"name_dynamic": updated.NameDynamic,
+		"avatar_frame": updated.AvatarFrame,
+	})
 }
 
 // AdjustExp is an admin-only endpoint to add or subtract experience from a

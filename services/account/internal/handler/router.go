@@ -36,6 +36,7 @@ func RegisterRoutes(r *gin.Engine, authHandler *AuthHandler, userHandler *UserHa
 			users.GET("/me/permissions", userHandler.GetMyPermissions)
 			users.POST("/me/claim-daily-bonus", userHandler.ClaimDailyBonus)
 			users.PUT("/me/locale", userHandler.UpdateLocale)
+			users.PUT("/me/name-style", userHandler.UpdateNameStyle)
 			users.GET("/search", userHandler.SearchUsers)
 			users.POST("/me/pin", pinHandler.SetPin)
 			users.POST("/me/pin/verify", pinHandler.VerifyPin)

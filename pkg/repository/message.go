@@ -95,7 +95,7 @@ func (r *MessageRepository) ListByConversation(conversationID int64, beforeID in
 		limit = 50
 	}
 	query := `SELECT m.id, m.conversation_id, m.sender_id, m.kind, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at, m.mentions,
-	                 u.username, u.avatar_url, u.is_verified
+	                 u.username, u.avatar_url, u.is_verified`+authorMemberCols+`
 	          FROM messages m
 	          JOIN users u ON m.sender_id = u.id
 	          WHERE m.conversation_id = $1 AND m.deleted_at IS NULL`
@@ -117,9 +117,10 @@ func (r *MessageRepository) ListByConversation(conversationID int64, beforeID in
 	for rows.Next() {
 		var m model.Message
 		var mentionsData []byte
-		if err := rows.Scan(&m.ID, &m.ConversationID, &m.SenderID, &m.Kind, &m.Content, &m.ReplyToID, &m.EditedAt, &m.DeletedAt, &m.CreatedAt, &mentionsData, &m.SenderName, &m.SenderAvatar, &m.SenderVerified); err != nil {
+		if err := rows.Scan(&m.ID, &m.ConversationID, &m.SenderID, &m.Kind, &m.Content, &m.ReplyToID, &m.EditedAt, &m.DeletedAt, &m.CreatedAt, &mentionsData, &m.SenderName, &m.SenderAvatar, &m.SenderVerified, &m.SenderMemberLevel, &m.SenderMemberExpiresAt, &m.SenderNameColor, &m.SenderNameColorTo, &m.SenderNameDynamic, &m.SenderAvatarFrame); err != nil {
 			return nil, fmt.Errorf("failed to scan message: %w", err)
 		}
+		applyMemberStatus(&m.SenderMemberLevel, &m.SenderMemberExpiresAt, &m.SenderMemberActive)
 		m.Mentions, err = parseMentions(mentionsData)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse message mentions: %w", err)
@@ -151,15 +152,16 @@ func (r *MessageRepository) getWithSender(id int64) (*model.Message, error) {
 	var mentionsData []byte
 	err := database.DB.QueryRow(
 		`SELECT m.id, m.conversation_id, m.sender_id, m.kind, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at, m.mentions,
-		        u.username, u.avatar_url, u.is_verified
+		        u.username, u.avatar_url, u.is_verified`+authorMemberCols+`
 		 FROM messages m
 		 JOIN users u ON m.sender_id = u.id
 		 WHERE m.id = $1`,
 		id,
-	).Scan(&msg.ID, &msg.ConversationID, &msg.SenderID, &msg.Kind, &msg.Content, &msg.ReplyToID, &msg.EditedAt, &msg.DeletedAt, &msg.CreatedAt, &mentionsData, &msg.SenderName, &msg.SenderAvatar, &msg.SenderVerified)
+	).Scan(&msg.ID, &msg.ConversationID, &msg.SenderID, &msg.Kind, &msg.Content, &msg.ReplyToID, &msg.EditedAt, &msg.DeletedAt, &msg.CreatedAt, &mentionsData, &msg.SenderName, &msg.SenderAvatar, &msg.SenderVerified, &msg.SenderMemberLevel, &msg.SenderMemberExpiresAt, &msg.SenderNameColor, &msg.SenderNameColorTo, &msg.SenderNameDynamic, &msg.SenderAvatarFrame)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get message: %w", err)
 	}
+	applyMemberStatus(&msg.SenderMemberLevel, &msg.SenderMemberExpiresAt, &msg.SenderMemberActive)
 	msg.Mentions, err = parseMentions(mentionsData)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse message mentions: %w", err)

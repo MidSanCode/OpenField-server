@@ -14,6 +14,18 @@ type PostRepository struct {
 	attachmentRepo *AttachmentRepository
 }
 
+// authorMemberCols is the denormalized member/name-style portion of a user
+// JOIN, kept in sync with the model.Post/Member fields scanned alongside it.
+// It is appended after u.is_verified so every post query carries the author's
+// membership tier and display-name styling to the client.
+const authorMemberCols = ", u.member_level, u.member_expires_at, u.name_color, u.name_color_to, u.name_dynamic, u.avatar_frame"
+
+// applyMemberStatus fills the denormalized active-member flag from the scanned
+// level/expiry so callers don't recompute it in every query site.
+func applyMemberStatus(memberLevel *int64, memberExpiresAt **time.Time, memberActive *bool) {
+	*memberActive = *memberLevel > 0 && *memberExpiresAt != nil && time.Now().Before(**memberExpiresAt)
+}
+
 // NewPostRepository creates a new PostRepository.
 func NewPostRepository() *PostRepository {
 	return &PostRepository{
@@ -77,19 +89,20 @@ func (r *PostRepository) Create(userID int64, content, visibility string, attach
 func (r *PostRepository) GetByID(id int64) (*model.Post, error) {
 	post := &model.Post{}
 	err := database.DB.QueryRow(
-		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url, u.is_verified,
+		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url, u.is_verified,` + authorMemberCols + `,
 		        (SELECT COUNT(*) FROM post_favorites pf WHERE pf.post_id = p.id) AS favorite_count
 		 FROM posts p
 		 JOIN users u ON p.user_id = u.id
 		 WHERE p.id = $1`,
 		id,
-	).Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.FavoriteCount)
+	).Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.AvatarFrame, &post.FavoriteCount)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	applyMemberStatus(&post.MemberLevel, &post.MemberExpiresAt, &post.MemberActive)
 
 	post.Attachments, err = r.attachmentRepo.GetByPostID(post.ID)
 	if err != nil {
@@ -276,7 +289,7 @@ func (r *PostRepository) List(page, limit int, viewerID int64) ([]model.Post, er
 	offset := (page - 1) * limit
 
 	rows, err := database.DB.Query(
-		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url, u.is_verified,
+		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url, u.is_verified,`+authorMemberCols+`,
 		        (SELECT COUNT(*) FROM post_replies pr WHERE pr.post_id = p.id AND pr.deleted_at IS NULL) AS reply_count,
 		        (SELECT COUNT(*) FROM post_favorites pf WHERE pf.post_id = p.id) AS favorite_count
 		 FROM posts p
@@ -295,9 +308,10 @@ func (r *PostRepository) List(page, limit int, viewerID int64) ([]model.Post, er
 	var postIDs []int64
 	for rows.Next() {
 		var post model.Post
-		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.ReplyCount, &post.FavoriteCount); err != nil {
+		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.AvatarFrame, &post.ReplyCount, &post.FavoriteCount); err != nil {
 			return nil, fmt.Errorf("failed to scan post: %w", err)
 		}
+		applyMemberStatus(&post.MemberLevel, &post.MemberExpiresAt, &post.MemberActive)
 		posts = append(posts, post)
 		postIDs = append(postIDs, post.ID)
 	}
@@ -333,7 +347,7 @@ func (r *PostRepository) Search(query string, page, limit int, viewerID int64) (
 	pattern := "%" + query + "%"
 
 	rows, err := database.DB.Query(
-		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url, u.is_verified,
+		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url, u.is_verified,`+authorMemberCols+`,
 		        (SELECT COUNT(*) FROM post_replies pr WHERE pr.post_id = p.id AND pr.deleted_at IS NULL) AS reply_count,
 		        (SELECT COUNT(*) FROM post_favorites pf WHERE pf.post_id = p.id) AS favorite_count
 		 FROM posts p
@@ -352,9 +366,10 @@ func (r *PostRepository) Search(query string, page, limit int, viewerID int64) (
 	var postIDs []int64
 	for rows.Next() {
 		var post model.Post
-		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.ReplyCount, &post.FavoriteCount); err != nil {
+		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.AvatarFrame, &post.ReplyCount, &post.FavoriteCount); err != nil {
 			return nil, fmt.Errorf("failed to scan post: %w", err)
 		}
+		applyMemberStatus(&post.MemberLevel, &post.MemberExpiresAt, &post.MemberActive)
 		posts = append(posts, post)
 		postIDs = append(postIDs, post.ID)
 	}
@@ -386,7 +401,7 @@ func (r *PostRepository) ListByUser(userID int64, page, limit int, viewerID int6
 	offset := (page - 1) * limit
 
 	rows, err := database.DB.Query(
-		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url, u.is_verified,
+		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url, u.is_verified,`+authorMemberCols+`,
 		        (SELECT COUNT(*) FROM post_replies pr WHERE pr.post_id = p.id AND pr.deleted_at IS NULL) AS reply_count,
 		        (SELECT COUNT(*) FROM post_favorites pf WHERE pf.post_id = p.id) AS favorite_count
 		 FROM posts p
@@ -405,9 +420,10 @@ func (r *PostRepository) ListByUser(userID int64, page, limit int, viewerID int6
 	var postIDs []int64
 	for rows.Next() {
 		var post model.Post
-		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.ReplyCount, &post.FavoriteCount); err != nil {
+		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.AvatarFrame, &post.ReplyCount, &post.FavoriteCount); err != nil {
 			return nil, fmt.Errorf("failed to scan post: %w", err)
 		}
+		applyMemberStatus(&post.MemberLevel, &post.MemberExpiresAt, &post.MemberActive)
 		posts = append(posts, post)
 		postIDs = append(postIDs, post.ID)
 	}
@@ -439,7 +455,7 @@ func (r *PostRepository) ListFavoritePosts(userID int64, page, limit int) ([]mod
 	offset := (page - 1) * limit
 
 	rows, err := database.DB.Query(
-		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url, u.is_verified,
+		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url, u.is_verified,`+authorMemberCols+`,
 		        (SELECT COUNT(*) FROM post_replies pr WHERE pr.post_id = p.id AND pr.deleted_at IS NULL) AS reply_count,
 		        (SELECT COUNT(*) FROM post_favorites pf WHERE pf.post_id = p.id) AS favorite_count
 		 FROM posts p
@@ -459,9 +475,10 @@ func (r *PostRepository) ListFavoritePosts(userID int64, page, limit int) ([]mod
 	var postIDs []int64
 	for rows.Next() {
 		var post model.Post
-		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.ReplyCount, &post.FavoriteCount); err != nil {
+		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.AvatarFrame, &post.ReplyCount, &post.FavoriteCount); err != nil {
 			return nil, fmt.Errorf("failed to scan post: %w", err)
 		}
+		applyMemberStatus(&post.MemberLevel, &post.MemberExpiresAt, &post.MemberActive)
 		post.Favorited = true
 		posts = append(posts, post)
 		postIDs = append(postIDs, post.ID)

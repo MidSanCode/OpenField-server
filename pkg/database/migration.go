@@ -122,6 +122,16 @@ var versionedMigrations = []migration{
 			ALTER TABLE users ADD COLUMN IF NOT EXISTS member_expires_at TIMESTAMPTZ;
 		`,
 	},
+	{
+		version: 6,
+		name:    "user-name-style",
+		sql: `
+			ALTER TABLE users ADD COLUMN IF NOT EXISTS name_color VARCHAR(20) NOT NULL DEFAULT '';
+			ALTER TABLE users ADD COLUMN IF NOT EXISTS name_color_to VARCHAR(20) NOT NULL DEFAULT '';
+			ALTER TABLE users ADD COLUMN IF NOT EXISTS name_dynamic BOOLEAN NOT NULL DEFAULT FALSE;
+			ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_frame VARCHAR(50) NOT NULL DEFAULT '';
+		`,
+	},
 }
 
 // latestMigrationVersion returns the newest schema version the code knows
