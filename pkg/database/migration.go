@@ -198,6 +198,22 @@ var versionedMigrations = []migration{
 			ALTER TABLE users ADD COLUMN IF NOT EXISTS hide_follow_lists BOOLEAN NOT NULL DEFAULT FALSE;
 		`,
 	},
+	{
+		version: 11,
+		name:    "e2ee-schema-versioned",
+		sql: `
+			ALTER TABLE users ADD COLUMN IF NOT EXISTS e2ee_public_key TEXT NOT NULL DEFAULT '';
+			CREATE TABLE IF NOT EXISTS conversation_e2ee_keys (
+				id BIGSERIAL PRIMARY KEY,
+				conversation_id BIGINT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+				version BIGINT NOT NULL,
+				target_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+				ciphertext TEXT NOT NULL,
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			);
+			CREATE INDEX IF NOT EXISTS idx_e2ee_keys_conv_target ON conversation_e2ee_keys(conversation_id, target_user_id, version);
+		`,
+	},
 }
 
 // latestMigrationVersion returns the newest schema version the code knows
