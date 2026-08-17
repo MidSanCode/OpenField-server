@@ -16,19 +16,31 @@ import (
 	"github.com/openfield/server/pkg/logger"
 )
 
-// Store wraps an S3-compatible object store client (MinIO, AWS S3, RustFS, ...).
+// Store wraps an S3-compatible object store client (MinIO, AWS S3, RustFS, ...)
+// for a single physical bucket.
 type Store struct {
 	client        *minio.Client
 	bucket        string
 	publicBaseURL string
 	enabled       bool
+	// name is the logical bucket id from the storage config. The empty string
+	// means "unconfigured / default".
+	name string
 }
 
 // IsConfigured reports whether object storage has been configured. When no
 // endpoint or bucket is set, services start without object storage and all
 // upload endpoints return an error.
 func IsConfigured(cfg config.StorageConfig) bool {
-	return cfg.Endpoint != "" && cfg.Bucket != ""
+	if cfg.Endpoint == "" {
+		return false
+	}
+	for _, b := range cfg.BucketList() {
+		if b.Bucket != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // Enabled reports whether this store has a backing object store. When false,
@@ -37,16 +49,30 @@ func (s *Store) Enabled() bool {
 	return s != nil && s.enabled
 }
 
-// New creates a new storage client from config. When object storage is not
-// configured it returns a disabled store (never an error), so services can
-// still start without storage. The bucket existence check is best-effort:
-// an unreachable or not-yet-created bucket never fails startup — operations
-// fail at request time (mapped to an error response) and recover automatically
-// once the storage backend is available again.
-func New(cfg config.StorageConfig) (*Store, error) {
+// Name returns the logical bucket id of this store.
+func (s *Store) Name() string {
+	if s == nil {
+		return ""
+	}
+	return s.name
+}
+
+// New creates a storage manager from config, one Store per logical bucket.
+// When object storage is not configured it returns a manager without stores
+// (never an error), so services can still start without storage. The bucket
+// existence check is best-effort: an unreachable or not-yet-created bucket
+// never fails startup — operations fail at request time (mapped to an error
+// response) and recover automatically once the storage backend is available
+// again.
+func New(cfg config.StorageConfig) (*Manager, error) {
+	m := &Manager{
+		cfg:    cfg,
+		stores: make(map[string]*Store),
+		order:  cfg.BucketList(),
+	}
 	if !IsConfigured(cfg) {
 		logger.Log.Warn("storage not configured; running without object storage")
-		return &Store{enabled: false}, nil
+		return m, nil
 	}
 
 	client, err := minio.New(cfg.Endpoint, &minio.Options{
@@ -57,40 +83,46 @@ func New(cfg config.StorageConfig) (*Store, error) {
 	if err != nil {
 		// A malformed endpoint must not take the service down either.
 		logger.Log.Error("failed to create storage client; running without object storage", "error", err)
-		return &Store{enabled: false}, nil
+		return m, nil
 	}
 
-	s := &Store{
-		client:        client,
-		bucket:        cfg.Bucket,
-		publicBaseURL: resolvePublicBaseURL(cfg),
-		enabled:       true,
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	exists, err := client.BucketExists(ctx, s.bucket)
-	if err != nil {
-		logger.Log.Warn("storage bucket unavailable at startup", "bucket", s.bucket, "error", err)
-		return s, nil
-	}
-	if !exists {
-		if err := client.MakeBucket(ctx, s.bucket, minio.MakeBucketOptions{Region: cfg.Region}); err != nil {
-			logger.Log.Warn("failed to create storage bucket", "bucket", s.bucket, "error", err)
-			return s, nil
+	for _, b := range m.order {
+		store := &Store{
+			client:        client,
+			bucket:        b.Bucket,
+			publicBaseURL: resolvePublicBaseURL(cfg, b),
+			enabled:       true,
+			name:          b.Name,
 		}
-		logger.Log.Info("storage bucket created", "bucket", s.bucket)
-	}
 
-	logger.Log.Info("storage initialized", "endpoint", cfg.Endpoint, "bucket", cfg.Bucket)
-	return s, nil
+		exists, err := client.BucketExists(ctx, store.bucket)
+		if err != nil {
+			logger.Log.Warn("storage bucket unavailable at startup", "bucket", store.bucket, "error", err)
+		} else if !exists {
+			if err := client.MakeBucket(ctx, store.bucket, minio.MakeBucketOptions{Region: cfg.Region}); err != nil {
+				logger.Log.Warn("failed to create storage bucket", "bucket", store.bucket, "error", err)
+			} else {
+				logger.Log.Info("storage bucket created", "bucket", store.bucket)
+			}
+		}
+
+		m.stores[b.Name] = store
+		logger.Log.Info("storage initialized", "endpoint", cfg.Endpoint, "bucket", store.bucket, "logical", b.Name)
+	}
+	return m, nil
 }
 
-// resolvePublicBaseURL derives the base URL used to build public object URLs.
-// An explicitly configured PublicBaseURL always wins; otherwise it is derived
-// from the endpoint so AWS S3 and S3-compatible stores work out of the box.
-func resolvePublicBaseURL(cfg config.StorageConfig) string {
+// resolvePublicBaseURL derives the base URL used to build public object URLs
+// for a logical bucket. A per-bucket PublicBaseURL wins, then the shared
+// config value; otherwise it is derived from the endpoint so AWS S3 and
+// S3-compatible stores work out of the box.
+func resolvePublicBaseURL(cfg config.StorageConfig, b config.StorageBucketConfig) string {
+	if b.PublicBaseURL != "" {
+		return strings.TrimRight(b.PublicBaseURL, "/")
+	}
 	if cfg.PublicBaseURL != "" {
 		return strings.TrimRight(cfg.PublicBaseURL, "/")
 	}
@@ -103,9 +135,9 @@ func resolvePublicBaseURL(cfg config.StorageConfig) string {
 		if region == "" {
 			region = "us-east-1"
 		}
-		return fmt.Sprintf("https://%s.s3.%s.amazonaws.com", cfg.Bucket, region)
+		return fmt.Sprintf("https://%s.s3.%s.amazonaws.com", b.Bucket, region)
 	}
-	return fmt.Sprintf("%s://%s/%s", scheme, cfg.Endpoint, cfg.Bucket)
+	return fmt.Sprintf("%s://%s/%s", scheme, cfg.Endpoint, b.Bucket)
 }
 
 // publicURL builds the full URL for an object key against the resolved base.

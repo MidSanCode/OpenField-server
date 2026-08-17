@@ -65,17 +65,93 @@ type JWTConfig struct {
 	RefreshExpiryDays int    `yaml:"refresh_expiry_days"`
 }
 
+// StorageBucketConfig defines one logical storage bucket. A physical
+// multi-bucket deployment gives every logical bucket its own S3 bucket name,
+// default quota, and an optional membership tier gate. Legacy deployments
+// without a `buckets` list keep working through a single synthesized bucket.
+type StorageBucketConfig struct {
+	// Name is the logical bucket id stored on users.storage_bucket and sent to
+	// clients. It is independent from the physical S3 bucket name.
+	Name string `yaml:"name"`
+	// Bucket is the physical S3-compatible bucket name objects are stored in.
+	Bucket string `yaml:"bucket"`
+	// Label is a human-readable display name for the bucket.
+	Label string `yaml:"label"`
+	// DefaultQuota is the default storage quota (bytes) granted to users while
+	// they are on this bucket. Membership storage bonuses apply to the default
+	// bucket only.
+	DefaultQuota int64 `yaml:"default_quota"`
+	// MinMemberLevel is the active membership tier (1-4) required to use this
+	// bucket. 0 means everyone may use it.
+	MinMemberLevel int64 `yaml:"min_member_level"`
+	// IsDefault marks the bucket users land on unless they explicitly choose
+	// another one. The membership storage bonus is only granted on the default
+	// bucket.
+	IsDefault bool `yaml:"is_default"`
+	// PublicBaseURL overrides the shared storage public_base_url for this
+	// bucket when set.
+	PublicBaseURL string `yaml:"public_base_url"`
+}
+
 // StorageConfig holds S3-compatible object storage configuration.
 type StorageConfig struct {
-	Endpoint       string `yaml:"endpoint"`
-	AccessKey      string `yaml:"access_key"`
-	SecretKey      string `yaml:"secret_key"`
-	Bucket         string `yaml:"bucket"`
-	Region         string `yaml:"region"`
-	UseSSL         bool   `yaml:"use_ssl"`
-	PublicBaseURL  string `yaml:"public_base_url"`
-	MaxUploadBytes int64  `yaml:"max_upload_bytes"`
-	MaxAttachments int    `yaml:"max_attachments_per_post"`
+	Endpoint       string               `yaml:"endpoint"`
+	AccessKey      string               `yaml:"access_key"`
+	SecretKey      string               `yaml:"secret_key"`
+	Bucket         string               `yaml:"bucket"`
+	Region         string               `yaml:"region"`
+	UseSSL         bool                 `yaml:"use_ssl"`
+	PublicBaseURL  string               `yaml:"public_base_url"`
+	MaxUploadBytes int64                `yaml:"max_upload_bytes"`
+	MaxAttachments int                  `yaml:"max_attachments_per_post"`
+	// Buckets lists every logical storage bucket. When empty, a single default
+	// bucket is synthesized from the legacy Bucket/PublicBaseURL fields so
+	// single-bucket configs keep working unchanged.
+	Buckets []StorageBucketConfig `yaml:"buckets"`
+}
+
+// BucketList returns the configured storage buckets, synthesizing a single
+// default bucket from the legacy top-level fields when none are listed.
+func (c StorageConfig) BucketList() []StorageBucketConfig {
+	if len(c.Buckets) > 0 {
+		return c.Buckets
+	}
+	return []StorageBucketConfig{{
+		Name:           "default",
+		Bucket:         c.Bucket,
+		Label:          "default",
+		DefaultQuota:   104857600, // 100 MB, matches the users.storage_quota default
+		MinMemberLevel: 0,
+		IsDefault:      true,
+		PublicBaseURL:  c.PublicBaseURL,
+	}}
+}
+
+// DefaultBucket returns the storage bucket marked IsDefault, or the first one.
+func (c StorageConfig) DefaultBucket() StorageBucketConfig {
+	buckets := c.BucketList()
+	for _, b := range buckets {
+		if b.IsDefault {
+			return b
+		}
+	}
+	if len(buckets) > 0 {
+		return buckets[0]
+	}
+	return StorageBucketConfig{}
+}
+
+// BucketByName returns the bucket with the given logical name. Unknown names
+// resolve to the default bucket (and report whether it was an exact match).
+func (c StorageConfig) BucketByName(name string) (StorageBucketConfig, bool) {
+	if name != "" {
+		for _, b := range c.BucketList() {
+			if b.Name == name {
+				return b, true
+			}
+		}
+	}
+	return c.DefaultBucket(), false
 }
 
 // ServicesConfig holds the base URLs of the internal microservices.

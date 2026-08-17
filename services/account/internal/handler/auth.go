@@ -23,6 +23,7 @@ type AuthHandler struct {
 	authManager       *auth.Manager
 	tokenMgr          *middleware.TokenManager
 	userRepo          *repository.UserRepository
+	punishRepo        *repository.PunishmentRepository
 	appRedirectURL    string
 	refreshExpiryDays int
 }
@@ -33,9 +34,33 @@ func NewAuthHandler(manager *auth.Manager, tokenMgr *middleware.TokenManager, ap
 		authManager:       manager,
 		tokenMgr:          tokenMgr,
 		userRepo:          repository.NewUserRepository(),
+		punishRepo:        repository.NewPunishmentRepository(),
 		appRedirectURL:    appRedirectURL,
 		refreshExpiryDays: refreshExpiryDays,
 	}
+}
+
+// bannedMessage returns a 4xx JSON response when the user is currently banned,
+// otherwise nil (proceed with the request). Temporary bans automatically lift
+// once banned_until passes.
+func (h *AuthHandler) bannedResponse(c *gin.Context, user *model.User) bool {
+	now := time.Now()
+	if user != nil && user.Status == "banned" {
+		if user.BannedUntil != nil && !now.Before(*user.BannedUntil) {
+			return false // auto-lifted temporary ban
+		}
+		until := user.BannedUntil
+		if until == nil {
+			c.JSON(http.StatusForbidden, gin.H{"error": "account is permanently banned"})
+		} else {
+			c.JSON(http.StatusForbidden, gin.H{
+				"error":       "account is temporarily banned",
+				"banned_until": *until,
+			})
+		}
+		return true
+	}
+	return false
 }
 
 // accessExpiresIn returns the access token lifetime in seconds.
@@ -116,6 +141,10 @@ func (h *AuthHandler) Login(c *gin.Context) {
 
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)); err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid username or password"})
+		return
+	}
+
+	if h.bannedResponse(c, user) {
 		return
 	}
 
@@ -211,6 +240,10 @@ func (h *AuthHandler) OIDCCallback(c *gin.Context) {
 	if err != nil {
 		logger.Log.Error("oidc authentication failed", "error", err)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "authentication failed"})
+		return
+	}
+
+	if h.bannedResponse(c, user) {
 		return
 	}
 
@@ -461,6 +494,10 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 	user, err := h.userRepo.GetByID(userID)
 	if err != nil || user == nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "user not found"})
+		return
+	}
+
+	if h.bannedResponse(c, user) {
 		return
 	}
 

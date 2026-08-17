@@ -150,6 +150,47 @@ var versionedMigrations = []migration{
 			CREATE INDEX IF NOT EXISTS idx_membership_purchases_user ON membership_purchases(user_id, id DESC);
 		`,
 	},
+	{
+		version: 8,
+		name:    "storage-buckets",
+		sql: `
+			ALTER TABLE users ADD COLUMN IF NOT EXISTS storage_bucket VARCHAR(50) NOT NULL DEFAULT 'default';
+			ALTER TABLE attachments ADD COLUMN IF NOT EXISTS bucket VARCHAR(50) NOT NULL DEFAULT 'default';
+			CREATE INDEX IF NOT EXISTS idx_attachments_bucket ON attachments(user_id, bucket);
+		`,
+	},
+	{
+		version: 9,
+		name:    "user-punishments",
+		sql: `
+			ALTER TABLE users ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'active';
+			ALTER TABLE users ADD COLUMN IF NOT EXISTS banned_until TIMESTAMPTZ;
+
+			CREATE TABLE IF NOT EXISTS user_punishments (
+				id BIGSERIAL PRIMARY KEY,
+				user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+				operator_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+				type VARCHAR(20) NOT NULL,          -- warning | demerit | revoke | temp_ban | ban | unban
+				permission_key TEXT NOT NULL DEFAULT '',
+				reason TEXT NOT NULL DEFAULT '',
+				expires_at TIMESTAMPTZ,
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			);
+			CREATE INDEX IF NOT EXISTS idx_user_punishments_user ON user_punishments(user_id, id DESC);
+
+			-- Per-user revoked permissions: even when a group grants a
+			-- permission, these keys stay withheld from the user.
+			CREATE TABLE IF NOT EXISTS user_permission_bans (
+				user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+				permission_key TEXT NOT NULL,
+				operator_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+				reason TEXT NOT NULL DEFAULT '',
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+				PRIMARY KEY (user_id, permission_key)
+			);
+			CREATE INDEX IF NOT EXISTS idx_user_permission_bans_user ON user_permission_bans(user_id);
+		`,
+	},
 }
 
 // latestMigrationVersion returns the newest schema version the code knows

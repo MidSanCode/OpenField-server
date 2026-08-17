@@ -16,6 +16,10 @@ type User struct {
 	IsVerified        bool      `json:"is_verified"`
 	StorageQuota      int64     `json:"storage_quota"`
 	StorageUsed       int64     `json:"storage_used"`
+	// StorageBucket is the logical storage bucket the user's files live in
+	// (empty means the default bucket). Files uploaded to one bucket stay
+	// there; switching buckets moves only the quota, not existing objects.
+	StorageBucket string `json:"storage_bucket,omitempty"`
 	PasswordHash      string    `json:"-"`
 	OAuth2Provider    string    `json:"oauth2_provider"`
 	OAuth2ID          string    `json:"oauth2_id"`
@@ -92,6 +96,12 @@ type User struct {
 	// AvatarFrame is reserved for the upcoming avatar-frame feature. It holds a
 	// frame key (e.g. "gold") while empty means the default frame is used.
 	AvatarFrame string `json:"avatar_frame,omitempty"`
+	// Status is the moderation status of the account: "active" (default) or
+	// "banned". A banned account cannot log in.
+	Status string `json:"status,omitempty"`
+	// BannedUntil is when a temporary ban lifts automatically. NULL means a
+	// permanent ban (or no ban when Status is active).
+	BannedUntil *time.Time `json:"banned_until,omitempty"`
 }
 
 // Post represents a text post with optional attachments.
@@ -179,7 +189,9 @@ type Attachment struct {
 	URL          string    `json:"url"`
 	ThumbURL     string    `json:"thumb_url,omitempty"`
 	Visibility   string    `json:"visibility"`
-	CreatedAt    time.Time `json:"created_at"`
+	// Bucket is the logical storage bucket the object was uploaded to.
+	Bucket    string    `json:"bucket,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // Conversation represents a private or group chat conversation.
@@ -349,4 +361,30 @@ type WalletTransaction struct {
 	Description  string    `json:"description"`
 	OperatorID   int64     `json:"operator_id"`
 	CreatedAt    time.Time `json:"created_at"`
+}
+
+// PunishmentType enumerates the moderation actions recorded in user_punishments.
+type PunishmentType string
+
+// Supported punishment types.
+const (
+	PunishWarning  PunishmentType = "warning"  // 警告：仅提醒，无限制
+	PunishDemerit  PunishmentType = "demerit"  // 记过：累积分，配套模板记录
+	PunishRevoke   PunishmentType = "revoke"   // 剥夺权限：revoke 指定的 permission_key
+	PunishTempBan  PunishmentType = "temp_ban" // 暂时封禁：expires_at 前禁止登录
+	PunishBan      PunishmentType = "ban"      // 永久封禁：禁止登录
+	PunishUnban    PunishmentType = "unban"    // 解除封禁：恢复登录（历史保留）
+	PunishRestore  PunishmentType = "restore"  // 恢复权限：移除指定的 permission_key 封禁
+)
+
+// Punishment is one recorded moderation action on a user.
+type Punishment struct {
+	ID            int64          `json:"id"`
+	UserID        int64          `json:"user_id"`
+	OperatorID    int64          `json:"operator_id,omitempty"`
+	Type          PunishmentType `json:"type"`
+	PermissionKey string         `json:"permission_key,omitempty"`
+	Reason        string         `json:"reason"`
+	ExpiresAt     *time.Time     `json:"expires_at,omitempty"`
+	CreatedAt     time.Time      `json:"created_at"`
 }

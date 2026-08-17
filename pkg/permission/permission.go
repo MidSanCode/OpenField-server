@@ -11,6 +11,7 @@ const (
 	AccountFollow       = "account.follow"
 	UserAdjustExp       = "user.adjust_exp"
 	UserMembershipGrant = "user.membership.grant"
+	UserPunish          = "user.punish"
 
 	// Storage
 	StorageUpload = "storage.upload"
@@ -50,7 +51,7 @@ const (
 // All returns every known permission key.
 func All() []string {
 	return []string{
-		AccountView, AccountProfileEdit, AccountAvatarEdit, AccountBannerEdit, AccountVerify, AccountFollow, UserAdjustExp, UserMembershipGrant,
+		AccountView, AccountProfileEdit, AccountAvatarEdit, AccountBannerEdit, AccountVerify, AccountFollow, UserAdjustExp, UserMembershipGrant, UserPunish,
 		StorageUpload, StorageList, StorageGet, StorageDelete,
 		ChatView, ChatSend, ChatEdit, ChatDelete, ChatRequestSend, ChatRequestApprove,
 		ChatGroupCreate, ChatGroupInvite, ChatGroupManage, ChatNoteEdit, ChatGroupNickname,

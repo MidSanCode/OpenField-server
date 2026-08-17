@@ -18,13 +18,18 @@ func NewPermissionRepository() *PermissionRepository {
 	return &PermissionRepository{}
 }
 
-// GetEffectivePermissions returns the union of all permissions for a user.
+// GetEffectivePermissions returns the union of all permissions for a user,
+// minus any permissions individually revoked via the punishment system.
 func (r *PermissionRepository) GetEffectivePermissions(userID int64) ([]string, error) {
 	rows, err := database.DB.Query(
 		`SELECT DISTINCT gp.permission_key
 		 FROM user_groups ug
 		 JOIN group_permissions gp ON gp.group_id = ug.group_id
-		 WHERE ug.user_id = $1`,
+		 WHERE ug.user_id = $1
+		   AND NOT EXISTS (
+		     SELECT 1 FROM user_permission_bans upb
+		     WHERE upb.user_id = ug.user_id AND upb.permission_key = gp.permission_key
+		   )`,
 		userID,
 	)
 	if err != nil {

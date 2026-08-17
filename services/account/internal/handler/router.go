@@ -7,7 +7,7 @@ import (
 
 // RegisterRoutes registers all account service routes.
 // Public auth endpoints and protected user endpoints.
-func RegisterRoutes(r *gin.Engine, authHandler *AuthHandler, userHandler *UserHandler, walletHandler *WalletHandler, capabilitiesHandler *CapabilitiesHandler, taskHandler *TaskHandler, transferHandler *TransferHandler, pinHandler *PinHandler, membershipHandler *MembershipHandler) {
+func RegisterRoutes(r *gin.Engine, authHandler *AuthHandler, userHandler *UserHandler, walletHandler *WalletHandler, capabilitiesHandler *CapabilitiesHandler, taskHandler *TaskHandler, transferHandler *TransferHandler, pinHandler *PinHandler, membershipHandler *MembershipHandler, punishmentHandler *PunishmentHandler) {
 	api := r.Group("/api/v1")
 	{
 		// Public capabilities introspection — unauthenticated so the client
@@ -37,6 +37,8 @@ func RegisterRoutes(r *gin.Engine, authHandler *AuthHandler, userHandler *UserHa
 			users.POST("/me/claim-daily-bonus", userHandler.ClaimDailyBonus)
 			users.PUT("/me/locale", userHandler.UpdateLocale)
 			users.PUT("/me/name-style", userHandler.UpdateNameStyle)
+			users.PUT("/me/storage-bucket", userHandler.SetMyStorageBucket)
+			users.GET("/storage-buckets", userHandler.ListStorageBuckets)
 			users.GET("/search", userHandler.SearchUsers)
 			users.POST("/me/pin", pinHandler.SetPin)
 			users.POST("/me/pin/verify", pinHandler.VerifyPin)
@@ -47,6 +49,15 @@ func RegisterRoutes(r *gin.Engine, authHandler *AuthHandler, userHandler *UserHa
 		api.PUT("/users/:id/exp", middleware.GatewayAuthMiddleware(), userHandler.AdjustExp)
 		// Admin membership grant (gateway enforces user.membership.grant).
 		api.PUT("/users/:id/membership", middleware.GatewayAuthMiddleware(), membershipHandler.Grant)
+
+		// Moderation: punish a user / view history (gateway enforces
+		// user.punish, and granted-revoke is honoured by the permission system).
+		punished := api.Group("/users/:id")
+		punished.Use(middleware.GatewayAuthMiddleware())
+		{
+			punished.POST("/punishments", punishmentHandler.Punish)
+			punished.GET("/punishments", punishmentHandler.ListPunishments)
+		}
 
 		// Membership: the catalog + current state is a protected read; purchases
 		// charge the wallet and require the payment PIN.

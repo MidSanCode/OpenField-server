@@ -65,6 +65,8 @@ storage:
   endpoint: "localhost:9000"
   access_key: "minioadmin"
   secret_key: "minioadmin"
+  # Legacy single-bucket mode: when `buckets` is empty, the bucket below plus
+  # public_base_url define the single default bucket.
   bucket: "openfield"
   # AWS region; only required for AWS S3 / SigV4 region-scoped signing
   region: ""
@@ -76,3 +78,20 @@ storage:
   max_upload_bytes: 10485760
   # Max attachments per post
   max_attachments_per_post: 9
+  # Physical multi-bucket mode: each logical bucket is its own S3 bucket with
+  # a default quota and an optional membership gate (min_member_level: level
+  # required to use it, 0 = everyone). omitting the list keeps single-bucket
+  # behavior above.
+  # buckets:
+  #   - name: "default"           # logical id stored on users.storage_bucket
+  #     bucket: "openfield"       # physical S3 bucket
+  #     label: "标准"
+  #     default_quota: 104857600   # 100 MB
+  #     min_member_level: 0
+  #     is_default: true
+  #   - name: "star"              # Lv.4 (孤星) members only
+  #     bucket: "openfield-star"
+  #     label: "孤星"
+  #     default_quota: 5368709120  # 5 GB
+  #     min_member_level: 4
+  #     is_default: false

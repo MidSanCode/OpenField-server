@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -58,7 +59,19 @@ func (h *AttachmentHandler) ChunkInit(c *gin.Context) {
 		return
 	}
 
-	allowed, err := h.checkQuota(c, userID, req.Size)
+	user, err := h.userRepo.GetByID(userID)
+	if err != nil {
+		logger.Log.Error("failed to load user", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load user"})
+		return
+	}
+
+	if bucket, ok := h.cfg.BucketByName(user.StorageBucket); !ok || !h.bucketAllowed(bucket, user, time.Now()) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "storage bucket requires higher membership level"})
+		return
+	}
+
+	allowed, err := h.checkQuota(c, user, req.Size)
 	if err != nil {
 		logger.Log.Error("failed to check storage quota", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check storage quota"})
@@ -78,7 +91,8 @@ func (h *AttachmentHandler) ChunkInit(c *gin.Context) {
 
 // ChunkUpload stores a single chunk for the given upload session.
 func (h *AttachmentHandler) ChunkUpload(c *gin.Context) {
-	if _, ok := middleware.GetUserID(c); !ok {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
@@ -93,6 +107,14 @@ func (h *AttachmentHandler) ChunkUpload(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid chunk index"})
 		return
 	}
+
+	user, err := h.userRepo.GetByID(userID)
+	if err != nil {
+		logger.Log.Error("failed to load user", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load user"})
+		return
+	}
+	store := h.store.For(user.StorageBucket)
 
 	file, _, err := c.Request.FormFile("chunk")
 	if err != nil {
@@ -111,7 +133,7 @@ func (h *AttachmentHandler) ChunkUpload(c *gin.Context) {
 		return
 	}
 
-	if err := h.store.UploadChunk(c.Request.Context(), uploadID, index, bytes.NewReader(data), int64(len(data))); err != nil {
+	if err := store.UploadChunk(c.Request.Context(), uploadID, index, bytes.NewReader(data), int64(len(data))); err != nil {
 		logger.Log.Error("failed to upload chunk", "error", err, "index", index)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upload chunk"})
 		return
@@ -126,13 +148,21 @@ func (h *AttachmentHandler) ChunkUpload(c *gin.Context) {
 
 // ChunkStatus returns which chunks have already been uploaded (for resume).
 func (h *AttachmentHandler) ChunkStatus(c *gin.Context) {
-	if _, ok := middleware.GetUserID(c); !ok {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
 
 	uploadID := c.Param("upload_id")
-	existing, err := h.store.ListChunks(c.Request.Context(), uploadID)
+	user, err := h.userRepo.GetByID(userID)
+	if err != nil {
+		logger.Log.Error("failed to load user", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load user"})
+		return
+	}
+	store := h.store.For(user.StorageBucket)
+	existing, err := store.ListChunks(c.Request.Context(), uploadID)
 	if err != nil {
 		logger.Log.Error("failed to list chunks", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list chunks"})
@@ -171,7 +201,15 @@ func (h *AttachmentHandler) ChunkComplete(c *gin.Context) {
 		return
 	}
 
-	existing, err := h.store.ListChunks(c.Request.Context(), uploadID)
+	user, err := h.userRepo.GetByID(userID)
+	if err != nil {
+		logger.Log.Error("failed to load user", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load user"})
+		return
+	}
+	store := h.store.For(user.StorageBucket)
+
+	existing, err := store.ListChunks(c.Request.Context(), uploadID)
 	if err != nil {
 		logger.Log.Error("failed to list chunks", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list chunks"})
@@ -201,7 +239,7 @@ func (h *AttachmentHandler) ChunkComplete(c *gin.Context) {
 		visibility = "public"
 	}
 
-	objectKey, url, err := h.store.AssembleChunks(c.Request.Context(), uploadID, req.TotalChunks, contentType, req.Filename)
+	objectKey, url, err := store.AssembleChunks(c.Request.Context(), uploadID, req.TotalChunks, contentType, req.Filename)
 	if err != nil {
 		logger.Log.Error("failed to assemble chunks", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to assemble chunks"})
@@ -210,9 +248,9 @@ func (h *AttachmentHandler) ChunkComplete(c *gin.Context) {
 
 	thumbURL := ""
 	if isImageMime(contentType) && req.Size <= maxThumbReadBytes {
-		if data, gerr := h.store.GetBytes(c.Request.Context(), objectKey, maxThumbReadBytes); gerr == nil {
+		if data, gerr := store.GetBytes(c.Request.Context(), objectKey, maxThumbReadBytes); gerr == nil {
 			if thumb, terr := generateThumbnail(data, contentType); terr == nil && len(thumb) > 0 {
-				thumbURL, err = h.store.UploadThumb(c.Request.Context(), objectKey, bytes.NewReader(thumb), int64(len(thumb)))
+				thumbURL, err = store.UploadThumb(c.Request.Context(), objectKey, bytes.NewReader(thumb), int64(len(thumb)))
 				if err != nil {
 					logger.Log.Warn("failed to upload thumbnail", "error", err)
 				}
@@ -224,14 +262,14 @@ func (h *AttachmentHandler) ChunkComplete(c *gin.Context) {
 		}
 	}
 
-	att, err := h.attRepo.Create(userID, objectKey, req.Filename, contentType, req.Size, url, thumbURL, visibility)
+	att, err := h.attRepo.Create(userID, objectKey, req.Filename, contentType, req.Size, url, thumbURL, visibility, user.StorageBucket)
 	if err != nil {
 		logger.Log.Error("failed to save attachment", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save attachment"})
 		return
 	}
 
-	if err := h.store.DeleteChunks(c.Request.Context(), uploadID); err != nil {
+	if err := store.DeleteChunks(c.Request.Context(), uploadID); err != nil {
 		logger.Log.Warn("failed to delete temp chunks", "error", err)
 	}
 

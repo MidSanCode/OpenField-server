@@ -74,6 +74,7 @@ func main() {
 	transferHandler := handler.NewTransferHandler()
 	pinHandler := handler.NewPinHandler()
 	membershipHandler := handler.NewMembershipHandler()
+	punishmentHandler := handler.NewPunishmentHandler()
 
 	// Background sweeper: refund pending transfers that are 24h unanswered.
 	go startTransferSweeper()
@@ -84,7 +85,7 @@ func main() {
 	r.NoRoute(middleware.NotFound())
 	r.NoMethod(middleware.MethodNotAllowed())
 
-	handler.RegisterRoutes(r, authHandler, userHandler, walletHandler, capabilitiesHandler, taskHandler, transferHandler, pinHandler, membershipHandler)
+	handler.RegisterRoutes(r, authHandler, userHandler, walletHandler, capabilitiesHandler, taskHandler, transferHandler, pinHandler, membershipHandler, punishmentHandler)
 
 	addr := "127.0.0.1:" + cfg.ServicePort("ACCOUNT")
 	logger.Log.Info("account service starting", "address", addr)

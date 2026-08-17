@@ -24,14 +24,14 @@ const maxThumbReadBytes = 40 * 1024 * 1024
 
 // AttachmentHandler handles file upload/download.
 type AttachmentHandler struct {
-	store    *storage.Store
+	store    *storage.Manager
 	attRepo  *repository.AttachmentRepository
 	userRepo *repository.UserRepository
 	cfg      config.StorageConfig
 }
 
 // NewAttachmentHandler creates a new AttachmentHandler.
-func NewAttachmentHandler(store *storage.Store, cfg config.StorageConfig) *AttachmentHandler {
+func NewAttachmentHandler(store *storage.Manager, cfg config.StorageConfig) *AttachmentHandler {
 	return &AttachmentHandler{
 		store:    store,
 		attRepo:  repository.NewAttachmentRepository(),
@@ -41,23 +41,23 @@ func NewAttachmentHandler(store *storage.Store, cfg config.StorageConfig) *Attac
 }
 
 // checkQuota returns true when the current user may upload size bytes more.
-// Members receive a storage bonus while their membership is active; once it
-// expires they revert to their base quota, so uploads are denied whenever the
-// effective quota has been exceeded.
-func (h *AttachmentHandler) checkQuota(c *gin.Context, userID int64, size int64) (bool, error) {
-	user, err := h.userRepo.GetByID(userID)
-	if err != nil {
-		return false, err
-	}
+// Members receive a storage bonus while their membership is active, but only
+// while the user is on the default bucket; on non-default buckets they get
+// their base quota only. Once a membership expires users revert to their base
+// quota, so uploads are denied whenever the effective quota has been exceeded.
+func (h *AttachmentHandler) checkQuota(c *gin.Context, user *model.User, size int64) (bool, error) {
 	if user == nil {
 		return true, nil
 	}
 	now := time.Now()
-	effectiveQuota := user.StorageQuota + model.MemberStorageBonusAt(user.MemberLevel, user.MemberExpiresAt, now)
+	effectiveQuota := user.StorageQuota
+	if bucket, ok := h.cfg.BucketByName(user.StorageBucket); ok && bucket.IsDefault {
+		effectiveQuota += model.MemberStorageBonusAt(user.MemberLevel, user.MemberExpiresAt, now)
+	}
 	if effectiveQuota <= 0 {
 		return true, nil
 	}
-	used, err := h.attRepo.SumSizeByUser(userID)
+	used, err := h.attRepo.SumSizeByUser(user.ID)
 	if err != nil {
 		return false, err
 	}
@@ -74,6 +74,20 @@ func (h *AttachmentHandler) storageAvailable(c *gin.Context) bool {
 	return true
 }
 
+// bucketAllowed reports whether the user may upload into the bucket their
+// account is currently on. Buckets gated behind a minimum membership level
+// reject users whose active membership is below it (e.g. a user downgraded or
+// their membership expired after switching).
+func (h *AttachmentHandler) bucketAllowed(b config.StorageBucketConfig, user *model.User, now time.Time) bool {
+	if b.MinMemberLevel <= 0 {
+		return true
+	}
+	if user == nil {
+		return false
+	}
+	return model.MembershipActive(user.MemberLevel, user.MemberExpiresAt, now) && user.MemberLevel >= b.MinMemberLevel
+}
+
 // Upload accepts a multipart file upload, stores it in RustFS, and returns attachment metadata.
 func (h *AttachmentHandler) Upload(c *gin.Context) {
 	userID, ok := middleware.GetUserID(c)
@@ -83,6 +97,18 @@ func (h *AttachmentHandler) Upload(c *gin.Context) {
 	}
 
 	if !h.storageAvailable(c) {
+		return
+	}
+
+	user, err := h.userRepo.GetByID(userID)
+	if err != nil {
+		logger.Log.Error("failed to load user", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load user"})
+		return
+	}
+
+	if bucket, ok := h.cfg.BucketByName(user.StorageBucket); !ok || !h.bucketAllowed(bucket, user, time.Now()) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "storage bucket requires higher membership level"})
 		return
 	}
 
@@ -98,7 +124,7 @@ func (h *AttachmentHandler) Upload(c *gin.Context) {
 		return
 	}
 
-	allowed, err := h.checkQuota(c, userID, header.Size)
+	allowed, err := h.checkQuota(c, user, header.Size)
 	if err != nil {
 		logger.Log.Error("failed to check storage quota", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check storage quota"})
@@ -130,7 +156,8 @@ func (h *AttachmentHandler) Upload(c *gin.Context) {
 		return
 	}
 
-	objectKey, url, err := h.store.Upload(c.Request.Context(), bytes.NewReader(data), int64(len(data)), contentType, header.Filename)
+	store := h.store.For(user.StorageBucket)
+	objectKey, url, err := store.Upload(c.Request.Context(), bytes.NewReader(data), int64(len(data)), contentType, header.Filename)
 	if err != nil {
 		logger.Log.Error("failed to upload file", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upload file"})
@@ -142,7 +169,7 @@ func (h *AttachmentHandler) Upload(c *gin.Context) {
 	thumbURL := ""
 	if isImageMime(contentType) && len(data) <= maxThumbReadBytes {
 		if thumb, terr := generateThumbnail(data, contentType); terr == nil && len(thumb) > 0 {
-			thumbURL, err = h.store.UploadThumb(c.Request.Context(), objectKey, bytes.NewReader(thumb), int64(len(thumb)))
+			thumbURL, err = store.UploadThumb(c.Request.Context(), objectKey, bytes.NewReader(thumb), int64(len(thumb)))
 			if err != nil {
 				logger.Log.Warn("failed to upload thumbnail", "error", err)
 			}
@@ -151,7 +178,7 @@ func (h *AttachmentHandler) Upload(c *gin.Context) {
 		}
 	}
 
-	att, err := h.attRepo.Create(userID, objectKey, header.Filename, contentType, int64(len(data)), url, thumbURL, visibility)
+	att, err := h.attRepo.Create(userID, objectKey, header.Filename, contentType, int64(len(data)), url, thumbURL, visibility, user.StorageBucket)
 	if err != nil {
 		logger.Log.Error("failed to save attachment", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save attachment"})
@@ -212,10 +239,11 @@ func (h *AttachmentHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	if err := h.store.Delete(c.Request.Context(), att.ObjectKey); err != nil {
+	store := h.store.For(att.Bucket)
+	if err := store.Delete(c.Request.Context(), att.ObjectKey); err != nil {
 		logger.Log.Error("failed to delete storage object", "error", err)
 	}
-	if err := h.store.DeleteThumb(c.Request.Context(), att.ObjectKey); err != nil {
+	if err := store.DeleteThumb(c.Request.Context(), att.ObjectKey); err != nil {
 		logger.Log.Error("failed to delete storage thumbnail", "error", err)
 	}
 	if err := h.attRepo.Delete(id); err != nil {

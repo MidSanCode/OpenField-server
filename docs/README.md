@@ -9,6 +9,8 @@
 - [API](API.md) — full REST API reference.
 - [Wallet](wallet.md) — wallet, transfers and currency model.
 - [Token refresh](token-refresh.md) — refresh-token rotation flow.
+- [Storage buckets](storage-buckets.md) — physical multi-bucket object storage.
+- [Punishments](punishments.md) — moderation actions and ban history.
 
 ## Configuration
 

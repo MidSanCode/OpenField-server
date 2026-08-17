@@ -64,15 +64,18 @@ const MemberDurationDays = 30
 
 // MemberStorageBonusBytes returns the storage-space bonus (in bytes) a
 // membership tier grants while active: Lv.1 +100MB, Lv.2 +200MB, Lv.3 +400MB,
-// Lv.4 +400MB. Non-membership levels get no bonus.
+// Lv.4 +800MB. The bonus only applies on the default storage bucket. Non-
+// membership levels get no bonus.
 func MemberStorageBonusBytes(level int64) int64 {
 	switch level {
 	case 1:
 		return 100 * 1024 * 1024
 	case 2:
 		return 200 * 1024 * 1024
-	case 3, 4:
+	case 3:
 		return 400 * 1024 * 1024
+	case 4:
+		return 800 * 1024 * 1024
 	default:
 		return 0
 	}

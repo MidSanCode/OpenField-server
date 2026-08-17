@@ -147,12 +147,16 @@ func main() {
 		{http.MethodPost, "/api/v1/users/me/claim-daily-bonus", cfg.Services.Account, authRequired, ""},
 		{http.MethodPut, "/api/v1/users/me/locale", cfg.Services.Account, authRequired, ""},
 		{http.MethodPut, "/api/v1/users/me/name-style", cfg.Services.Account, authPermission, "account.profile.edit"},
+		{http.MethodPut, "/api/v1/users/me/storage-bucket", cfg.Services.Account, authRequired, ""},
+		{http.MethodGet, "/api/v1/users/storage-buckets", cfg.Services.Account, authRequired, ""},
 		{http.MethodPost, "/api/v1/users/me/pin", cfg.Services.Account, authRequired, ""},
 		{http.MethodPost, "/api/v1/users/me/pin/verify", cfg.Services.Account, authRequired, ""},
 		{http.MethodGet, "/api/v1/users/search", cfg.Services.Account, authRequired, ""},
 		{http.MethodGet, "/api/v1/users/:user_id", cfg.Services.Account, authPublic, ""},
 		{http.MethodPut, "/api/v1/users/:user_id/exp", cfg.Services.Account, authPermission, "user.adjust_exp"},
 		{http.MethodPut, "/api/v1/users/:user_id/membership", cfg.Services.Account, authPermission, "user.membership.grant"},
+		{http.MethodPost, "/api/v1/users/:user_id/punishments", cfg.Services.Account, authPermission, "user.punish"},
+		{http.MethodGet, "/api/v1/users/:user_id/punishments", cfg.Services.Account, authPermission, "user.punish"},
 
 		// ---- membership ----
 		{http.MethodGet, "/api/v1/membership", cfg.Services.Account, authRequired, ""},

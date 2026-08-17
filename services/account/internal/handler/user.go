@@ -21,13 +21,13 @@ type UserHandler struct {
 	permRepo   *repository.PermissionRepository
 	attRepo    *repository.AttachmentRepository
 	taskRepo   *repository.TaskRepository
-	store      *storage.Store
+	store      *storage.Manager
 	cfg        config.StorageConfig
 	gameCfg    config.GameConfig
 }
 
 // NewUserHandler creates a new UserHandler.
-func NewUserHandler(store *storage.Store, cfg config.StorageConfig) *UserHandler {
+func NewUserHandler(store *storage.Manager, cfg config.StorageConfig) *UserHandler {
 	return &UserHandler{
 		userRepo:   repository.NewUserRepository(),
 		followRepo: repository.NewFollowRepository(),
@@ -132,6 +132,101 @@ func (h *UserHandler) GetMyPermissions(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"permissions": perms, "groups": groups})
+}
+
+// ListStorageBuckets returns every configured storage bucket with its label,
+// default quota and membership gate, plus the requester's current bucket.
+func (h *UserHandler) ListStorageBuckets(c *gin.Context) {
+	userID := requesterID(c)
+	user, err := h.userRepo.GetByID(userID)
+	if err != nil {
+		logger.Log.Error("failed to get user", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get storage buckets"})
+		return
+	}
+	if user == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	current := user.StorageBucket
+	buckets := make([]gin.H, 0, len(h.store.Buckets()))
+	for _, b := range h.store.Buckets() {
+		buckets = append(buckets, gin.H{
+			"name":             b.Name,
+			"label":            b.Label,
+			"default_quota":    b.DefaultQuota,
+			"default_quota_mb": b.DefaultQuota / (1024 * 1024),
+			"min_member_level": b.MinMemberLevel,
+			"is_default":       b.IsDefault,
+			"locked":           !h.bucketAllowed(b, user),
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"buckets": buckets, "current": current})
+}
+
+// bucketAllowed reports whether a user may switch to (or stay on) a bucket:
+// buckets with a minimum member level require an active membership at that
+// level or higher.
+func (h *UserHandler) bucketAllowed(b config.StorageBucketConfig, user *model.User) bool {
+	if b.MinMemberLevel <= 0 {
+		return true
+	}
+	if user == nil {
+		return false
+	}
+	return model.MembershipActive(user.MemberLevel, user.MemberExpiresAt, time.Now()) && user.MemberLevel >= b.MinMemberLevel
+}
+
+// SetMyStorageBucket switches the current user to another logical storage
+// bucket. A bucket gated behind a minimum member level is rejected when the
+// user lacks an active membership at that level. The user's quota is set to
+// the bucket's default quota; existing attachments are left where they are.
+func (h *UserHandler) SetMyStorageBucket(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	var req struct {
+		Bucket string `json:"bucket" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+		return
+	}
+
+	user, err := h.userRepo.GetByID(userID)
+	if err != nil {
+		logger.Log.Error("failed to get user", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to switch storage bucket"})
+		return
+	}
+	if user == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	bucket, exact := h.cfg.BucketByName(req.Bucket)
+	if !exact {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unknown storage bucket"})
+		return
+	}
+	if !h.bucketAllowed(bucket, user) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "membership level insufficient"})
+		return
+	}
+
+	updated, err := h.userRepo.SetStorageBucket(userID, bucket.Name, bucket.DefaultQuota)
+	if err != nil {
+		logger.Log.Error("failed to switch storage bucket", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to switch storage bucket"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"user": updated})
 }
 
 // SearchUsers searches users by username or nickname.
@@ -251,6 +346,13 @@ func (h *UserHandler) uploadImage(c *gin.Context, kind string) {
 		return
 	}
 
+	user, err := h.userRepo.GetByID(userID)
+	if err != nil {
+		logger.Log.Error("failed to get user", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upload image"})
+		return
+	}
+
 	file, header, err := c.Request.FormFile("file")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "missing file field"})
@@ -263,15 +365,12 @@ func (h *UserHandler) uploadImage(c *gin.Context, kind string) {
 		return
 	}
 
-	user, err := h.userRepo.GetByID(userID)
-	if err != nil {
-		logger.Log.Error("failed to get user", "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upload image"})
-		return
-	}
 	if user != nil {
 		now := time.Now()
-		effectiveQuota := user.StorageQuota + model.MemberStorageBonusAt(user.MemberLevel, user.MemberExpiresAt, now)
+		effectiveQuota := user.StorageQuota
+		if bucket, ok := h.cfg.BucketByName(user.StorageBucket); ok && bucket.IsDefault {
+			effectiveQuota += model.MemberStorageBonusAt(user.MemberLevel, user.MemberExpiresAt, now)
+		}
 		if effectiveQuota > 0 {
 			used, err := h.attRepo.SumSizeByUser(userID)
 			if err != nil {
@@ -291,14 +390,15 @@ func (h *UserHandler) uploadImage(c *gin.Context, kind string) {
 		contentType = "image/jpeg"
 	}
 
-	objectKey, url, err := h.store.Upload(c.Request.Context(), file, header.Size, contentType, header.Filename)
+	store := h.store.For(user.StorageBucket)
+	objectKey, url, err := store.Upload(c.Request.Context(), file, header.Size, contentType, header.Filename)
 	if err != nil {
 		logger.Log.Error("failed to upload image", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upload image"})
 		return
 	}
 
-	if _, err := h.attRepo.Create(userID, objectKey, header.Filename, contentType, header.Size, url, "", "public"); err != nil {
+	if _, err := h.attRepo.Create(userID, objectKey, header.Filename, contentType, header.Size, url, "", "public", user.StorageBucket); err != nil {
 		logger.Log.Error("failed to save image attachment", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save image"})
 		return
