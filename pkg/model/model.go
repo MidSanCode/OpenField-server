@@ -41,6 +41,10 @@ type User struct {
 	// FollowerCount/FollowingCount are populated on profile reads.
 	FollowerCount  int64 `json:"follower_count,omitempty"`
 	FollowingCount int64 `json:"following_count,omitempty"`
+	// HideFollowLists hides the user's followers/following/friends lists from
+	// everyone except the user themself. Anonymity is not otherwise affected:
+	// the counts are zeroed for other viewers once enabled.
+	HideFollowLists bool `json:"hide_follow_lists"`
 	// IsFollowing is whether the requesting user follows this user.
 	IsFollowing bool `json:"is_following,omitempty"`
 	// IsFriend is whether the requesting user and this user follow each

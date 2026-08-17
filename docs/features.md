@@ -173,6 +173,11 @@ followers. When two users follow each other they become **friends**; lists are
 available at `GET /users/:user_id/followers|following|friends`. Follow
 counts and `is_following` / `is_friend` are populated on the user profile.
 
+Users may opt out of sharing all three lists via `PUT /users/me/privacy`
+(`{"hide_follow_lists": true}`). While enabled, the lists return 403 to
+everyone but the account owner, and `follower_count` / `following_count` are
+suppressed from other users' profile reads.
+
 ## Posts & Replies
 
 Posts support optional attachments, visibility scopes (public / private /

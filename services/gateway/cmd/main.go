@@ -146,6 +146,7 @@ func main() {
 		{http.MethodPost, "/api/v1/users/me/banner", cfg.Services.Account, authPermission, "account.banner.edit"},
 		{http.MethodPost, "/api/v1/users/me/claim-daily-bonus", cfg.Services.Account, authRequired, ""},
 		{http.MethodPut, "/api/v1/users/me/locale", cfg.Services.Account, authRequired, ""},
+		{http.MethodPut, "/api/v1/users/me/privacy", cfg.Services.Account, authRequired, ""},
 		{http.MethodPut, "/api/v1/users/me/name-style", cfg.Services.Account, authPermission, "account.profile.edit"},
 		{http.MethodPut, "/api/v1/users/me/storage-bucket", cfg.Services.Account, authRequired, ""},
 		{http.MethodGet, "/api/v1/users/storage-buckets", cfg.Services.Account, authRequired, ""},

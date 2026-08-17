@@ -191,6 +191,13 @@ var versionedMigrations = []migration{
 			CREATE INDEX IF NOT EXISTS idx_user_permission_bans_user ON user_permission_bans(user_id);
 		`,
 	},
+	{
+		version: 10,
+		name:    "follow-privacy",
+		sql: `
+			ALTER TABLE users ADD COLUMN IF NOT EXISTS hide_follow_lists BOOLEAN NOT NULL DEFAULT FALSE;
+		`,
+	},
 }
 
 // latestMigrationVersion returns the newest schema version the code knows

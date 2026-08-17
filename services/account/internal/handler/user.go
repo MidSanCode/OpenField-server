@@ -61,16 +61,20 @@ func requesterID(c *gin.Context) int64 {
 }
 
 // populateFollowStats fills follower/following counts and, for profile reads by
-// an authenticated requester, whether the requester follows the target.
+// an authenticated requester, whether the requester follows the target. When
+// the target hides their follow lists, the aggregate counts are suppressed for
+// everyone except the target themself.
 func (h *UserHandler) populateFollowStats(user *model.User, requester int64) {
 	if user == nil {
 		return
 	}
-	if count, err := h.followRepo.CountFollowers(user.ID); err == nil {
-		user.FollowerCount = count
-	}
-	if count, err := h.followRepo.CountFollowing(user.ID); err == nil {
-		user.FollowingCount = count
+	if !user.HideFollowLists || requester == user.ID {
+		if count, err := h.followRepo.CountFollowers(user.ID); err == nil {
+			user.FollowerCount = count
+		}
+		if count, err := h.followRepo.CountFollowing(user.ID); err == nil {
+			user.FollowingCount = count
+		}
 	}
 	if requester > 0 && requester != user.ID {
 		if following, err := h.followRepo.IsFollowing(requester, user.ID); err == nil {
@@ -519,6 +523,9 @@ func (h *UserHandler) ListFollowers(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user ID"})
 		return
 	}
+	if !h.followListVisible(c, userID) {
+		return
+	}
 
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
@@ -543,6 +550,9 @@ func (h *UserHandler) ListFollowing(c *gin.Context) {
 	userID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user ID"})
+		return
+	}
+	if !h.followListVisible(c, userID) {
 		return
 	}
 
@@ -571,6 +581,9 @@ func (h *UserHandler) ListFriends(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user ID"})
 		return
 	}
+	if !h.followListVisible(c, userID) {
+		return
+	}
 
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
@@ -588,6 +601,27 @@ func (h *UserHandler) ListFriends(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"users": users, "page": page, "limit": limit})
+}
+
+// followListVisible verifies the requester may read userID's follow lists. A
+// target that hides its lists is only visible to the target themself; everyone
+// else receives 403. The response is written on failure.
+func (h *UserHandler) followListVisible(c *gin.Context, userID int64) bool {
+	target, err := h.userRepo.GetByID(userID)
+	if err != nil {
+		logger.Log.Error("failed to get user", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get user"})
+		return false
+	}
+	if target == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+		return false
+	}
+	if !target.HideFollowLists || requesterID(c) == userID {
+		return true
+	}
+	c.JSON(http.StatusForbidden, gin.H{"error": "follow lists are hidden"})
+	return false
 }
 
 // ClaimDailyBonus grants the day's experience + currency bonus to the
@@ -647,6 +681,31 @@ func (h *UserHandler) UpdateLocale(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"region": user.Region, "lang": user.Lang})
+}
+
+// UpdatePrivacy toggles the current user's follow-list privacy. When enabled,
+// the followers/following/friends lists are hidden from everyone else and the
+// aggregate counts are suppressed on public profiles.
+func (h *UserHandler) UpdatePrivacy(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	var req struct {
+		HideFollowLists bool `json:"hide_follow_lists"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+	user, err := h.userRepo.SetHideFollowLists(userID, req.HideFollowLists)
+	if err != nil {
+		logger.Log.Error("failed to update privacy", "error", err, "user_id", userID)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update privacy"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"hide_follow_lists": user.HideFollowLists})
 }
 
 // UpdateNameStyle stores the current user's display-name styling (a gradient

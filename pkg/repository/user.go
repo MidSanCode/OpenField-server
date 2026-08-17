@@ -18,11 +18,11 @@ func NewUserRepository() *UserRepository {
 	return &UserRepository{}
 }
 
-const userColumns = "id, username, nickname, email, avatar_url, banner_url, role, password_hash, needs_registration, bio, is_verified, storage_quota, storage_bucket, oauth2_provider, oauth2_id, oauth2_username, verified_note, verified_by, e2ee_public_key, exp, last_daily_bonus_at, checkin_streak, pin_hash, region, lang, member_level, member_expires_at, name_color, name_color_to, name_dynamic, name_colors, name_gradient_direction, avatar_frame, status, banned_until, created_at, updated_at"
+const userColumns = "id, username, nickname, email, avatar_url, banner_url, role, password_hash, needs_registration, bio, is_verified, storage_quota, storage_bucket, oauth2_provider, oauth2_id, oauth2_username, verified_note, verified_by, e2ee_public_key, exp, last_daily_bonus_at, checkin_streak, pin_hash, region, lang, member_level, member_expires_at, name_color, name_color_to, name_dynamic, name_colors, name_gradient_direction, avatar_frame, status, banned_until, hide_follow_lists, created_at, updated_at"
 
 func scanUser(row interface{ Scan(...any) error }) (*model.User, error) {
 	user := &model.User{}
-	err := row.Scan(&user.ID, &user.Username, &user.Nickname, &user.Email, &user.AvatarURL, &user.BannerURL, &user.Role, &user.PasswordHash, &user.NeedsRegistration, &user.Bio, &user.IsVerified, &user.StorageQuota, &user.StorageBucket, &user.OAuth2Provider, &user.OAuth2ID, &user.OAuth2Username, &user.VerifiedNote, &user.VerifiedBy, &user.E2EEPublicKey, &user.Exp, &user.LastDailyBonusAt, &user.CheckinStreak, &user.PinHash, &user.Region, &user.Lang, &user.MemberLevel, &user.MemberExpiresAt, &user.NameColor, &user.NameColorTo, &user.NameDynamic, &user.NameColors, &user.NameGradientDirection, &user.AvatarFrame, &user.Status, &user.BannedUntil, &user.CreatedAt, &user.UpdatedAt)
+	err := row.Scan(&user.ID, &user.Username, &user.Nickname, &user.Email, &user.AvatarURL, &user.BannerURL, &user.Role, &user.PasswordHash, &user.NeedsRegistration, &user.Bio, &user.IsVerified, &user.StorageQuota, &user.StorageBucket, &user.OAuth2Provider, &user.OAuth2ID, &user.OAuth2Username, &user.VerifiedNote, &user.VerifiedBy, &user.E2EEPublicKey, &user.Exp, &user.LastDailyBonusAt, &user.CheckinStreak, &user.PinHash, &user.Region, &user.Lang, &user.MemberLevel, &user.MemberExpiresAt, &user.NameColor, &user.NameColorTo, &user.NameDynamic, &user.NameColors, &user.NameGradientDirection, &user.AvatarFrame, &user.Status, &user.BannedUntil, &user.HideFollowLists, &user.CreatedAt, &user.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -191,6 +191,19 @@ func (r *UserRepository) UpdateLocale(userID int64, region, lang string) (*model
 	))
 	if err != nil {
 		return nil, fmt.Errorf("failed to update locale: %w", err)
+	}
+	return user, nil
+}
+
+// SetHideFollowLists toggles whether the user's followers/following/friends
+// lists are hidden from everyone except the user themself.
+func (r *UserRepository) SetHideFollowLists(userID int64, hide bool) (*model.User, error) {
+	user, err := scanUser(database.DB.QueryRow(
+		"UPDATE users SET hide_follow_lists = $2, updated_at = NOW() WHERE id = $1 RETURNING "+userColumns,
+		userID, hide,
+	))
+	if err != nil {
+		return nil, fmt.Errorf("failed to update follow-list privacy: %w", err)
 	}
 	return user, nil
 }
