@@ -627,9 +627,19 @@ func (r *ConversationRepository) PutE2EEKeys(conversationID int64, envelopes map
 	}
 	defer tx.Rollback()
 
+	// Lock the conversation row to serialize concurrent key rotations for the
+	// same conversation. Aggregate queries (COALESCE(MAX(...))) cannot be used
+	// with FOR UPDATE directly, so the lock targets the parent row instead.
+	if _, err := tx.Exec(
+		"SELECT id FROM conversations WHERE id = $1 FOR UPDATE",
+		conversationID,
+	); err != nil {
+		return 0, fmt.Errorf("failed to lock conversation: %w", err)
+	}
+
 	var version int64
 	if err := tx.QueryRow(
-		"SELECT COALESCE(MAX(version), 0) FROM conversation_e2ee_keys WHERE conversation_id = $1 FOR UPDATE",
+		"SELECT COALESCE(MAX(version), 0) FROM conversation_e2ee_keys WHERE conversation_id = $1",
 		conversationID,
 	).Scan(&version); err != nil {
 		return 0, fmt.Errorf("failed to read e2ee version: %w", err)
