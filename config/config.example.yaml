@@ -48,9 +48,11 @@ oidc:
   client_id: ""
   client_secret: ""
   redirect_url: "http://localhost:8080/api/v1/auth/oidc/callback"
-  # Deep link used to return to the desktop/mobile app after authentication.
-  # The server redirects the browser to this URL with access_token & user info.
-  app_redirect_url: "openfield://oauth/callback"
+  # URL the browser is sent to after authentication with access_token & user
+  # info. For the web app point this at the hosted site (the app picks the
+  # tokens up from the query string); desktop/mobile builds use a custom scheme
+  # deep link instead (e.g. openfield://oauth/callback).
+  app_redirect_url: "https://openfield.eu.cc/"
   scopes:
     - "openid"
     - "profile"

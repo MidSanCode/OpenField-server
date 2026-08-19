@@ -55,7 +55,7 @@ You can override any config value using environment variables:
 | `OIDC_CLIENT_ID` | OIDC client ID | - |
 | `OIDC_CLIENT_SECRET` | OIDC client secret | - |
 | `OIDC_REDIRECT_URL` | OIDC redirect URL | `http://localhost:8080/api/v1/auth/oidc/callback` |
-| `OIDC_APP_REDIRECT_URL` | Deep link to return to the desktop/mobile app after login (e.g. `openfield://oauth/callback`) | empty (JSON response) |
+| `OIDC_APP_REDIRECT_URL` | Callback URL after login: the web app URL for browser logins (e.g. `https://openfield.eu.cc/`), or a custom-scheme deep link for desktop/mobile (e.g. `openfield://oauth/callback`) | empty (JSON response) |
 | `JWT_SECRET_KEY` | JWT signing secret | - |
 | `STORAGE_ENDPOINT` | S3-compatible endpoint (AWS S3, MinIO, RustFS) | `localhost:9000` |
 | `STORAGE_ACCESS_KEY` | S3 access key | `minioadmin` |
