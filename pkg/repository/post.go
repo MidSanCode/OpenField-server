@@ -90,7 +90,7 @@ func (r *PostRepository) Create(userID int64, content, visibility string, attach
 func (r *PostRepository) GetByID(id int64) (*model.Post, error) {
 	post := &model.Post{}
 	err := database.DB.QueryRow(
-		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url, u.is_verified,` + authorMemberCols + `,
+		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url, u.is_verified` + authorMemberCols + `,
 		        (SELECT COUNT(*) FROM post_favorites pf WHERE pf.post_id = p.id) AS favorite_count
 		 FROM posts p
 		 JOIN users u ON p.user_id = u.id
@@ -290,7 +290,7 @@ func (r *PostRepository) List(page, limit int, viewerID int64) ([]model.Post, er
 	offset := (page - 1) * limit
 
 	rows, err := database.DB.Query(
-		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url, u.is_verified,`+authorMemberCols+`,
+		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url, u.is_verified`+authorMemberCols+`,
 		        (SELECT COUNT(*) FROM post_replies pr WHERE pr.post_id = p.id AND pr.deleted_at IS NULL) AS reply_count,
 		        (SELECT COUNT(*) FROM post_favorites pf WHERE pf.post_id = p.id) AS favorite_count
 		 FROM posts p
@@ -348,7 +348,7 @@ func (r *PostRepository) Search(query string, page, limit int, viewerID int64) (
 	pattern := "%" + query + "%"
 
 	rows, err := database.DB.Query(
-		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url, u.is_verified,`+authorMemberCols+`,
+		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url, u.is_verified`+authorMemberCols+`,
 		        (SELECT COUNT(*) FROM post_replies pr WHERE pr.post_id = p.id AND pr.deleted_at IS NULL) AS reply_count,
 		        (SELECT COUNT(*) FROM post_favorites pf WHERE pf.post_id = p.id) AS favorite_count
 		 FROM posts p
@@ -402,7 +402,7 @@ func (r *PostRepository) ListByUser(userID int64, page, limit int, viewerID int6
 	offset := (page - 1) * limit
 
 	rows, err := database.DB.Query(
-		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url, u.is_verified,`+authorMemberCols+`,
+		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url, u.is_verified`+authorMemberCols+`,
 		        (SELECT COUNT(*) FROM post_replies pr WHERE pr.post_id = p.id AND pr.deleted_at IS NULL) AS reply_count,
 		        (SELECT COUNT(*) FROM post_favorites pf WHERE pf.post_id = p.id) AS favorite_count
 		 FROM posts p
@@ -456,7 +456,7 @@ func (r *PostRepository) ListFavoritePosts(userID int64, page, limit int) ([]mod
 	offset := (page - 1) * limit
 
 	rows, err := database.DB.Query(
-		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url, u.is_verified,`+authorMemberCols+`,
+		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url, u.is_verified`+authorMemberCols+`,
 		        (SELECT COUNT(*) FROM post_replies pr WHERE pr.post_id = p.id AND pr.deleted_at IS NULL) AS reply_count,
 		        (SELECT COUNT(*) FROM post_favorites pf WHERE pf.post_id = p.id) AS favorite_count
 		 FROM posts p
