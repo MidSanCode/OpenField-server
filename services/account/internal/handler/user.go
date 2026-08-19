@@ -1,6 +1,10 @@
 package handler
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -13,6 +17,12 @@ import (
 	"github.com/openfield/server/pkg/repository"
 	"github.com/openfield/server/pkg/storage"
 )
+
+// sha256Hex returns the hex-encoded SHA-256 of the given bytes.
+func sha256Hex(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
 
 // UserHandler handles user-related requests.
 type UserHandler struct {
@@ -394,15 +404,22 @@ func (h *UserHandler) uploadImage(c *gin.Context, kind string) {
 		contentType = "image/jpeg"
 	}
 
+	data, err := io.ReadAll(file)
+	if err != nil {
+		logger.Log.Error("failed to read image", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upload image"})
+		return
+	}
+
 	store := h.store.For(user.StorageBucket)
-	objectKey, url, err := store.Upload(c.Request.Context(), file, header.Size, contentType, header.Filename)
+	objectKey, url, err := store.Upload(c.Request.Context(), bytes.NewReader(data), int64(len(data)), contentType, header.Filename)
 	if err != nil {
 		logger.Log.Error("failed to upload image", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upload image"})
 		return
 	}
 
-	if _, err := h.attRepo.Create(userID, objectKey, header.Filename, contentType, header.Size, url, "", "public", user.StorageBucket); err != nil {
+	if _, err := h.attRepo.Create(userID, objectKey, header.Filename, contentType, int64(len(data)), url, "", "public", user.StorageBucket, sha256Hex(data)); err != nil {
 		logger.Log.Error("failed to save image attachment", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save image"})
 		return
