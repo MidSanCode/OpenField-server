@@ -95,7 +95,7 @@ func (r *MessageRepository) ListByConversation(conversationID int64, beforeID in
 		limit = 50
 	}
 	query := `SELECT m.id, m.conversation_id, m.sender_id, m.kind, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at, m.mentions,
-	                 u.username, u.avatar_url, u.is_verified`+authorMemberCols+`
+	                 COALESCE(NULLIF(u.nickname, ''), u.username) AS sender_name, u.avatar_url, u.is_verified`+authorMemberCols+`
 	          FROM messages m
 	          JOIN users u ON m.sender_id = u.id
 	          WHERE m.conversation_id = $1 AND m.deleted_at IS NULL`
@@ -152,7 +152,7 @@ func (r *MessageRepository) getWithSender(id int64) (*model.Message, error) {
 	var mentionsData []byte
 	err := database.DB.QueryRow(
 		`SELECT m.id, m.conversation_id, m.sender_id, m.kind, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at, m.mentions,
-		        u.username, u.avatar_url, u.is_verified`+authorMemberCols+`
+		        COALESCE(NULLIF(u.nickname, ''), u.username) AS sender_name, u.avatar_url, u.is_verified`+authorMemberCols+`
 		 FROM messages m
 		 JOIN users u ON m.sender_id = u.id
 		 WHERE m.id = $1`,
@@ -288,7 +288,7 @@ func (r *MessageRepository) populateReplyPreview(msg *model.Message) error {
 	}
 	err := database.DB.QueryRow(
 		`SELECT CASE WHEN m.deleted_at IS NULL THEN COALESCE(m.content, '') ELSE '' END,
-		        COALESCE(u.username, '')
+		        COALESCE(NULLIF(u.nickname, ''), u.username)
 		 FROM messages m
 		 LEFT JOIN users u ON m.sender_id = u.id
 		 WHERE m.id = $1`,
@@ -321,7 +321,7 @@ func (r *MessageRepository) populateReplyPreviews(msgs []model.Message) error {
 
 	rows, err := database.DB.Query(
 		`SELECT m.id, CASE WHEN m.deleted_at IS NULL THEN COALESCE(m.content, '') ELSE '' END,
-		        COALESCE(u.username, '')
+		        COALESCE(NULLIF(u.nickname, ''), u.username)
 		 FROM messages m
 		 LEFT JOIN users u ON m.sender_id = u.id
 		 WHERE m.id = ANY($1)`,
