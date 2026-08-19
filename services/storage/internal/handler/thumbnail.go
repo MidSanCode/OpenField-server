@@ -16,6 +16,11 @@ import (
 // maxThumbDim is the longest edge of a generated image thumbnail.
 const maxThumbDim = 512
 
+// maxStripReadBytes caps the size of an image that gets GPS/location metadata
+// stripped on upload. Larger uploads keep their bytes untouched (the thumbnail
+// still discards all metadata).
+const maxStripReadBytes = 64 * 1024 * 1024
+
 // decodeImage decodes an image based on its mime type, with PNG fallback.
 func decodeImage(r io.Reader, mimeType string) (image.Image, error) {
 	switch {

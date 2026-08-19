@@ -12,6 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/openfield/server/pkg/imaging"
 	"github.com/openfield/server/pkg/logger"
 	"github.com/openfield/server/pkg/middleware"
 )
@@ -246,23 +247,47 @@ func (h *AttachmentHandler) ChunkComplete(c *gin.Context) {
 		return
 	}
 
-	thumbURL := ""
-	if isImageMime(contentType) && req.Size <= maxThumbReadBytes {
-		if data, gerr := store.GetBytes(c.Request.Context(), objectKey, maxThumbReadBytes); gerr == nil {
-			if thumb, terr := generateThumbnail(data, contentType); terr == nil && len(thumb) > 0 {
-				thumbURL, err = store.UploadThumb(c.Request.Context(), objectKey, bytes.NewReader(thumb), int64(len(thumb)))
-				if err != nil {
-					logger.Log.Warn("failed to upload thumbnail", "error", err)
+	// Read the assembled image once to strip GPS/location metadata and to
+	// generate the thumbnail. Replacement is fail-open: when the sanitized copy
+	// cannot be stored the original object is kept.
+	cleanData := []byte(nil)
+	if isImageMime(contentType) && req.Size <= maxStripReadBytes {
+		if data, gerr := store.GetBytes(c.Request.Context(), objectKey, maxStripReadBytes); gerr == nil {
+			cleanData = imaging.StripImageLocation(data, contentType)
+			if !bytes.Equal(cleanData, data) {
+				newKey, newURL, uerr := store.Upload(c.Request.Context(), bytes.NewReader(cleanData), int64(len(cleanData)), contentType, req.Filename)
+				if uerr == nil {
+					_ = store.Delete(c.Request.Context(), objectKey)
+					objectKey, url = newKey, newURL
+					logger.Log.Info("stripped location metadata from uploaded image", "filename", req.Filename)
+				} else {
+					logger.Log.Warn("failed to store sanitized image, keeping original", "error", uerr)
+					cleanData = data
 				}
-			} else if terr != nil {
-				logger.Log.Debug("skipped thumbnail generation", "error", terr)
 			}
 		} else {
-			logger.Log.Warn("failed to read assembled object for thumbnail", "error", gerr)
+			logger.Log.Debug("skipped location stripping", "error", gerr)
 		}
 	}
 
-	att, err := h.attRepo.Create(userID, objectKey, req.Filename, contentType, req.Size, url, thumbURL, visibility, user.StorageBucket)
+	thumbURL := ""
+	if len(cleanData) > 0 && len(cleanData) <= maxThumbReadBytes {
+		if thumb, terr := generateThumbnail(cleanData, contentType); terr == nil && len(thumb) > 0 {
+			thumbURL, err = store.UploadThumb(c.Request.Context(), objectKey, bytes.NewReader(thumb), int64(len(thumb)))
+			if err != nil {
+				logger.Log.Warn("failed to upload thumbnail", "error", err)
+			}
+		} else if terr != nil {
+			logger.Log.Debug("skipped thumbnail generation", "error", terr)
+		}
+	}
+
+	attSize := req.Size
+	if len(cleanData) > 0 {
+		attSize = int64(len(cleanData))
+	}
+
+	att, err := h.attRepo.Create(userID, objectKey, req.Filename, contentType, attSize, url, thumbURL, visibility, user.StorageBucket)
 	if err != nil {
 		logger.Log.Error("failed to save attachment", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save attachment"})

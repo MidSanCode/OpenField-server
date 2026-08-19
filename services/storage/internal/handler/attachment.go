@@ -12,6 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/openfield/server/pkg/config"
+	"github.com/openfield/server/pkg/imaging"
 	"github.com/openfield/server/pkg/logger"
 	"github.com/openfield/server/pkg/middleware"
 	"github.com/openfield/server/pkg/model"
@@ -154,6 +155,16 @@ func (h *AttachmentHandler) Upload(c *gin.Context) {
 		logger.Log.Error("failed to read upload", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read upload"})
 		return
+	}
+
+	// Strip GPS / location metadata from images before storing them. The other
+	// metadata (orientation, camera model, ...) is preserved. Fail-open: when
+	// sanitization cannot run the file is stored as-is.
+	if len(data) <= maxStripReadBytes {
+		if clean := imaging.StripImageLocation(data, contentType); !bytes.Equal(clean, data) {
+			data = clean
+			logger.Log.Info("stripped location metadata from uploaded image", "filename", header.Filename)
+		}
 	}
 
 	store := h.store.For(user.StorageBucket)
