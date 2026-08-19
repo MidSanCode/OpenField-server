@@ -13,6 +13,7 @@ import (
 	"github.com/openfield/server/pkg/middleware"
 	"github.com/openfield/server/pkg/model"
 	"github.com/openfield/server/pkg/repository"
+	"github.com/openfield/server/pkg/security"
 )
 
 // allowedReactions is the fixed set of post reactions clients may use.
@@ -455,6 +456,93 @@ func (h *PostHandler) UnfavoriteReply(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, reply)
+}
+
+// maxTipCoins is the largest coin amount a single tip may carry.
+const maxTipCoins = 100000
+
+// TipPost charges the authenticated user [amount] coins to appreciate a post:
+// the author's wallet receives 95%, the rest is the platform fee. The payment
+// PIN (set up via the same flow as transfers) authorizes the charge.
+func (h *PostHandler) TipPost(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	postID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid post ID"})
+		return
+	}
+
+	var req struct {
+		Amount int64  `json:"amount" binding:"required"`
+		Pin    string `json:"pin" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "amount and pin are required"})
+		return
+	}
+	if req.Amount < 1 || req.Amount > maxTipCoins {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid tip amount"})
+		return
+	}
+
+	post, err := h.postRepo.GetByID(postID)
+	if err != nil {
+		logger.Log.Error("failed to get post", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load post"})
+		return
+	}
+	if post == nil || !canViewPost(post, userID) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "post not found"})
+		return
+	}
+	if post.UserID == userID {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "cannot tip your own post"})
+		return
+	}
+
+	pinHash, err := repository.NewUserRepository().GetPinHash(userID)
+	if err != nil {
+		logger.Log.Error("failed to load payment pin", "error", err, "user_id", userID)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load payment pin"})
+		return
+	}
+	if pinHash == "" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "payment pin not set"})
+		return
+	}
+	if !security.VerifyPin(req.Pin, pinHash) {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid payment pin"})
+		return
+	}
+
+	tip, err := repository.NewTipRepository().Tip(postID, userID, req.Amount)
+	if err != nil {
+		if errors.Is(err, repository.ErrInsufficientBalance) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "insufficient balance"})
+			return
+		}
+		if errors.Is(err, repository.ErrInvalidAmount) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid tip amount"})
+			return
+		}
+		if errors.Is(err, repository.ErrSelfTip) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "cannot tip your own post"})
+			return
+		}
+		if errors.Is(err, repository.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "post not found"})
+			return
+		}
+		logger.Log.Error("failed to tip post", "error", err, "user_id", userID, "post_id", postID)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to tip post"})
+		return
+	}
+
+	c.JSON(http.StatusCreated, tip)
 }
 
 // DeletePost deletes a post by ID (owner only).

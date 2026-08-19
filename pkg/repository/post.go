@@ -7,6 +7,7 @@ import (
 
 	"github.com/lib/pq"
 	"github.com/openfield/server/pkg/database"
+	"github.com/openfield/server/pkg/logger"
 	"github.com/openfield/server/pkg/model"
 )
 
@@ -20,6 +21,11 @@ type PostRepository struct {
 // It is appended after u.is_verified so every post query carries the author's
 // membership tier and display-name styling to the client.
 const authorMemberCols = ", u.member_level, u.member_expires_at, u.name_color, u.name_color_to, u.name_dynamic, u.name_colors, u.name_gradient_direction, u.avatar_frame"
+
+// tipTotalExpr is a correlated subquery summing the non-refunded net tip
+// amount (cents) for a post. It is appended after the favorite-count subquery
+// in every post SELECT and scanned last into model.Post.TipTotal.
+const tipTotalExpr = `(SELECT COALESCE(SUM(pt.net_amount), 0) FROM post_tips pt WHERE pt.post_id = p.id AND pt.refunded_at IS NULL) AS tip_total`
 
 // applyMemberStatus fills the denormalized active-member flag from the scanned
 // level/expiry so callers don't recompute it in every query site.
@@ -91,12 +97,13 @@ func (r *PostRepository) GetByID(id int64) (*model.Post, error) {
 	post := &model.Post{}
 	err := database.DB.QueryRow(
 		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url, u.is_verified` + authorMemberCols + `,
-		        (SELECT COUNT(*) FROM post_favorites pf WHERE pf.post_id = p.id) AS favorite_count
+		        (SELECT COUNT(*) FROM post_favorites pf WHERE pf.post_id = p.id) AS favorite_count,
+		        ` + tipTotalExpr + `
 		 FROM posts p
 		 JOIN users u ON p.user_id = u.id
 		 WHERE p.id = $1`,
 		id,
-	).Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.NameColors, &post.NameGradientDirection, &post.AvatarFrame, &post.FavoriteCount)
+	).Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.NameColors, &post.NameGradientDirection, &post.AvatarFrame, &post.FavoriteCount, &post.TipTotal)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -292,7 +299,8 @@ func (r *PostRepository) List(page, limit int, viewerID int64) ([]model.Post, er
 	rows, err := database.DB.Query(
 		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url, u.is_verified`+authorMemberCols+`,
 		        (SELECT COUNT(*) FROM post_replies pr WHERE pr.post_id = p.id AND pr.deleted_at IS NULL) AS reply_count,
-		        (SELECT COUNT(*) FROM post_favorites pf WHERE pf.post_id = p.id) AS favorite_count
+		        (SELECT COUNT(*) FROM post_favorites pf WHERE pf.post_id = p.id) AS favorite_count,
+		        ` + tipTotalExpr + `
 		 FROM posts p
 		 JOIN users u ON p.user_id = u.id
 		 WHERE `+visibilityCondition(viewerID, "p.", "$1")+`
@@ -309,7 +317,7 @@ func (r *PostRepository) List(page, limit int, viewerID int64) ([]model.Post, er
 	var postIDs []int64
 	for rows.Next() {
 		var post model.Post
-		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.NameColors, &post.NameGradientDirection, &post.AvatarFrame, &post.ReplyCount, &post.FavoriteCount); err != nil {
+		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.NameColors, &post.NameGradientDirection, &post.AvatarFrame, &post.ReplyCount, &post.FavoriteCount, &post.TipTotal); err != nil {
 			return nil, fmt.Errorf("failed to scan post: %w", err)
 		}
 		applyMemberStatus(&post.MemberLevel, &post.MemberExpiresAt, &post.MemberActive)
@@ -350,7 +358,8 @@ func (r *PostRepository) Search(query string, page, limit int, viewerID int64) (
 	rows, err := database.DB.Query(
 		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url, u.is_verified`+authorMemberCols+`,
 		        (SELECT COUNT(*) FROM post_replies pr WHERE pr.post_id = p.id AND pr.deleted_at IS NULL) AS reply_count,
-		        (SELECT COUNT(*) FROM post_favorites pf WHERE pf.post_id = p.id) AS favorite_count
+		        (SELECT COUNT(*) FROM post_favorites pf WHERE pf.post_id = p.id) AS favorite_count,
+		        ` + tipTotalExpr + `
 		 FROM posts p
 		 JOIN users u ON p.user_id = u.id
 		 WHERE p.content ILIKE $1 AND `+visibilityCondition(viewerID, "p.", "$2")+`
@@ -367,7 +376,7 @@ func (r *PostRepository) Search(query string, page, limit int, viewerID int64) (
 	var postIDs []int64
 	for rows.Next() {
 		var post model.Post
-		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.NameColors, &post.NameGradientDirection, &post.AvatarFrame, &post.ReplyCount, &post.FavoriteCount); err != nil {
+		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.NameColors, &post.NameGradientDirection, &post.AvatarFrame, &post.ReplyCount, &post.FavoriteCount, &post.TipTotal); err != nil {
 			return nil, fmt.Errorf("failed to scan post: %w", err)
 		}
 		applyMemberStatus(&post.MemberLevel, &post.MemberExpiresAt, &post.MemberActive)
@@ -404,7 +413,8 @@ func (r *PostRepository) ListByUser(userID int64, page, limit int, viewerID int6
 	rows, err := database.DB.Query(
 		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url, u.is_verified`+authorMemberCols+`,
 		        (SELECT COUNT(*) FROM post_replies pr WHERE pr.post_id = p.id AND pr.deleted_at IS NULL) AS reply_count,
-		        (SELECT COUNT(*) FROM post_favorites pf WHERE pf.post_id = p.id) AS favorite_count
+		        (SELECT COUNT(*) FROM post_favorites pf WHERE pf.post_id = p.id) AS favorite_count,
+		        ` + tipTotalExpr + `
 		 FROM posts p
 		 JOIN users u ON p.user_id = u.id
 		 WHERE p.user_id = $1 AND `+visibilityCondition(viewerID, "p.", "$2")+`
@@ -421,7 +431,7 @@ func (r *PostRepository) ListByUser(userID int64, page, limit int, viewerID int6
 	var postIDs []int64
 	for rows.Next() {
 		var post model.Post
-		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.NameColors, &post.NameGradientDirection, &post.AvatarFrame, &post.ReplyCount, &post.FavoriteCount); err != nil {
+		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.NameColors, &post.NameGradientDirection, &post.AvatarFrame, &post.ReplyCount, &post.FavoriteCount, &post.TipTotal); err != nil {
 			return nil, fmt.Errorf("failed to scan post: %w", err)
 		}
 		applyMemberStatus(&post.MemberLevel, &post.MemberExpiresAt, &post.MemberActive)
@@ -458,7 +468,8 @@ func (r *PostRepository) ListFavoritePosts(userID int64, page, limit int) ([]mod
 	rows, err := database.DB.Query(
 		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url, u.is_verified`+authorMemberCols+`,
 		        (SELECT COUNT(*) FROM post_replies pr WHERE pr.post_id = p.id AND pr.deleted_at IS NULL) AS reply_count,
-		        (SELECT COUNT(*) FROM post_favorites pf WHERE pf.post_id = p.id) AS favorite_count
+		        (SELECT COUNT(*) FROM post_favorites pf WHERE pf.post_id = p.id) AS favorite_count,
+		        ` + tipTotalExpr + `
 		 FROM posts p
 		 JOIN users u ON p.user_id = u.id
 		 JOIN post_favorites fv ON fv.post_id = p.id
@@ -476,7 +487,7 @@ func (r *PostRepository) ListFavoritePosts(userID int64, page, limit int) ([]mod
 	var postIDs []int64
 	for rows.Next() {
 		var post model.Post
-		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.NameColors, &post.NameGradientDirection, &post.AvatarFrame, &post.ReplyCount, &post.FavoriteCount); err != nil {
+		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.NameColors, &post.NameGradientDirection, &post.AvatarFrame, &post.ReplyCount, &post.FavoriteCount, &post.TipTotal); err != nil {
 			return nil, fmt.Errorf("failed to scan post: %w", err)
 		}
 		applyMemberStatus(&post.MemberLevel, &post.MemberExpiresAt, &post.MemberActive)
@@ -579,15 +590,43 @@ func (r *PostRepository) populateAttachments(posts []model.Post, postIDs []int64
 	return nil
 }
 
-// Delete deletes a post by ID (only by owner).
+// Delete deletes a post by ID (only by owner). Any non-refunded tips on the
+// post are refunded to their senders (debited from the author's wallet) in the
+// same transaction, before the ON DELETE CASCADE removes the tip rows.
 func (r *PostRepository) Delete(id, userID int64) error {
-	result, err := database.DB.Exec("DELETE FROM posts WHERE id = $1 AND user_id = $2", id, userID)
+	tx, err := database.DB.Begin()
 	if err != nil {
+		return fmt.Errorf("failed to begin post delete: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Lock the post row first: a concurrent tip must serialize against the
+	// refund sweep below (Tip() takes the same row lock).
+	var authorID int64
+	err = tx.QueryRow("SELECT user_id FROM posts WHERE id = $1 FOR UPDATE", id).Scan(&authorID)
+	if err == sql.ErrNoRows {
+		return sql.ErrNoRows
+	}
+	if err != nil {
+		return fmt.Errorf("failed to lock post for delete: %w", err)
+	}
+	if authorID != userID {
+		return sql.ErrNoRows
+	}
+
+	refunded, err := NewTipRepository().RefundForPostTx(tx, id, authorID)
+	if err != nil {
+		return err
+	}
+	if refunded > 0 {
+		logger.Log.Info("refunded post tips on delete", "post_id", id, "count", refunded)
+	}
+
+	if _, err := tx.Exec("DELETE FROM posts WHERE id = $1", id); err != nil {
 		return fmt.Errorf("failed to delete post: %w", err)
 	}
-	affected, _ := result.RowsAffected()
-	if affected == 0 {
-		return sql.ErrNoRows
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit post delete: %w", err)
 	}
 	return nil
 }

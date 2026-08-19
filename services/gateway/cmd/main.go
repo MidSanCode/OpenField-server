@@ -162,6 +162,7 @@ func main() {
 		// ---- membership ----
 		{http.MethodGet, "/api/v1/membership", cfg.Services.Account, authRequired, ""},
 		{http.MethodPost, "/api/v1/membership/purchase", cfg.Services.Account, authRequired, ""},
+		{http.MethodPut, "/api/v1/membership/auto-renew", cfg.Services.Account, authRequired, ""},
 		{http.MethodGet, "/api/v1/membership/purchases", cfg.Services.Account, authRequired, ""},
 
 		// ---- storage ----
@@ -190,6 +191,7 @@ func main() {
 		{http.MethodDelete, "/api/v1/posts/:id/reactions", cfg.Services.Posts, authPermission, "posts.react"},
 		{http.MethodPost, "/api/v1/posts/:id/favorite", cfg.Services.Posts, authPermission, "posts.favorite"},
 		{http.MethodDelete, "/api/v1/posts/:id/favorite", cfg.Services.Posts, authPermission, "posts.favorite"},
+		{http.MethodPost, "/api/v1/posts/:id/tips", cfg.Services.Posts, authRequired, ""},
 		{http.MethodPost, "/api/v1/posts/:id/replies/:reply_id/favorite", cfg.Services.Posts, authPermission, "posts.favorite"},
 		{http.MethodDelete, "/api/v1/posts/:id/replies/:reply_id/favorite", cfg.Services.Posts, authPermission, "posts.favorite"},
 		{http.MethodGet, "/api/v1/users/:user_id/favorites/posts", cfg.Services.Posts, authRequired, ""},

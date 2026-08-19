@@ -120,6 +120,53 @@ func (h *MembershipHandler) ListPurchases(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"purchases": purchases, "page": page, "limit": limit})
 }
 
+// SetAutoRenew toggles the user's membership automatic-renewal opt-in.
+// Enabling pre-authorizes future wallet charges, so it is guarded by the
+// payment PIN exactly like a purchase; disabling only needs authentication.
+func (h *MembershipHandler) SetAutoRenew(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	var req struct {
+		Enabled bool   `json:"enabled"`
+		Pin     string `json:"pin"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+	if req.Enabled {
+		pinHash, err := h.userRepo.GetPinHash(userID)
+		if err != nil {
+			logger.Log.Error("failed to load payment pin", "error", err, "user_id", userID)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load payment pin"})
+			return
+		}
+		if pinHash == "" {
+			c.JSON(http.StatusForbidden, gin.H{"error": "payment pin not set"})
+			return
+		}
+		if !security.VerifyPin(req.Pin, pinHash) {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid payment pin"})
+			return
+		}
+	}
+	if err := h.membershipRepo.SetAutoRenew(userID, req.Enabled); err != nil {
+		logger.Log.Error("failed to set auto-renew", "error", err, "user_id", userID)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to set auto-renew"})
+		return
+	}
+	status, err := h.membershipRepo.GetForUser(userID, time.Now())
+	if err != nil {
+		logger.Log.Error("failed to load membership", "error", err, "user_id", userID)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load membership"})
+		return
+	}
+	c.JSON(http.StatusOK, status)
+}
+
 // Grant applies a membership level directly to a user, skipping the wallet. An
 // admin-only endpoint: the gateway enforces the user.membership.grant
 // permission. Level 0 clears the membership; a positive level expires after

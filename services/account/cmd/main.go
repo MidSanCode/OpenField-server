@@ -79,6 +79,9 @@ func main() {
 	// Background sweeper: refund pending transfers that are 24h unanswered.
 	go startTransferSweeper()
 
+	// Background sweeper: auto-renew memberships whose term is expiring.
+	go startMembershipRenewer()
+
 	r := gin.New()
 	r.Use(middleware.Recovery())
 	r.Use(logger.GinLogger())
@@ -109,6 +112,26 @@ func startTransferSweeper() {
 		}
 		if refunded > 0 {
 			logger.Log.Info("refunded expired transfers", "count", refunded)
+		}
+	}
+}
+
+// startMembershipRenewer periodically re-charges memberships whose owners opted
+// into automatic renewal, extending them by the standard duration before (or
+// shortly after) they lapse.
+func startMembershipRenewer() {
+	ticker := time.NewTicker(6 * time.Hour)
+	defer ticker.Stop()
+
+	repo := repository.NewMembershipRepository()
+	for range ticker.C {
+		renewed, err := repo.RenewDue(time.Now())
+		if err != nil {
+			logger.Log.Error("failed to renew memberships", "error", err)
+			continue
+		}
+		if renewed > 0 {
+			logger.Log.Info("auto-renewed memberships", "count", renewed)
 		}
 	}
 }

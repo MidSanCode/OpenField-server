@@ -67,6 +67,7 @@ func RegisterRoutes(r *gin.Engine, authHandler *AuthHandler, userHandler *UserHa
 		{
 			membership.GET("", membershipHandler.GetMembership)
 			membership.POST("/purchase", membershipHandler.Purchase)
+			membership.PUT("/auto-renew", membershipHandler.SetAutoRenew)
 			membership.GET("/purchases", membershipHandler.ListPurchases)
 		}
 

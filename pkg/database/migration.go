@@ -224,6 +224,31 @@ var versionedMigrations = []migration{
 			CREATE INDEX IF NOT EXISTS idx_attachments_sha256 ON attachments(sha256);
 		`,
 	},
+	{
+		version: 13,
+		name:    "membership-auto-renew-post-tips",
+		sql: `
+			-- Opt-in auto-renewal: while the flag is on, the membership sweeper
+			-- re-charges the current tier near expiry and extends it by 30 days.
+			ALTER TABLE users ADD COLUMN IF NOT EXISTS auto_renew BOOLEAN NOT NULL DEFAULT FALSE;
+
+			-- Post tips: a like with coins. The tipper is charged the full amount
+			-- in cents; 95% (net_amount) is credited to the author's wallet and the
+			-- remaining 5% is the platform fee. When the post is deleted the
+			-- tippers get the 95% back, debited from the author's wallet.
+			CREATE TABLE IF NOT EXISTS post_tips (
+				id BIGSERIAL PRIMARY KEY,
+				post_id BIGINT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+				user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+				amount BIGINT NOT NULL,          -- total tip in cents
+				net_amount BIGINT NOT NULL,      -- 95% credited to the author
+				refunded_at TIMESTAMPTZ,
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			);
+			CREATE INDEX IF NOT EXISTS idx_post_tips_post ON post_tips(post_id, id DESC);
+			CREATE INDEX IF NOT EXISTS idx_post_tips_user ON post_tips(user_id, id DESC);
+		`,
+	},
 }
 
 // latestMigrationVersion returns the newest schema version the code knows

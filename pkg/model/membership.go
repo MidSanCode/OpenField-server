@@ -238,6 +238,9 @@ type MembershipStatus struct {
 	Tiers       []MemberTier `json:"tiers"`
 	MemberDays  int64        `json:"member_days"`
 	MemberPrice int64        `json:"member_price,omitempty"`
+	// AutoRenew reports whether the user has enabled automatic renewal of their
+	// current membership tier.
+	AutoRenew bool `json:"auto_renew"`
 }
 
 // MembershipPurchase is one recorded membership purchase/renewal/upgrade row,

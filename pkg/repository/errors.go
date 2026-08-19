@@ -18,6 +18,8 @@ var (
 	ErrAlreadyHandled = errors.New("request already handled")
 	// ErrDeletedMessage reports an attempt to edit/delete an already deleted message.
 	ErrDeletedMessage = errors.New("message already deleted")
+	// ErrInvalidAmount reports a wallet amount outside the accepted range.
+	ErrInvalidAmount = errors.New("invalid amount")
 )
 
 // isUniqueViolation detects PostgreSQL unique constraint violations.

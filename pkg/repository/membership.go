@@ -2,10 +2,12 @@ package repository
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/openfield/server/pkg/database"
+	"github.com/openfield/server/pkg/logger"
 	"github.com/openfield/server/pkg/model"
 )
 
@@ -227,8 +229,87 @@ func (r *MembershipRepository) ListPurchases(userID int64, page, limit int) ([]m
 	return purchases, nil
 }
 
+// SetAutoRenew flips the user's opt-in automatic-renewal flag. Automatic
+// renewal re-charges the current tier within 24h of expiry (or up to a week
+// late) and extends the membership by the standard duration; it is switched
+// back off when a renewal cannot be paid.
+func (r *MembershipRepository) SetAutoRenew(userID int64, enabled bool) error {
+	if _, err := database.DB.Exec(
+		"UPDATE users SET auto_renew = $2, updated_at = NOW() WHERE id = $1",
+		userID, enabled,
+	); err != nil {
+		return fmt.Errorf("failed to set auto-renew: %w", err)
+	}
+	return nil
+}
+
+// renewWindowBefore / renewWindowAfter bound when a membership qualifies for an
+// automatic renewal: within the last day of the term, or up to a week after it
+// lapsed (covering offline users whose sweeper run was late).
+const (
+	renewWindowBefore = 24 * time.Hour
+	renewWindowAfter  = 7 * 24 * time.Hour
+)
+
+// RenewDue auto-renews every membership whose owner opted in and whose term is
+// inside the renewal window. Each user is charged the full price of their
+// current tier (like a manual renewal) and the term is extended by 30 days;
+// when the wallet cannot cover the charge the auto-renew flag is turned off so
+// the sweeper stops retrying. Returns the number of successfully renewed
+// memberships.
+func (r *MembershipRepository) RenewDue(now time.Time) (int, error) {
+	rows, err := database.DB.Query(
+		`SELECT id, member_level
+		 FROM users
+		 WHERE auto_renew = TRUE
+		   AND member_level BETWEEN 1 AND $1
+		   AND member_expires_at IS NOT NULL
+		   AND member_expires_at <= $2
+		   AND member_expires_at > $3`,
+		int64(model.MemberLoneStar), now.Add(-renewWindowBefore), now.Add(-renewWindowAfter),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("failed to query due renewals: %w", err)
+	}
+	defer rows.Close()
+
+	type due struct {
+		userID int64
+		level  int64
+	}
+	var dueList []due
+	for rows.Next() {
+		var d due
+		if err := rows.Scan(&d.userID, &d.level); err != nil {
+			return 0, fmt.Errorf("failed to scan due renewal: %w", err)
+		}
+		dueList = append(dueList, d)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("rows error: %w", err)
+	}
+
+	renewed := 0
+	for _, d := range dueList {
+		if _, err := r.Purchase(d.userID, d.level, now); err != nil {
+			if errors.Is(err, ErrInsufficientBalance) {
+				logger.Log.Warn("auto-renew skipped: insufficient balance", "user_id", d.userID)
+				if setErr := r.SetAutoRenew(d.userID, false); setErr != nil {
+					logger.Log.Error("failed to disable auto-renew", "error", setErr, "user_id", d.userID)
+				}
+				continue
+			}
+			logger.Log.Error("auto-renew failed", "error", err, "user_id", d.userID, "level", d.level)
+			continue
+		}
+		renewed++
+	}
+	return renewed, nil
+}
+
 // membershipStatus builds a MembershipStatus from a loaded user row.
-func membershipStatus(user *model.User, now time.Time) *model.MembershipStatus {	active := user.MemberLevel > 0 && user.MemberExpiresAt != nil && now.Before(*user.MemberExpiresAt)
+func membershipStatus(user *model.User, now time.Time) *model.MembershipStatus {
+	active := user.MemberLevel > 0 && user.MemberExpiresAt != nil && now.Before(*user.MemberExpiresAt)
 	mult := model.MemberMultiplierAt(user.MemberLevel, user.MemberExpiresAt, now)
 	status := &model.MembershipStatus{
 		Level:       user.MemberLevel,
@@ -238,6 +319,7 @@ func membershipStatus(user *model.User, now time.Time) *model.MembershipStatus {
 		Tiers:       model.MemberTiers(),
 		MemberDays:  model.MemberDurationDays,
 		MemberPrice: model.MemberPrice(user.MemberLevel),
+		AutoRenew:   user.AutoRenew,
 	}
 	if tier, ok := model.MemberTierForLevel(user.MemberLevel); ok {
 		status.Name = tier.Name

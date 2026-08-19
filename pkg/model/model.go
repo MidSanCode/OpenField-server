@@ -71,6 +71,11 @@ type User struct {
 	// MemberExpiresAt is when the membership expires (null when the user has
 	// never had an active membership).
 	MemberExpiresAt *time.Time `json:"member_expires_at,omitempty"`
+	// AutoRenew is the opt-in automatic-renewal flag: while true the membership
+	// sweeper re-charges the current tier near expiry and extends it by 30 days.
+	// It is switched off automatically when a renewal fails (e.g. insufficient
+	// balance).
+	AutoRenew bool `json:"auto_renew"`
 	// Region is the user's locale region name (e.g. "中国"), used to derive
 	// the timezone for day boundaries and the display language for server
 	// notifications. Empty string means the server defaults apply.
@@ -119,6 +124,9 @@ type Post struct {
 	ReplyCount  int64     `json:"reply_count,omitempty"`
 	ViewCount   int64     `json:"view_count,omitempty"`
 	UniqueViews int64     `json:"unique_views,omitempty"`
+	// TipTotal is the sum of non-refunded tips (net amount credited to the
+	// author) on this post, in cents.
+	TipTotal int64 `json:"tip_total,omitempty"`
 	// Reactions holds reaction counts keyed by reaction type (e.g. like).
 	Reactions map[string]int64 `json:"reactions,omitempty"`
 	// MyReaction is the authenticated viewer's own reaction, when present.
