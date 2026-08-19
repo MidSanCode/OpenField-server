@@ -194,7 +194,10 @@ type Attachment struct {
 	ThumbURL     string    `json:"thumb_url,omitempty"`
 	Visibility   string    `json:"visibility"`
 	// Bucket is the logical storage bucket the object was uploaded to.
-	Bucket    string    `json:"bucket,omitempty"`
+	Bucket string `json:"bucket,omitempty"`
+	// SHA256 is the content hash of the stored bytes, used to deduplicate
+	// uploads. It is never exposed to clients.
+	SHA256    string    `json:"-"`
 	CreatedAt time.Time `json:"created_at"`
 }
 

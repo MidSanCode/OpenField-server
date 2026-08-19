@@ -2,6 +2,8 @@ package storage
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/url"
@@ -57,6 +59,22 @@ func (s *Store) Name() string {
 	return s.name
 }
 
+// normalizeEndpoint strips any path from the endpoint so S3 clients only see a
+// scheme://host[:port]. Configs that end with a "/" or carry a path prefix
+// (e.g. "https://io.msc-studio.eu.cc/") otherwise make minio-go reject the URL
+// as "Endpoint url cannot have fully qualified paths." and storage silently
+// stays disabled.
+func normalizeEndpoint(endpoint string) string {
+	endpoint = strings.TrimRight(endpoint, "/")
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Host == "" {
+		return endpoint
+	}
+	u.Path = ""
+	u.RawPath = ""
+	return strings.TrimRight(u.String(), "/")
+}
+
 // New creates a storage manager from config, one Store per logical bucket.
 // When object storage is not configured it returns a manager without stores
 // (never an error), so services can still start without storage. The bucket
@@ -75,7 +93,8 @@ func New(cfg config.StorageConfig) (*Manager, error) {
 		return m, nil
 	}
 
-	client, err := minio.New(cfg.Endpoint, &minio.Options{
+	endpoint := normalizeEndpoint(cfg.Endpoint)
+	client, err := minio.New(endpoint, &minio.Options{
 		Creds:  credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
 		Secure: cfg.UseSSL,
 		Region: cfg.Region,
@@ -137,7 +156,7 @@ func resolvePublicBaseURL(cfg config.StorageConfig, b config.StorageBucketConfig
 		}
 		return fmt.Sprintf("https://%s.s3.%s.amazonaws.com", b.Bucket, region)
 	}
-	return fmt.Sprintf("%s://%s/%s", scheme, cfg.Endpoint, b.Bucket)
+	return fmt.Sprintf("%s://%s/%s", scheme, normalizeEndpoint(cfg.Endpoint), b.Bucket)
 }
 
 // publicURL builds the full URL for an object key against the resolved base.
@@ -250,38 +269,38 @@ func (s *Store) ListChunks(ctx context.Context, uploadID string) (map[int]int64,
 
 // AssembleChunks concatenates uploaded chunks into a single object. It reads
 // chunks back from storage, so it must only be called with the full set of
-// chunk indexes (1..total).
-func (s *Store) AssembleChunks(ctx context.Context, uploadID string, totalChunks int, contentType, originalName string) (string, string, error) {
+// chunk indexes (1..total). The SHA-256 of the assembled bytes is computed
+// while streaming so callers can deduplicate uploads.
+func (s *Store) AssembleChunks(ctx context.Context, uploadID string, totalChunks int, contentType, originalName string) (objectKey, publicURL, sha256Hex string, err error) {
 	ext := filepath.Ext(originalName)
-	objectKey := fmt.Sprintf("%s/%s%s", time.Now().Format("2006/01/02"), uuid.NewString(), ext)
+	objectKey = fmt.Sprintf("%s/%s%s", time.Now().Format("2006/01/02"), uuid.NewString(), ext)
 
 	var readers []io.ReadCloser
-	total := int64(0)
 	for i := 1; i <= totalChunks; i++ {
 		obj, err := s.client.GetObject(ctx, s.bucket, ChunkKey(uploadID, i), minio.GetObjectOptions{})
 		if err != nil {
 			closeAll(readers)
-			return "", "", fmt.Errorf("failed to open chunk %d: %w", i, err)
+			return "", "", "", fmt.Errorf("failed to open chunk %d: %w", i, err)
 		}
 		if _, err := obj.Stat(); err != nil {
 			obj.Close()
 			closeAll(readers)
-			return "", "", fmt.Errorf("failed to stat chunk %d: %w", i, err)
+			return "", "", "", fmt.Errorf("failed to stat chunk %d: %w", i, err)
 		}
 		readers = append(readers, obj)
-		total += 0 // size is irrelevant for a streaming reader
 	}
 
-	multi := io.MultiReader(toReaders(readers)...)
-	_, err := s.client.PutObject(ctx, s.bucket, objectKey, multi, -1, minio.PutObjectOptions{
+	hasher := sha256.New()
+	tee := io.TeeReader(io.MultiReader(toReaders(readers)...), hasher)
+	_, err = s.client.PutObject(ctx, s.bucket, objectKey, tee, -1, minio.PutObjectOptions{
 		ContentType: contentType,
 	})
 	closeAll(readers)
 	if err != nil {
-		return "", "", fmt.Errorf("failed to assemble chunks: %w", err)
+		return "", "", "", fmt.Errorf("failed to assemble chunks: %w", err)
 	}
 
-	return objectKey, s.publicURL(objectKey), nil
+	return objectKey, s.publicURL(objectKey), hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
 // DeleteChunks removes all chunk objects for an upload.

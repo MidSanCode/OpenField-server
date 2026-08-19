@@ -214,6 +214,16 @@ var versionedMigrations = []migration{
 			CREATE INDEX IF NOT EXISTS idx_e2ee_keys_conv_target ON conversation_e2ee_keys(conversation_id, target_user_id, version);
 		`,
 	},
+	{
+		version: 12,
+		name:    "attachments-sha256",
+		sql: `
+			-- Content hash used to deduplicate uploads: identical files already
+			-- present in the cloud are reused instead of stored twice.
+			ALTER TABLE attachments ADD COLUMN IF NOT EXISTS sha256 VARCHAR(64) NOT NULL DEFAULT '';
+			CREATE INDEX IF NOT EXISTS idx_attachments_sha256 ON attachments(sha256);
+		`,
+	},
 }
 
 // latestMigrationVersion returns the newest schema version the code knows

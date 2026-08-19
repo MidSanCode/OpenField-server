@@ -2,6 +2,8 @@ package handler
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"mime"
 	"net/http"
@@ -19,6 +21,12 @@ import (
 	"github.com/openfield/server/pkg/repository"
 	"github.com/openfield/server/pkg/storage"
 )
+
+// sha256Hex returns the hex-encoded SHA-256 of the given bytes.
+func sha256Hex(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
 
 // maxThumbReadBytes caps the size of an image that gets a generated thumbnail.
 const maxThumbReadBytes = 40 * 1024 * 1024
@@ -125,14 +133,13 @@ func (h *AttachmentHandler) Upload(c *gin.Context) {
 		return
 	}
 
-	allowed, err := h.checkQuota(c, user, header.Size)
-	if err != nil {
-		logger.Log.Error("failed to check storage quota", "error", err)
+	// Quota is enforced only for genuinely new uploads: reusing a blob the
+	// cloud already has (dedupe) must still work when the quota is exhausted,
+	// so the check runs after the hash lookup below.
+	quotaOK, quotaErr := h.checkQuota(c, user, header.Size)
+	if quotaErr != nil {
+		logger.Log.Error("failed to check storage quota", "error", quotaErr)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check storage quota"})
-		return
-	}
-	if !allowed {
-		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "storage quota exceeded"})
 		return
 	}
 
@@ -167,6 +174,26 @@ func (h *AttachmentHandler) Upload(c *gin.Context) {
 		}
 	}
 
+	// Content-hash deduplication: when the cloud already has an attachment with
+	// the exact same stored bytes, reuse the existing link instead of storing a
+	// copy. The hash is computed on the final (sanitized) bytes so GPS stripping
+	// of images does not defeat the match.
+	hash := sha256Hex(data)
+	if existing, derr := h.attRepo.GetByHash(hash, userID); derr != nil {
+		logger.Log.Error("failed to check attachment hash", "error", derr)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check attachment hash"})
+		return
+	} else if existing != nil {
+		logger.Log.Info("reused existing attachment by content hash", "hash", hash, "attachment_id", existing.ID)
+		c.JSON(http.StatusOK, existing)
+		return
+	}
+
+	if !quotaOK {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "storage quota exceeded"})
+		return
+	}
+
 	store := h.store.For(user.StorageBucket)
 	objectKey, url, err := store.Upload(c.Request.Context(), bytes.NewReader(data), int64(len(data)), contentType, header.Filename)
 	if err != nil {
@@ -189,7 +216,7 @@ func (h *AttachmentHandler) Upload(c *gin.Context) {
 		}
 	}
 
-	att, err := h.attRepo.Create(userID, objectKey, header.Filename, contentType, int64(len(data)), url, thumbURL, visibility, user.StorageBucket)
+	att, err := h.attRepo.Create(userID, objectKey, header.Filename, contentType, int64(len(data)), url, thumbURL, visibility, user.StorageBucket, hash)
 	if err != nil {
 		logger.Log.Error("failed to save attachment", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save attachment"})
@@ -211,6 +238,30 @@ func (h *AttachmentHandler) Get(c *gin.Context) {
 	if err != nil {
 		logger.Log.Error("failed to get attachment", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get attachment"})
+		return
+	}
+	if att == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "attachment not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, att)
+}
+
+// Reuse looks up an attachment whose content hash matches, so clients can
+// skip uploading a file the cloud already has and use the existing link.
+func (h *AttachmentHandler) Reuse(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	hash := strings.ToLower(strings.TrimSpace(c.Param("hash")))
+	att, err := h.attRepo.GetByHash(hash, userID)
+	if err != nil {
+		logger.Log.Error("failed to look up attachment by hash", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to look up attachment"})
 		return
 	}
 	if att == nil {

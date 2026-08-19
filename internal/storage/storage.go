@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/url"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -13,6 +15,22 @@ import (
 	"github.com/openfield/server/internal/config"
 	"github.com/openfield/server/internal/logger"
 )
+
+// normalizeEndpoint strips any path from the endpoint so S3 clients only see a
+// scheme://host[:port]. Configs that end with a "/" or carry a path prefix
+// (e.g. "https://io.msc-studio.eu.cc/") otherwise make minio-go reject the URL
+// as "Endpoint url cannot have fully qualified paths." and storage silently
+// stays disabled.
+func normalizeEndpoint(endpoint string) string {
+	endpoint = strings.TrimRight(endpoint, "/")
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Host == "" {
+		return endpoint
+	}
+	u.Path = ""
+	u.RawPath = ""
+	return strings.TrimRight(u.String(), "/")
+}
 
 // Store wraps a RustFS (S3-compatible) client.
 type Store struct {
@@ -43,7 +61,7 @@ func New(cfg config.StorageConfig) (*Store, error) {
 		return &Store{enabled: false}, nil
 	}
 
-	client, err := minio.New(cfg.Endpoint, &minio.Options{
+	client, err := minio.New(normalizeEndpoint(cfg.Endpoint), &minio.Options{
 		Creds:  credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
 		Secure: cfg.UseSSL,
 	})

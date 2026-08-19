@@ -240,7 +240,7 @@ func (h *AttachmentHandler) ChunkComplete(c *gin.Context) {
 		visibility = "public"
 	}
 
-	objectKey, url, err := store.AssembleChunks(c.Request.Context(), uploadID, req.TotalChunks, contentType, req.Filename)
+	objectKey, url, assembledHash, err := store.AssembleChunks(c.Request.Context(), uploadID, req.TotalChunks, contentType, req.Filename)
 	if err != nil {
 		logger.Log.Error("failed to assemble chunks", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to assemble chunks"})
@@ -270,6 +270,28 @@ func (h *AttachmentHandler) ChunkComplete(c *gin.Context) {
 		}
 	}
 
+	// Content-hash deduplication. The hash of the bytes actually stored wins:
+	// after possible GPS stripping that is the in-memory cleaned copy, otherwise
+	// it is the hash computed while assembling the stream.
+	finalHash := assembledHash
+	if len(cleanData) > 0 {
+		finalHash = sha256Hex(cleanData)
+	}
+	if existing, derr := h.attRepo.GetByHash(finalHash, userID); derr != nil {
+		logger.Log.Error("failed to check attachment hash", "error", derr)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check attachment hash"})
+		return
+	} else if existing != nil {
+		// The assembled bytes duplicate an existing blob: discard the fresh
+		// object/thumbnail and reuse the existing link.
+		_ = store.Delete(c.Request.Context(), objectKey)
+		_ = store.DeleteThumb(c.Request.Context(), objectKey)
+		_ = store.DeleteChunks(c.Request.Context(), uploadID)
+		logger.Log.Info("reused existing attachment by content hash", "hash", finalHash, "attachment_id", existing.ID)
+		c.JSON(http.StatusOK, existing)
+		return
+	}
+
 	thumbURL := ""
 	if len(cleanData) > 0 && len(cleanData) <= maxThumbReadBytes {
 		if thumb, terr := generateThumbnail(cleanData, contentType); terr == nil && len(thumb) > 0 {
@@ -287,7 +309,7 @@ func (h *AttachmentHandler) ChunkComplete(c *gin.Context) {
 		attSize = int64(len(cleanData))
 	}
 
-	att, err := h.attRepo.Create(userID, objectKey, req.Filename, contentType, attSize, url, thumbURL, visibility, user.StorageBucket)
+	att, err := h.attRepo.Create(userID, objectKey, req.Filename, contentType, attSize, url, thumbURL, visibility, user.StorageBucket, finalHash)
 	if err != nil {
 		logger.Log.Error("failed to save attachment", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save attachment"})

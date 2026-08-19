@@ -18,14 +18,35 @@ func NewAttachmentRepository() *AttachmentRepository {
 }
 
 // Create inserts an attachment record.
-func (r *AttachmentRepository) Create(userID int64, objectKey, originalName, mimeType string, sizeBytes int64, url, thumbURL, visibility, bucket string) (*model.Attachment, error) {
+func (r *AttachmentRepository) Create(userID int64, objectKey, originalName, mimeType string, sizeBytes int64, url, thumbURL, visibility, bucket, sha256 string) (*model.Attachment, error) {
 	att := &model.Attachment{}
 	err := database.DB.QueryRow(
-		"INSERT INTO attachments (user_id, object_key, original_name, mime_type, size_bytes, url, thumb_url, visibility, bucket) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id, user_id, object_key, original_name, mime_type, size_bytes, url, thumb_url, visibility, bucket, created_at",
-		userID, objectKey, originalName, mimeType, sizeBytes, url, thumbURL, visibility, bucket,
-	).Scan(&att.ID, &att.UserID, &att.ObjectKey, &att.OriginalName, &att.MimeType, &att.SizeBytes, &att.URL, &att.ThumbURL, &att.Visibility, &att.Bucket, &att.CreatedAt)
+		"INSERT INTO attachments (user_id, object_key, original_name, mime_type, size_bytes, url, thumb_url, visibility, bucket, sha256) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id, user_id, object_key, original_name, mime_type, size_bytes, url, thumb_url, visibility, bucket, sha256, created_at",
+		userID, objectKey, originalName, mimeType, sizeBytes, url, thumbURL, visibility, bucket, sha256,
+	).Scan(&att.ID, &att.UserID, &att.ObjectKey, &att.OriginalName, &att.MimeType, &att.SizeBytes, &att.URL, &att.ThumbURL, &att.Visibility, &att.Bucket, &att.SHA256, &att.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create attachment: %w", err)
+	}
+	return att, nil
+}
+
+// GetByHash returns the most recent public attachment (or one owned by the
+// given user) whose content hash matches. It backs upload deduplication: an
+// identical file already in the cloud is reused instead of stored again.
+func (r *AttachmentRepository) GetByHash(hash string, userID int64) (*model.Attachment, error) {
+	if hash == "" {
+		return nil, nil
+	}
+	att := &model.Attachment{}
+	err := database.DB.QueryRow(
+		"SELECT id, user_id, object_key, original_name, mime_type, size_bytes, url, thumb_url, visibility, bucket, sha256, created_at FROM attachments WHERE sha256 = $1 AND (visibility = 'public' OR user_id = $2) ORDER BY id DESC LIMIT 1",
+		hash, userID,
+	).Scan(&att.ID, &att.UserID, &att.ObjectKey, &att.OriginalName, &att.MimeType, &att.SizeBytes, &att.URL, &att.ThumbURL, &att.Visibility, &att.Bucket, &att.SHA256, &att.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
 	}
 	return att, nil
 }

@@ -84,6 +84,8 @@ func RunMigrations() error {
 		`CREATE INDEX IF NOT EXISTS idx_attachments_user_id ON attachments(user_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_attachments_object_key ON attachments(object_key)`,
 		`CREATE INDEX IF NOT EXISTS idx_post_attachments_attachment ON post_attachments(attachment_id)`,
+		`ALTER TABLE attachments ADD COLUMN IF NOT EXISTS sha256 VARCHAR(64) NOT NULL DEFAULT ''`,
+		`CREATE INDEX IF NOT EXISTS idx_attachments_sha256 ON attachments(sha256)`,
 	}
 
 	for _, m := range migrations {
