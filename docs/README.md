@@ -48,6 +48,8 @@ You can override any config value using environment variables:
 |----------|-------------|---------|
 | `OPENFIELD_CONFIG` | Path to config file | `config/config.local.yaml` |
 | `SERVER_PORT` | Server port | `8080` |
+| `ALLOW_ALL_ORIGINS` | Set `true` to allow API calls from any browser origin | - |
+| `ALLOWED_ORIGINS` | CSV of allowed browser origins (e.g. `https://openfield.eu.cc,http://localhost:8090`). Local `localhost`/`127.0.0.1` origins are always allowed regardless of this setting | - |
 | `DATABASE_URL` | PostgreSQL connection URL | - |
 | `REDIS_ADDR` | Redis address | `localhost:6379` |
 | `REDIS_PASSWORD` | Redis password | - |

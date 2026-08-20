@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -216,6 +217,12 @@ func Load(configPath string) (*Config, error) {
 func (c *Config) overrideFromEnv() {
 	if v := os.Getenv("SERVER_PORT"); v != "" {
 		c.Server.Port = v
+	}
+	if v := os.Getenv("ALLOW_ALL_ORIGINS"); v != "" {
+		c.Server.AllowAllOrigins = v == "true" || v == "1"
+	}
+	if v := os.Getenv("ALLOWED_ORIGINS"); v != "" {
+		c.Server.AllowedOrigins = strings.Split(v, ",")
 	}
 	if v := os.Getenv("DATABASE_URL"); v != "" {
 		// Parse DATABASE_URL if provided (format: postgres://user:pass@host:port/dbname)
