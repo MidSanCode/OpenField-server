@@ -249,6 +249,34 @@ var versionedMigrations = []migration{
 			CREATE INDEX IF NOT EXISTS idx_post_tips_user ON post_tips(user_id, id DESC);
 		`,
 	},
+	{
+		version: 14,
+		name:    "upload-sessions-oidc-states",
+		sql: `
+			-- Server-side chunked-upload sessions. Every chunk write/complete is
+			-- bound to the owning user so one account cannot write chunks into (or
+			-- complete) another account's upload session.
+			CREATE TABLE IF NOT EXISTS upload_sessions (
+				upload_id UUID PRIMARY KEY,
+				user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+				bucket VARCHAR(64) NOT NULL DEFAULT '',
+				total_chunks INT NOT NULL,
+				size_bytes BIGINT NOT NULL,
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			);
+			CREATE INDEX IF NOT EXISTS idx_upload_sessions_user ON upload_sessions(user_id, created_at);
+
+			-- Single-use OIDC login states: binds each authorization request to a
+			-- random nonce so an attacker cannot complete a login against a victim
+			-- session (login CSRF). Rows are consumed on callback and expire.
+			CREATE TABLE IF NOT EXISTS oidc_states (
+				state VARCHAR(128) PRIMARY KEY,
+				purpose VARCHAR(16) NOT NULL DEFAULT 'login',
+				expires_at TIMESTAMPTZ NOT NULL
+			);
+			CREATE INDEX IF NOT EXISTS idx_oidc_states_expires ON oidc_states(expires_at);
+		`,
+	},
 }
 
 // latestMigrationVersion returns the newest schema version the code knows

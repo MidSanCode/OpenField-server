@@ -5,8 +5,10 @@
 server:
   port: "8080"
   mode: "debug" # debug, release, test
-  # Cross-origin access for browser clients. Empty allowed_origins (or
-  # allow_all_origins: true) permits requests from any origin.
+  # Cross-origin access for browser clients. Listing explicit origins is the
+  # recommended production posture; allow_all_origins: true (or an empty list)
+  # permits requests from any origin — acceptable while auth uses Bearer
+  # tokens, but prefer a strict list when possible.
   allowed_origins: []
   allow_all_origins: true
 
@@ -59,7 +61,10 @@ oidc:
     - "email"
 
 jwt:
-  secret_key: "your-secret-key-change-this-in-production"
+  # REQUIRED: services refuse to boot with an empty, short (<32 chars) or
+  # known-default signing key. Generate one with `openssl rand -base64 48`.
+  # Escape hatch for throwaway local setups only: OPENFIELD_ALLOW_WEAK_SECRETS=true
+  secret_key: ""
   expiry_hours: 24
 
 storage:

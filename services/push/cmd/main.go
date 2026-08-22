@@ -47,7 +47,7 @@ func main() {
 	r.NoRoute(middleware.NotFound())
 	r.NoMethod(middleware.MethodNotAllowed())
 
-	handler.RegisterRoutes(r, wsHandler)
+	handler.RegisterRoutes(r, wsHandler, &handler.TicketHandler{})
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

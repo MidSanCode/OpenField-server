@@ -151,6 +151,12 @@ func (h *AttachmentHandler) Upload(c *gin.Context) {
 			contentType = "application/octet-stream"
 		}
 	}
+	// Whitelist check: active document types (HTML/SVG/JS/...) are rejected so
+	// the public bucket can never serve executable content.
+	if !storage.MimeAllowed(contentType) {
+		c.JSON(http.StatusUnsupportedMediaType, gin.H{"error": "unsupported file type"})
+		return
+	}
 
 	visibility := c.PostForm("visibility")
 	if visibility == "" {

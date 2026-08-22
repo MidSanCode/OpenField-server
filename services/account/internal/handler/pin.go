@@ -65,6 +65,14 @@ func (h *PinHandler) VerifyPin(c *gin.Context) {
 		return
 	}
 
+	// The 6-digit PIN space is small: lock the account out after repeated
+	// wrong entries instead of letting attackers grind through it.
+	pinKey := pinAttemptKey(userID)
+	if retry := pinLimiter.RetryAfter(pinKey); retry > 0 {
+		lockedResponse(c, retry)
+		return
+	}
+
 	var req struct {
 		Pin string `json:"pin" binding:"required"`
 	}
@@ -85,8 +93,10 @@ func (h *PinHandler) VerifyPin(c *gin.Context) {
 	}
 	valid := security.VerifyPin(req.Pin, hash)
 	if !valid {
+		pinLimiter.Fail(pinKey)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid pin"})
 		return
 	}
+	pinLimiter.Reset(pinKey)
 	c.JSON(http.StatusOK, gin.H{"valid": true})
 }

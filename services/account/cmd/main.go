@@ -82,6 +82,9 @@ func main() {
 	// Background sweeper: auto-renew memberships whose term is expiring.
 	go startMembershipRenewer()
 
+	// Background sweeper: purge expired refresh tokens and OIDC login states.
+	go startAuthDataSweeper()
+
 	r := gin.New()
 	r.Use(middleware.Recovery())
 	r.Use(logger.GinLogger())
@@ -132,6 +135,22 @@ func startMembershipRenewer() {
 		}
 		if renewed > 0 {
 			logger.Log.Info("auto-renewed memberships", "count", renewed)
+		}
+	}
+}
+
+// startAuthDataSweeper periodically deletes expired refresh tokens and OIDC
+// login states so dead sessions and nonces do not accumulate.
+func startAuthDataSweeper() {
+	ticker := time.NewTicker(1 * time.Hour)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		if err := repository.PurgeExpiredRefreshTokens(); err != nil {
+			logger.Log.Error("failed to purge expired refresh tokens", "error", err)
+		}
+		if err := repository.PurgeExpiredOIDCStates(); err != nil {
+			logger.Log.Error("failed to purge expired oidc states", "error", err)
 		}
 	}
 }

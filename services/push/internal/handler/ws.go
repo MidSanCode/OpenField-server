@@ -35,10 +35,23 @@ func NewWsHandler(hub *Hub) *WsHandler {
 	return &WsHandler{hub: hub}
 }
 
-// Connect is the WebSocket endpoint. The gateway validates the JWT and sets
-// X-User-ID, so the user is already trusted here.
+// Connect is the WebSocket endpoint. Two authentication paths are supported:
+//
+//  1. The gateway validated the Bearer JWT and set X-User-ID (native clients).
+//  2. A short-lived single-use ?ticket= minted via POST /api/v1/ws. Browsers
+//     cannot set custom headers during the upgrade, and passing the long-lived
+//     JWT in the URL would leak it into proxy/access logs, so browser clients
+//     exchange it for a one-time ticket first.
 func (h *WsHandler) Connect(c *gin.Context) {
 	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		if ticket := c.Query("ticket"); ticket != "" {
+			if id, valid := tickets.redeem(ticket); valid {
+				userID = id
+				ok = true
+			}
+		}
+	}
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return

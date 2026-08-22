@@ -3,12 +3,14 @@ package main
 import (
 	"log"
 	"os"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/openfield/server/pkg/config"
 	"github.com/openfield/server/pkg/database"
 	"github.com/openfield/server/pkg/logger"
 	"github.com/openfield/server/pkg/middleware"
+	"github.com/openfield/server/pkg/repository"
 	"github.com/openfield/server/pkg/storage"
 	"github.com/openfield/server/services/storage/internal/handler"
 )
@@ -45,6 +47,19 @@ func main() {
 	}
 
 	attHandler := handler.NewAttachmentHandler(store, cfg.Storage)
+
+	// Background sweeper: drop abandoned chunked-upload sessions so dead
+	// sessions do not accumulate. The chunk objects themselves are removed on
+	// completion; leftovers are harmless temp objects.
+	go func() {
+		ticker := time.NewTicker(6 * time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			if err := repository.PurgeStaleUploadSessions(24 * time.Hour); err != nil {
+				logger.Log.Error("failed to purge stale upload sessions", "error", err)
+			}
+		}
+	}()
 
 	r := gin.New()
 	r.Use(middleware.Recovery())

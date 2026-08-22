@@ -53,6 +53,12 @@ func (h *TransferHandler) CreateTransfer(c *gin.Context) {
 
 	// Payment PIN authorizes outgoing transfers. A user without a PIN must set
 	// one first (the client shows the set-up prompt on the first payment).
+	// Wrong entries share the per-user PIN failure budget with /pin/verify.
+	pinKey := pinAttemptKey(userID)
+	if retry := pinLimiter.RetryAfter(pinKey); retry > 0 {
+		lockedResponse(c, retry)
+		return
+	}
 	pinHash, err := h.userRepo.GetPinHash(userID)
 	if err != nil {
 		logger.Log.Error("failed to load sender pin", "error", err, "user_id", userID)
@@ -64,9 +70,11 @@ func (h *TransferHandler) CreateTransfer(c *gin.Context) {
 		return
 	}
 	if !security.VerifyPin(req.Pin, pinHash) {
+		pinLimiter.Fail(pinKey)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid payment pin"})
 		return
 	}
+	pinLimiter.Reset(pinKey)
 
 	recipient, err := h.userRepo.GetByID(req.Recipient)
 	if err != nil {

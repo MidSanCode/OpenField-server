@@ -29,6 +29,11 @@ const (
 	authPublic     authLevel = iota // no auth required
 	authRequired                    // valid JWT required
 	authPermission                  // valid JWT + permission required
+	// authTicket forwards the request without gateway-side credential checks;
+	// the target service validates the single-use ?ticket= query parameter
+	// itself. Used for browser WebSocket upgrades, which cannot send custom
+	// headers during the handshake.
+	authTicket
 )
 
 // route is a single gateway routing rule. Patterns use gin-style ":param"
@@ -255,7 +260,12 @@ func main() {
 		{http.MethodDelete, "/api/v1/conversations/:id/messages/:message_id", cfg.Services.Chat, authPermission, "chat.delete"},
 
 		// ---- push (realtime) ----
-		{http.MethodGet, "/api/v1/ws", cfg.Services.Push, authRequired, ""},
+		// GET upgrades the connection using a single-use ticket minted via
+		// POST below (required for browsers, which cannot set headers during
+		// the WebSocket handshake); native clients may also send their Bearer
+		// token, which the gateway validates opportunistically.
+		{http.MethodGet, "/api/v1/ws", cfg.Services.Push, authTicket, ""},
+		{http.MethodPost, "/api/v1/ws", cfg.Services.Push, authRequired, ""},
 	}
 
 	// Build reverse proxies per service.
@@ -304,16 +314,25 @@ func main() {
 			}
 		}
 
+		if rt.level == authTicket {
+			// Browser WebSocket upgrade: forward as-is. The push service
+			// redeems the single-use ticket and binds the socket to the right
+			// user. Any client-supplied identity header is dropped first.
+			c.Request.Header.Del(middleware.UserIDHeader)
+			best.proxy.ServeHTTP(c.Writer, c.Request)
+			return
+		}
+
 		if rt.level != authPublic {
 			// Validate JWT. The token normally arrives via the Authorization
-			// header, but browsers cannot set custom headers on WebSocket
-			// connections, so the realtime client also sends it as a "token"
-			// query parameter. Accept either form.
+			// header. Browsers cannot set custom headers on WebSocket upgrade
+			// requests, but they no longer need to: the realtime client first
+			// POSTs /api/v1/ws with its Bearer token and then connects with the
+			// single-use ticket it receives, so long-lived JWTs never appear in
+			// URLs.
 			tokenStr := ""
 			if header := c.GetHeader("Authorization"); strings.HasPrefix(header, "Bearer ") {
 				tokenStr = strings.TrimPrefix(header, "Bearer ")
-			} else if q := c.Query("token"); q != "" {
-				tokenStr = q
 			}
 			if tokenStr == "" {
 				c.JSON(http.StatusUnauthorized, gin.H{"error": "missing authorization token"})

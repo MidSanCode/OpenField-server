@@ -181,6 +181,32 @@ func (r *FollowRepository) ListFriends(userID int64, page, limit int) ([]model.U
 	return scanUsers(rows)
 }
 
+// MutualFollowerIDs returns the ids of every user who mutually follows the
+// given user, without pagination. Used to scope realtime pushes of
+// friends-only posts.
+func (r *FollowRepository) MutualFollowerIDs(userID int64) ([]int64, error) {
+	rows, err := database.DB.Query(
+		`SELECT f1.follower_id FROM user_follows f1
+		 JOIN user_follows f2 ON f1.followee_id = f2.follower_id AND f2.followee_id = f1.follower_id
+		 WHERE f1.followee_id = $1`,
+		userID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list mutual follower ids: %w", err)
+	}
+	defer rows.Close()
+
+	ids := make([]int64, 0)
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("failed to scan mutual follower id: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 func scanUsers(rows *sql.Rows) ([]model.User, error) {
 	users := make([]model.User, 0)
 	for rows.Next() {

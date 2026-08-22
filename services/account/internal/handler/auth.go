@@ -2,6 +2,7 @@ package handler
 
 import (
 	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -83,13 +84,37 @@ func (h *AuthHandler) GetProviders(c *gin.Context) {
 }
 
 // OIDCLogin redirects the user to the OIDC provider's authorization page.
+// A fresh single-use state nonce is minted for every login attempt and stored
+// server-side; the callback rejects any code exchange that does not carry it,
+// which blocks login CSRF and callback replay.
 func (h *AuthHandler) OIDCLogin(c *gin.Context) {
+	state, err := randomState()
+	if err != nil {
+		logger.Log.Error("failed to generate oidc state", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to start login"})
+		return
+	}
+	if err := repository.IssueOIDCState(state); err != nil {
+		logger.Log.Error("failed to store oidc state", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to start login"})
+		return
+	}
+
 	provider := h.authManager.GetProvider()
-	authURL := provider.Config().AuthCodeURL("openfield-state")
+	authURL := provider.Config().AuthCodeURL(state)
 	c.JSON(http.StatusOK, gin.H{
 		"auth_url": authURL,
 		"provider": "oidc",
 	})
+}
+
+// randomState returns a 256-bit random hex nonce for OIDC flows.
+func randomState() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }
 
 // OIDCBind starts the OIDC account-binding flow for the authenticated user.
@@ -128,6 +153,15 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
+	// Brute-force protection: reject attempts when the source IP or this
+	// account has burned its failure budget.
+	ip := clientAddress(c)
+	accountKey := strings.ToLower(req.Username)
+	if retry := maxDuration(loginIPLimiter.RetryAfter(ip), loginAccountLimiter.RetryAfter(accountKey)); retry > 0 {
+		lockedResponse(c, retry)
+		return
+	}
+
 	user, err := h.userRepo.GetByUsername(req.Username)
 	if err != nil {
 		logger.Log.Error("failed to get user by username", "error", err)
@@ -135,14 +169,20 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 	if user == nil {
+		loginIPLimiter.Fail(ip)
+		loginAccountLimiter.Fail(accountKey)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid username or password"})
 		return
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)); err != nil {
+		loginIPLimiter.Fail(ip)
+		loginAccountLimiter.Fail(accountKey)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid username or password"})
 		return
 	}
+	loginIPLimiter.Reset(ip)
+	loginAccountLimiter.Reset(accountKey)
 
 	if h.bannedResponse(c, user) {
 		return
@@ -233,6 +273,13 @@ func (h *AuthHandler) OIDCCallback(c *gin.Context) {
 	state := c.Query("state")
 	if bindUserID, err := h.tokenMgr.ParsePurposeToken(state, "bind"); err == nil {
 		h.handleOIDCBind(c, code, bindUserID)
+		return
+	}
+
+	// Plain login: the state must be a nonce we issued and not yet consumed.
+	if err := repository.ConsumeOIDCState(state); err != nil {
+		logger.Log.Warn("oidc login rejected", "reason", "invalid or expired state")
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid oidc state"})
 		return
 	}
 
@@ -456,6 +503,14 @@ func refreshBlock(refreshToken string) string {
     </div>`, refreshToken)
 }
 
+// maxDuration returns the larger of two durations.
+func maxDuration(a, b time.Duration) time.Duration {
+	if a >= b {
+		return a
+	}
+	return b
+}
+
 // hmmAppFallback is a safe placeholder when no app redirect URL is configured.
 const hmmAppFallback = "#"
 
@@ -534,16 +589,29 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 }
 
 // generateRefreshToken creates a cryptographically random refresh token string.
+// Characters are drawn with rejection sampling so every symbol is equally
+// likely (62 does not divide 256, plain modulo would bias early letters).
 func generateRefreshToken() (string, error) {
 	const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
+	const length = 32
+	max := byte(256 - 256%len(chars))
+	out := make([]byte, 0, length)
+	buf := make([]byte, 64)
+	for len(out) < length {
+		if _, err := rand.Read(buf); err != nil {
+			return "", err
+		}
+		for _, v := range buf {
+			if v >= max {
+				continue
+			}
+			out = append(out, chars[int(v)%len(chars)])
+			if len(out) == length {
+				break
+			}
+		}
 	}
-	for i := range b {
-		b[i] = chars[int(b[i])%len(chars)]
-	}
-	return time.Now().Format(time.RFC3339Nano) + "-" + string(b), nil
+	return time.Now().Format(time.RFC3339Nano) + "-" + string(out), nil
 }
 
 // validateRefreshToken checks if the refresh token is valid.

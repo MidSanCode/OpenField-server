@@ -210,7 +210,39 @@ func Load(configPath string) (*Config, error) {
 	// Override with environment variables if set
 	cfg.overrideFromEnv()
 
+	if err := cfg.validateSecrets(); err != nil {
+		return nil, err
+	}
+
 	return cfg, nil
+}
+
+// weakJWTSecrets lists well-known default / placeholder secrets that must
+// never authenticate real traffic.
+var weakJWTSecrets = map[string]bool{
+	"": true,
+	"test":                                      true,
+	"secret":                                    true,
+	"changeme":                                  true,
+	"change-this-in-production":                 true,
+	"your-secret-key-change-this-in-production": true,
+}
+
+// validateSecrets refuses to boot with a known-weak or too-short JWT signing
+// key. Operators can bypass this only for throwaway local setups by setting
+// OPENFIELD_ALLOW_WEAK_SECRETS=true explicitly.
+func (c *Config) validateSecrets() error {
+	if v := os.Getenv("OPENFIELD_ALLOW_WEAK_SECRETS"); v == "true" || v == "1" {
+		return nil
+	}
+	key := strings.TrimSpace(c.JWT.SecretKey)
+	if weakJWTSecrets[key] || len(key) < 32 {
+		return fmt.Errorf(
+			"refusing to start: jwt.secret_key is empty, shorter than 32 characters, or a known default value. "+
+				"Generate a strong key (e.g. `openssl rand -base64 48`) and set it via config or JWT_SECRET_KEY. "+
+				"For throwaway local testing set OPENFIELD_ALLOW_WEAK_SECRETS=true")
+	}
+	return nil
 }
 
 // overrideFromEnv overrides config values with environment variables if they are set.

@@ -15,10 +15,43 @@ import (
 	"github.com/openfield/server/pkg/imaging"
 	"github.com/openfield/server/pkg/logger"
 	"github.com/openfield/server/pkg/middleware"
+	"github.com/openfield/server/pkg/repository"
+	"github.com/openfield/server/pkg/storage"
 )
 
 // maxChunkBytes is the size limit for a single uploaded chunk.
 const maxChunkBytes = 8 * 1024 * 1024
+
+// maxTotalChunks bounds the per-session chunk count so a hostile init request
+// cannot make completion iterate (or reserve) an unbounded number of objects.
+const maxTotalChunks = 10000
+
+// uploadSessionTTL is how long an unfinished session may linger before the
+// sweeper deletes it.
+const uploadSessionTTL = 24 * time.Hour
+
+// loadOwnedUploadSession fetches a chunked-upload session and verifies it
+// belongs to the requesting user. Returns nil when the caller already wrote a
+// response.
+func (h *AttachmentHandler) loadOwnedUploadSession(c *gin.Context, userID int64, uploadID string) *repository.UploadSession {
+	if uploadID == "" || len(uploadID) > 64 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid upload id"})
+		return nil
+	}
+	session, err := repository.GetUploadSession(uploadID)
+	if err != nil {
+		logger.Log.Error("failed to load upload session", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load upload session"})
+		return nil
+	}
+	if session == nil || session.UserID != userID {
+		// A missing session and someone else's session are indistinguishable
+		// to the caller on purpose.
+		c.JSON(http.StatusNotFound, gin.H{"error": "upload session not found"})
+		return nil
+	}
+	return session
+}
 
 // chunkInitRequest starts a chunked upload session.
 type chunkInitRequest struct {
@@ -59,6 +92,10 @@ func (h *AttachmentHandler) ChunkInit(c *gin.Context) {
 		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "file too large"})
 		return
 	}
+	if req.TotalChunks > maxTotalChunks {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "too many chunks"})
+		return
+	}
 
 	user, err := h.userRepo.GetByID(userID)
 	if err != nil {
@@ -84,13 +121,26 @@ func (h *AttachmentHandler) ChunkInit(c *gin.Context) {
 	}
 
 	uploadID := uuid.NewString()
+	if err := repository.CreateUploadSession(&repository.UploadSession{
+		UploadID:    uploadID,
+		UserID:      userID,
+		Bucket:      user.StorageBucket,
+		TotalChunks: req.TotalChunks,
+		SizeBytes:   req.Size,
+	}); err != nil {
+		logger.Log.Error("failed to create upload session", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to start upload"})
+		return
+	}
+
 	c.JSON(http.StatusCreated, gin.H{
 		"upload_id":    uploadID,
 		"total_chunks": req.TotalChunks,
 	})
 }
 
-// ChunkUpload stores a single chunk for the given upload session.
+// ChunkUpload stores a single chunk for the given upload session. The session
+// must exist and belong to the requesting user.
 func (h *AttachmentHandler) ChunkUpload(c *gin.Context) {
 	userID, ok := middleware.GetUserID(c)
 	if !ok {
@@ -103,19 +153,17 @@ func (h *AttachmentHandler) ChunkUpload(c *gin.Context) {
 	}
 
 	uploadID := c.Param("upload_id")
+	session := h.loadOwnedUploadSession(c, userID, uploadID)
+	if session == nil {
+		return
+	}
 	index, err := strconv.Atoi(c.Param("index"))
-	if err != nil || index < 1 {
+	if err != nil || index < 1 || index > session.TotalChunks {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid chunk index"})
 		return
 	}
 
-	user, err := h.userRepo.GetByID(userID)
-	if err != nil {
-		logger.Log.Error("failed to load user", "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load user"})
-		return
-	}
-	store := h.store.For(user.StorageBucket)
+	store := h.store.For(session.Bucket)
 
 	file, _, err := c.Request.FormFile("chunk")
 	if err != nil {
@@ -148,6 +196,7 @@ func (h *AttachmentHandler) ChunkUpload(c *gin.Context) {
 }
 
 // ChunkStatus returns which chunks have already been uploaded (for resume).
+// The session must belong to the requesting user.
 func (h *AttachmentHandler) ChunkStatus(c *gin.Context) {
 	userID, ok := middleware.GetUserID(c)
 	if !ok {
@@ -156,13 +205,11 @@ func (h *AttachmentHandler) ChunkStatus(c *gin.Context) {
 	}
 
 	uploadID := c.Param("upload_id")
-	user, err := h.userRepo.GetByID(userID)
-	if err != nil {
-		logger.Log.Error("failed to load user", "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load user"})
+	session := h.loadOwnedUploadSession(c, userID, uploadID)
+	if session == nil {
 		return
 	}
-	store := h.store.For(user.StorageBucket)
+	store := h.store.For(session.Bucket)
 	existing, err := store.ListChunks(c.Request.Context(), uploadID)
 	if err != nil {
 		logger.Log.Error("failed to list chunks", "error", err)
@@ -184,6 +231,9 @@ func (h *AttachmentHandler) ChunkStatus(c *gin.Context) {
 
 // ChunkComplete verifies all chunks, assembles the object, generates a
 // thumbnail, creates the attachment record and removes the temp chunks.
+// The session must belong to the requesting user and match the declared
+// layout; the session row is consumed once the upload finishes (or is found
+// to be a duplicate).
 func (h *AttachmentHandler) ChunkComplete(c *gin.Context) {
 	userID, ok := middleware.GetUserID(c)
 	if !ok {
@@ -196,19 +246,22 @@ func (h *AttachmentHandler) ChunkComplete(c *gin.Context) {
 	}
 
 	uploadID := c.Param("upload_id")
+	session := h.loadOwnedUploadSession(c, userID, uploadID)
+	if session == nil {
+		return
+	}
 	var req chunkCompleteRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
 		return
 	}
 
-	user, err := h.userRepo.GetByID(userID)
-	if err != nil {
-		logger.Log.Error("failed to load user", "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load user"})
+	store := h.store.For(session.Bucket)
+
+	if req.TotalChunks != session.TotalChunks {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "chunk count mismatch"})
 		return
 	}
-	store := h.store.For(user.StorageBucket)
 
 	existing, err := store.ListChunks(c.Request.Context(), uploadID)
 	if err != nil {
@@ -234,6 +287,12 @@ func (h *AttachmentHandler) ChunkComplete(c *gin.Context) {
 		} else if contentType == "" {
 			contentType = "application/octet-stream"
 		}
+	}
+	// Whitelist check: active document types (HTML/SVG/JS/...) are rejected so
+	// the public bucket can never serve executable content.
+	if !storage.MimeAllowed(contentType) {
+		c.JSON(http.StatusUnsupportedMediaType, gin.H{"error": "unsupported file type"})
+		return
 	}
 	visibility := req.Visibility
 	if visibility == "" {
@@ -287,6 +346,7 @@ func (h *AttachmentHandler) ChunkComplete(c *gin.Context) {
 		_ = store.Delete(c.Request.Context(), objectKey)
 		_ = store.DeleteThumb(c.Request.Context(), objectKey)
 		_ = store.DeleteChunks(c.Request.Context(), uploadID)
+		_ = repository.DeleteUploadSession(uploadID)
 		logger.Log.Info("reused existing attachment by content hash", "hash", finalHash, "attachment_id", existing.ID)
 		c.JSON(http.StatusOK, existing)
 		return
@@ -309,7 +369,7 @@ func (h *AttachmentHandler) ChunkComplete(c *gin.Context) {
 		attSize = int64(len(cleanData))
 	}
 
-	att, err := h.attRepo.Create(userID, objectKey, req.Filename, contentType, attSize, url, thumbURL, visibility, user.StorageBucket, finalHash)
+	att, err := h.attRepo.Create(userID, objectKey, req.Filename, contentType, attSize, url, thumbURL, visibility, session.Bucket, finalHash)
 	if err != nil {
 		logger.Log.Error("failed to save attachment", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save attachment"})
@@ -318,6 +378,9 @@ func (h *AttachmentHandler) ChunkComplete(c *gin.Context) {
 
 	if err := store.DeleteChunks(c.Request.Context(), uploadID); err != nil {
 		logger.Log.Warn("failed to delete temp chunks", "error", err)
+	}
+	if err := repository.DeleteUploadSession(uploadID); err != nil {
+		logger.Log.Warn("failed to delete upload session", "error", err)
 	}
 
 	c.JSON(http.StatusCreated, att)

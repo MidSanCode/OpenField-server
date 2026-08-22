@@ -30,6 +30,27 @@ const (
 	visibilityPrivate = "private"
 )
 
+// postRecipients computes the realtime push audience for a newly created post
+// based on its visibility. A nil slice means "broadcast to every connected
+// client" (the WebSocket hub only serves authenticated users).
+func postRecipients(authorID int64, visibility string) []int64 {
+	switch visibility {
+	case visibilityPrivate:
+		return []int64{authorID}
+	case visibilityFriends:
+		friendIDs, err := repository.NewFollowRepository().MutualFollowerIDs(authorID)
+		if err != nil {
+			logger.Log.Error("failed to list mutual followers for push", "error", err, "user_id", authorID)
+			// Fail closed: never widen the audience on error.
+			return []int64{authorID}
+		}
+		return append(friendIDs, authorID)
+	default:
+		// public and login posts may reach every connected client.
+		return nil
+	}
+}
+
 // allowedVisibilities is the fixed set of post visibility values.
 var allowedVisibilities = map[string]bool{
 	visibilityPublic:  true,
@@ -121,8 +142,11 @@ func (h *PostHandler) CreatePost(c *gin.Context) {
 		return
 	}
 
-	// New posts are broadcast to all connected clients (public feed).
-	events.Publish(c.Request.Context(), events.PostCreated, nil, post)
+	// Realtime push respects the post's visibility: public/login posts go to
+	// every connected (authenticated) socket, friends-only posts only to
+	// mutual followers, private posts only to the author. Broadcasting the
+	// content unfiltered would leak restricted posts to everyone online.
+	events.Publish(c.Request.Context(), events.PostCreated, postRecipients(userID, req.Visibility), post)
 
 	c.JSON(http.StatusCreated, post)
 }
