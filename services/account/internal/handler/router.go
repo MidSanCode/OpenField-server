@@ -42,6 +42,7 @@ func RegisterRoutes(r *gin.Engine, authHandler *AuthHandler, userHandler *UserHa
 			users.GET("/storage-buckets", userHandler.ListStorageBuckets)
 			users.GET("/search", userHandler.SearchUsers)
 			users.POST("/me/pin", pinHandler.SetPin)
+			users.PUT("/me/pin", pinHandler.ChangePin)
 			users.POST("/me/pin/verify", pinHandler.VerifyPin)
 		}
 		// Public profile lookup (used to view other users' public profiles).

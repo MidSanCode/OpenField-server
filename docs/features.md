@@ -95,8 +95,12 @@ Money is stored as integer cents (`BIGINT`) to avoid float drift. See
   recipient using their payment PIN. Pending transfers are listed per user.
 - **Payment PIN**: a 6-digit PIN (`POST /users/me/pin`) that authorizes all
   outbound payments. `POST /users/me/pin/verify` validates a candidate PIN
-  against the stored hash. It never replaces the login password. (These routes
-  are registered in the gateway account block.)
+  against the stored hash. It never replaces the login password. Changing an
+  existing PIN goes through `PUT /users/me/pin`, which requires the current
+  PIN (`old_pin`) and shares the same per-user failure budget as verify.
+  Admins can reset any user's PIN directly from the admin panel (bcrypt hash
+  written to `users.pin_hash`). (These routes are registered in the gateway
+  account block.)
 
 ## Tasks & Experience
 

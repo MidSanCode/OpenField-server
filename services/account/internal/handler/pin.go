@@ -56,6 +56,65 @@ func (h *PinHandler) SetPin(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"set": true, "has_pin": true})
 }
 
+// ChangePin replaces an existing payment PIN. The current PIN must be
+// presented (and matches against the same per-user failure budget as other
+// PIN operations), so a stolen session alone cannot take over payments.
+func (h *PinHandler) ChangePin(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	var req struct {
+		OldPin string `json:"old_pin" binding:"required"`
+		Pin    string `json:"pin" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "old_pin and pin are required"})
+		return
+	}
+	if !security.ValidPin(req.Pin) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "pin must be 6 digits"})
+		return
+	}
+
+	pinKey := pinAttemptKey(userID)
+	if retry := pinLimiter.RetryAfter(pinKey); retry > 0 {
+		lockedResponse(c, retry)
+		return
+	}
+	currentHash, err := h.userRepo.GetPinHash(userID)
+	if err != nil {
+		logger.Log.Error("failed to load pin hash", "error", err, "user_id", userID)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to change pin"})
+		return
+	}
+	if currentHash == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "pin not set"})
+		return
+	}
+	if !security.VerifyPin(req.OldPin, currentHash) {
+		pinLimiter.Fail(pinKey)
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid pin"})
+		return
+	}
+	pinLimiter.Reset(pinKey)
+
+	newHash, err := security.HashPin(req.Pin)
+	if err != nil {
+		logger.Log.Error("failed to hash pin", "error", err, "user_id", userID)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to change pin"})
+		return
+	}
+	if err := h.userRepo.SetPinHash(userID, newHash); err != nil {
+		logger.Log.Error("failed to save pin hash", "error", err, "user_id", userID)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to change pin"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"set": true, "has_pin": true})
+}
+
 // VerifyPin checks a candidate PIN against the stored hash. The client uses it
 // to authorize a payment without guessing server-side state.
 func (h *PinHandler) VerifyPin(c *gin.Context) {
