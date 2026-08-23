@@ -224,6 +224,11 @@ func main() {
 		{http.MethodPost, "/api/v1/transfers/:id/accept", cfg.Services.Account, authRequired, ""},
 		{http.MethodPost, "/api/v1/transfers/:id/decline", cfg.Services.Account, authRequired, ""},
 
+		// ---- checks (red packets) ----
+		{http.MethodPost, "/api/v1/checks", cfg.Services.Account, authRequired, ""},
+		{http.MethodGet, "/api/v1/checks/:id", cfg.Services.Account, authRequired, ""},
+		{http.MethodPost, "/api/v1/checks/:id/claim", cfg.Services.Account, authRequired, ""},
+
 		// ---- chat ----
 		{http.MethodGet, "/api/v1/consent-requests", cfg.Services.Chat, authPermission, "chat.request.approve"},
 		{http.MethodPost, "/api/v1/consent-requests/:id/accept", cfg.Services.Chat, authPermission, "chat.request.approve"},
@@ -255,6 +260,7 @@ func main() {
 		{http.MethodPost, "/api/v1/conversations/:id/members/:user_id/mute", cfg.Services.Chat, authPermission, "chat.group.manage"},
 		{http.MethodDelete, "/api/v1/conversations/:id/members/:user_id/mute", cfg.Services.Chat, authPermission, "chat.group.manage"},
 		{http.MethodGet, "/api/v1/conversations/:id/messages", cfg.Services.Chat, authPermission, "chat.view"},
+		{http.MethodGet, "/api/v1/conversations/:id/messages/search", cfg.Services.Chat, authPermission, "chat.view"},
 		{http.MethodPost, "/api/v1/conversations/:id/messages", cfg.Services.Chat, authPermission, "chat.send"},
 		{http.MethodPut, "/api/v1/conversations/:id/messages/:message_id", cfg.Services.Chat, authPermission, "chat.edit"},
 		{http.MethodDelete, "/api/v1/conversations/:id/messages/:message_id", cfg.Services.Chat, authPermission, "chat.delete"},

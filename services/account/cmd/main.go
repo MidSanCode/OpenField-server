@@ -75,9 +75,13 @@ func main() {
 	pinHandler := handler.NewPinHandler()
 	membershipHandler := handler.NewMembershipHandler()
 	punishmentHandler := handler.NewPunishmentHandler()
+	checkHandler := handler.NewCheckHandler()
 
 	// Background sweeper: refund pending transfers that are 24h unanswered.
 	go startTransferSweeper()
+
+	// Background sweeper: refund unclaimed check money once checks expire.
+	go startCheckSweeper()
 
 	// Background sweeper: auto-renew memberships whose term is expiring.
 	go startMembershipRenewer()
@@ -91,7 +95,7 @@ func main() {
 	r.NoRoute(middleware.NotFound())
 	r.NoMethod(middleware.MethodNotAllowed())
 
-	handler.RegisterRoutes(r, authHandler, userHandler, walletHandler, capabilitiesHandler, taskHandler, transferHandler, pinHandler, membershipHandler, punishmentHandler)
+	handler.RegisterRoutes(r, authHandler, userHandler, walletHandler, capabilitiesHandler, taskHandler, transferHandler, pinHandler, membershipHandler, punishmentHandler, checkHandler)
 
 	addr := "127.0.0.1:" + cfg.ServicePort("ACCOUNT")
 	logger.Log.Info("account service starting", "address", addr)
@@ -115,6 +119,26 @@ func startTransferSweeper() {
 		}
 		if refunded > 0 {
 			logger.Log.Info("refunded expired transfers", "count", refunded)
+		}
+	}
+}
+
+// startCheckSweeper periodically refunds the unclaimed remainder of expired
+// checks back to their creators (a safety net: expiry is also settled lazily
+// whenever a check is read or claimed).
+func startCheckSweeper() {
+	ticker := time.NewTicker(30 * time.Minute)
+	defer ticker.Stop()
+
+	repo := repository.NewCheckRepository()
+	for range ticker.C {
+		refunded, err := repo.RefundExpired(time.Now())
+		if err != nil {
+			logger.Log.Error("failed to sweep expired checks", "error", err)
+			continue
+		}
+		if refunded > 0 {
+			logger.Log.Info("refunded expired checks", "count", refunded)
 		}
 	}
 }

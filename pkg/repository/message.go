@@ -37,10 +37,15 @@ func parseMentions(data []byte) ([]int64, error) {
 
 // Create inserts a new message with optional attachments and returns it with sender info.
 // [mentions] is the list of explicitly mentioned user IDs, plus -1 when
-// @everyone is used; an empty/nil slice means no mentions.
-func (r *MessageRepository) Create(conversationID, senderID int64, content string, replyToID *int64, attachmentIDs []int64, mentions []int64) (*model.Message, error) {
+// @everyone is used; an empty/nil slice means no mentions. When [checkID] > 0
+// the message carries that check (kind = 'check').
+func (r *MessageRepository) Create(conversationID, senderID int64, content string, replyToID *int64, attachmentIDs []int64, mentions []int64, checkID int64) (*model.Message, error) {
 	if mentions == nil {
 		mentions = []int64{}
+	}
+	kind := "text"
+	if checkID > 0 {
+		kind = "check"
 	}
 	// The mentions column is JSONB. Store it as a JSON array of user ids so it
 	// round-trips with the JSON decoder below (pq.Array/pq.Int64Array expect a
@@ -51,10 +56,10 @@ func (r *MessageRepository) Create(conversationID, senderID int64, content strin
 	}
 	msg := &model.Message{}
 	if err := database.DB.QueryRow(
-		`INSERT INTO messages (conversation_id, sender_id, content, reply_to_id, mentions)
-		 VALUES ($1, $2, $3, $4, $5::jsonb)
+		`INSERT INTO messages (conversation_id, sender_id, kind, content, reply_to_id, mentions, check_id)
+		 VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
 		 RETURNING id, conversation_id, sender_id, content, reply_to_id, edited_at, deleted_at, created_at`,
-		conversationID, senderID, content, replyToID, string(mentionsJSON),
+		conversationID, senderID, kind, content, replyToID, string(mentionsJSON), checkID,
 	).Scan(&msg.ID, &msg.ConversationID, &msg.SenderID, &msg.Content, &msg.ReplyToID, &msg.EditedAt, &msg.DeletedAt, &msg.CreatedAt); err != nil {
 		return nil, fmt.Errorf("failed to create message: %w", err)
 	}
@@ -95,7 +100,7 @@ func (r *MessageRepository) ListByConversation(conversationID int64, beforeID in
 	if limit < 1 || limit > 100 {
 		limit = 50
 	}
-	query := `SELECT m.id, m.conversation_id, m.sender_id, m.kind, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at, m.mentions,
+	query := `SELECT m.id, m.conversation_id, m.sender_id, m.kind, m.check_id, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at, m.mentions,
 	                 COALESCE(NULLIF(u.nickname, ''), u.username) AS sender_name, u.avatar_url, u.is_verified`+authorMemberCols+`
 	          FROM messages m
 	          JOIN users u ON m.sender_id = u.id
@@ -118,7 +123,7 @@ func (r *MessageRepository) ListByConversation(conversationID int64, beforeID in
 	for rows.Next() {
 		var m model.Message
 		var mentionsData []byte
-		if err := rows.Scan(&m.ID, &m.ConversationID, &m.SenderID, &m.Kind, &m.Content, &m.ReplyToID, &m.EditedAt, &m.DeletedAt, &m.CreatedAt, &mentionsData, &m.SenderName, &m.SenderAvatar, &m.SenderVerified, &m.SenderMemberLevel, &m.SenderMemberExpiresAt, &m.SenderNameColor, &m.SenderNameColorTo, &m.SenderNameDynamic, &m.SenderNameColors, &m.SenderNameGradientDirection, &m.SenderAvatarFrame); err != nil {
+		if err := rows.Scan(&m.ID, &m.ConversationID, &m.SenderID, &m.Kind, &m.CheckID, &m.Content, &m.ReplyToID, &m.EditedAt, &m.DeletedAt, &m.CreatedAt, &mentionsData, &m.SenderName, &m.SenderAvatar, &m.SenderVerified, &m.SenderMemberLevel, &m.SenderMemberExpiresAt, &m.SenderNameColor, &m.SenderNameColorTo, &m.SenderNameDynamic, &m.SenderNameColors, &m.SenderNameGradientDirection, &m.SenderAvatarFrame); err != nil {
 			return nil, fmt.Errorf("failed to scan message: %w", err)
 		}
 		applyMemberStatus(&m.SenderMemberLevel, &m.SenderMemberExpiresAt, &m.SenderMemberActive)
@@ -168,7 +173,7 @@ func (r *MessageRepository) Search(conversationID int64, f MessageSearchFilter, 
 	if limit < 1 || limit > 100 {
 		limit = 50
 	}
-	query := `SELECT m.id, m.conversation_id, m.sender_id, m.kind, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at, m.mentions,
+	query := `SELECT m.id, m.conversation_id, m.sender_id, m.kind, m.check_id, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at, m.mentions,
 	                 COALESCE(NULLIF(u.nickname, ''), u.username) AS sender_name, u.avatar_url, u.is_verified`+authorMemberCols+`
 	          FROM messages m
 	          JOIN users u ON m.sender_id = u.id
@@ -211,7 +216,7 @@ func (r *MessageRepository) Search(conversationID int64, f MessageSearchFilter, 
 	for rows.Next() {
 		var m model.Message
 		var mentionsData []byte
-		if err := rows.Scan(&m.ID, &m.ConversationID, &m.SenderID, &m.Kind, &m.Content, &m.ReplyToID, &m.EditedAt, &m.DeletedAt, &m.CreatedAt, &mentionsData, &m.SenderName, &m.SenderAvatar, &m.SenderVerified, &m.SenderMemberLevel, &m.SenderMemberExpiresAt, &m.SenderNameColor, &m.SenderNameColorTo, &m.SenderNameDynamic, &m.SenderNameColors, &m.SenderNameGradientDirection, &m.SenderAvatarFrame); err != nil {
+		if err := rows.Scan(&m.ID, &m.ConversationID, &m.SenderID, &m.Kind, &m.CheckID, &m.Content, &m.ReplyToID, &m.EditedAt, &m.DeletedAt, &m.CreatedAt, &mentionsData, &m.SenderName, &m.SenderAvatar, &m.SenderVerified, &m.SenderMemberLevel, &m.SenderMemberExpiresAt, &m.SenderNameColor, &m.SenderNameColorTo, &m.SenderNameDynamic, &m.SenderNameColors, &m.SenderNameGradientDirection, &m.SenderAvatarFrame); err != nil {
 			return nil, fmt.Errorf("failed to scan message: %w", err)
 		}
 		applyMemberStatus(&m.SenderMemberLevel, &m.SenderMemberExpiresAt, &m.SenderMemberActive)
@@ -240,13 +245,13 @@ func (r *MessageRepository) getWithSender(id int64) (*model.Message, error) {
 	msg := &model.Message{}
 	var mentionsData []byte
 	err := database.DB.QueryRow(
-		`SELECT m.id, m.conversation_id, m.sender_id, m.kind, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at, m.mentions,
+		`SELECT m.id, m.conversation_id, m.sender_id, m.kind, m.check_id, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at, m.mentions,
 		        COALESCE(NULLIF(u.nickname, ''), u.username) AS sender_name, u.avatar_url, u.is_verified`+authorMemberCols+`
 		 FROM messages m
 		 JOIN users u ON m.sender_id = u.id
 		 WHERE m.id = $1`,
 		id,
-	).Scan(&msg.ID, &msg.ConversationID, &msg.SenderID, &msg.Kind, &msg.Content, &msg.ReplyToID, &msg.EditedAt, &msg.DeletedAt, &msg.CreatedAt, &mentionsData, &msg.SenderName, &msg.SenderAvatar, &msg.SenderVerified, &msg.SenderMemberLevel, &msg.SenderMemberExpiresAt, &msg.SenderNameColor, &msg.SenderNameColorTo, &msg.SenderNameDynamic, &msg.SenderNameColors, &msg.SenderNameGradientDirection, &msg.SenderAvatarFrame)
+	).Scan(&msg.ID, &msg.ConversationID, &msg.SenderID, &msg.Kind, &msg.CheckID, &msg.Content, &msg.ReplyToID, &msg.EditedAt, &msg.DeletedAt, &msg.CreatedAt, &mentionsData, &msg.SenderName, &msg.SenderAvatar, &msg.SenderVerified, &msg.SenderMemberLevel, &msg.SenderMemberExpiresAt, &msg.SenderNameColor, &msg.SenderNameColorTo, &msg.SenderNameDynamic, &msg.SenderNameColors, &msg.SenderNameGradientDirection, &msg.SenderAvatarFrame)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get message: %w", err)
 	}

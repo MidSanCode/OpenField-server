@@ -154,6 +154,8 @@ type Post struct {
 	NameGradientDirection string `json:"name_gradient_direction,omitempty"`
 	AvatarFrame string `json:"avatar_frame,omitempty"`
 	Attachments   []Attachment `json:"attachments,omitempty"`
+	// Check is the red-packet style check attached to this post, when present.
+	Check *Check `json:"check,omitempty"`
 }
 
 // PostReply represents a reply to a post.
@@ -301,8 +303,9 @@ type Message struct {
 	ID             int64      `json:"id"`
 	ConversationID int64      `json:"conversation_id"`
 	SenderID       int64      `json:"sender_id"`
-	Kind           string     `json:"kind"` // text | system.join | system.leave | system.mute | system.unmute | system.mute.all | system.unmute.all
+	Kind           string     `json:"kind"` // text | check | system.join | system.leave | system.mute | system.unmute | system.mute.all | system.unmute.all
 	Content        string     `json:"content"`
+	CheckID        int64      `json:"check_id,omitempty"`
 	ReplyToID      *int64     `json:"reply_to_id,omitempty"`
 	EditedAt       *time.Time `json:"edited_at,omitempty"`
 	DeletedAt      *time.Time `json:"deleted_at,omitempty"`

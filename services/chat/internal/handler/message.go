@@ -181,16 +181,17 @@ func (h *MessageHandler) Send(c *gin.Context) {
 	}
 
 	var req struct {
-		Content       string  `json:"content" binding:"required"`
+		Content       string  `json:"content"`
 		ReplyToID     *int64  `json:"reply_to_id"`
 		AttachmentIDs []int64 `json:"attachment_ids"`
 		Mentions      []int64 `json:"mentions"`
+		CheckID       int64   `json:"check_id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
 		return
 	}
-	if req.Content == "" && len(req.AttachmentIDs) == 0 {
+	if req.Content == "" && len(req.AttachmentIDs) == 0 && req.CheckID <= 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "message cannot be empty"})
 		return
 	}
@@ -201,6 +202,24 @@ func (h *MessageHandler) Send(c *gin.Context) {
 	if len(req.AttachmentIDs) > 9 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "too many attachments (max 9)"})
 		return
+	}
+
+	// A check message carries no text of its own; validate the check up front
+	// so a typo'd id fails loudly instead of rendering an empty bubble.
+	checkRepo := repository.NewCheckRepository()
+	if req.CheckID > 0 {
+		if err := checkRepo.ValidateOwnedActive(req.CheckID, userID); err != nil {
+			switch {
+			case errors.Is(err, repository.ErrNotFound):
+				c.JSON(http.StatusNotFound, gin.H{"error": "check not found"})
+			case errors.Is(err, repository.ErrInvalidCheck):
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid or expired check"})
+			default:
+				logger.Log.Error("failed to validate check", "error", err)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to send message"})
+			}
+			return
+		}
 	}
 
 	// @everyone is restricted to group owners and admins. Drop the sentinel
@@ -238,7 +257,7 @@ func (h *MessageHandler) Send(c *gin.Context) {
 		return
 	}
 
-	msg, err := h.msgRepo.Create(convID, userID, req.Content, req.ReplyToID, req.AttachmentIDs, req.Mentions)
+	msg, err := h.msgRepo.Create(convID, userID, req.Content, req.ReplyToID, req.AttachmentIDs, req.Mentions, req.CheckID)
 	if err != nil {
 		logger.Log.Error("failed to send message", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to send message"})

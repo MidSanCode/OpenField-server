@@ -3,9 +3,11 @@ package handler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/openfield/server/pkg/events"
@@ -108,6 +110,7 @@ func (h *PostHandler) CreatePost(c *gin.Context) {
 		Content       string  `json:"content" binding:"required"`
 		Visibility    string  `json:"visibility"`
 		AttachmentIDs []int64 `json:"attachment_ids"`
+		CheckID       int64   `json:"check_id"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -135,7 +138,7 @@ func (h *PostHandler) CreatePost(c *gin.Context) {
 		return
 	}
 
-	post, err := h.postRepo.Create(userID, req.Content, req.Visibility, req.AttachmentIDs)
+	post, err := h.postRepo.Create(userID, req.Content, req.Visibility, req.AttachmentIDs, req.CheckID)
 	if err != nil {
 		logger.Log.Error("failed to create post", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create post"})
@@ -202,22 +205,55 @@ func viewerKey(c *gin.Context) string {
 	return "ip:" + c.ClientIP()
 }
 
-// ListPosts retrieves paginated posts, optionally filtered by a search query.
+// parseTimeParam accepts RFC3339 or unix-seconds timestamps.
+func parseTimeParam(v string) (*time.Time, error) {
+	if v == "" {
+		return nil, nil
+	}
+	if ts, err := strconv.ParseInt(v, 10, 64); err == nil {
+		t := time.Unix(ts, 0).UTC()
+		return &t, nil
+	}
+	if t, err := time.Parse(time.RFC3339, v); err == nil {
+		return &t, nil
+	}
+	return nil, fmt.Errorf("invalid time (use RFC3339 or unix seconds)")
+}
+
+// ListPosts retrieves paginated posts with optional advanced filters: a
+// content keyword (`q`), author (`author_id` or `author` name substring) and
+// an inclusive created-at time range (`from` / `to`). All combine with AND.
 func (h *PostHandler) ListPosts(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
-	query := strings.TrimSpace(c.Query("q"))
 	viewer := requesterID(c)
 
-	var (
-		posts []model.Post
-		err   error
-	)
-	if query != "" {
-		posts, err = h.postRepo.Search(query, page, limit, viewer)
-	} else {
-		posts, err = h.postRepo.List(page, limit, viewer)
+	filter := repository.PostSearchFilter{
+		Query:      strings.TrimSpace(c.Query("q")),
+		AuthorName: strings.TrimSpace(c.Query("author")),
 	}
+	if v := c.Query("author_id"); v != "" {
+		id, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || id <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid author ID"})
+			return
+		}
+		filter.AuthorID = id
+	}
+	from, err := parseTimeParam(c.Query("from"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	to, err := parseTimeParam(c.Query("to"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	filter.From = from
+	filter.To = to
+
+	posts, err := h.postRepo.Search(filter, page, limit, viewer)
 	if err != nil {
 		logger.Log.Error("failed to list posts", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list posts"})
@@ -228,7 +264,7 @@ func (h *PostHandler) ListPosts(c *gin.Context) {
 		"posts": posts,
 		"page":  page,
 		"limit": limit,
-		"query": query,
+		"query": filter.Query,
 	})
 }
 

@@ -277,6 +277,43 @@ var versionedMigrations = []migration{
 			CREATE INDEX IF NOT EXISTS idx_oidc_states_expires ON oidc_states(expires_at);
 		`,
 	},
+	{
+		version: 15,
+		name:    "checks",
+		sql: `
+			-- Checks (red-packet style money splits). The total is escrowed from
+			-- the creator's wallet on creation; each claim pays out one share and
+			-- unclaimed money is refunded to the creator once the check expires.
+			CREATE TABLE IF NOT EXISTS checks (
+				id BIGSERIAL PRIMARY KEY,
+				creator_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+				total BIGINT NOT NULL,
+				shares BIGINT NOT NULL,
+				mode VARCHAR(8) NOT NULL DEFAULT 'random',
+				status VARCHAR(16) NOT NULL DEFAULT 'active',
+				post_id BIGINT REFERENCES posts(id) ON DELETE SET NULL,
+				expires_at TIMESTAMPTZ NOT NULL,
+				refunded_at TIMESTAMPTZ,
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			);
+			CREATE INDEX IF NOT EXISTS idx_checks_creator ON checks(creator_id, id DESC);
+			CREATE INDEX IF NOT EXISTS idx_checks_post ON checks(post_id);
+			CREATE INDEX IF NOT EXISTS idx_checks_active_expiry ON checks(status, expires_at);
+
+			CREATE TABLE IF NOT EXISTS check_claims (
+				id BIGSERIAL PRIMARY KEY,
+				check_id BIGINT NOT NULL REFERENCES checks(id) ON DELETE CASCADE,
+				user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+				amount BIGINT NOT NULL,
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+				UNIQUE (check_id, user_id)
+			);
+			CREATE INDEX IF NOT EXISTS idx_check_claims_check ON check_claims(check_id, id);
+
+			-- Chat messages may carry a check (kind = 'check').
+			ALTER TABLE messages ADD COLUMN IF NOT EXISTS check_id BIGINT REFERENCES checks(id) ON DELETE SET NULL;
+		`,
+	},
 }
 
 // latestMigrationVersion returns the newest schema version the code knows

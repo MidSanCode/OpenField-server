@@ -7,7 +7,7 @@ import (
 
 // RegisterRoutes registers all account service routes.
 // Public auth endpoints and protected user endpoints.
-func RegisterRoutes(r *gin.Engine, authHandler *AuthHandler, userHandler *UserHandler, walletHandler *WalletHandler, capabilitiesHandler *CapabilitiesHandler, taskHandler *TaskHandler, transferHandler *TransferHandler, pinHandler *PinHandler, membershipHandler *MembershipHandler, punishmentHandler *PunishmentHandler) {
+func RegisterRoutes(r *gin.Engine, authHandler *AuthHandler, userHandler *UserHandler, walletHandler *WalletHandler, capabilitiesHandler *CapabilitiesHandler, taskHandler *TaskHandler, transferHandler *TransferHandler, pinHandler *PinHandler, membershipHandler *MembershipHandler, punishmentHandler *PunishmentHandler, checkHandler *CheckHandler) {
 	api := r.Group("/api/v1")
 	{
 		// Public capabilities introspection — unauthenticated so the client
@@ -116,6 +116,16 @@ func RegisterRoutes(r *gin.Engine, authHandler *AuthHandler, userHandler *UserHa
 			transfers.POST("", transferHandler.CreateTransfer)
 			transfers.POST("/:id/accept", transferHandler.AcceptTransfer)
 			transfers.POST("/:id/decline", transferHandler.DeclineTransfer)
+		}
+
+		// Checks (red packets): creating escrows money and requires the payment
+		// PIN; claiming pays out one share; reads are open to authenticated users.
+		checks := api.Group("/checks")
+		checks.Use(middleware.GatewayAuthMiddleware())
+		{
+			checks.POST("", checkHandler.Create)
+			checks.GET("/:id", checkHandler.Get)
+			checks.POST("/:id/claim", checkHandler.Claim)
 		}
 	}
 }

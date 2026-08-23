@@ -40,6 +40,25 @@ func NewPostRepository() *PostRepository {
 	}
 }
 
+// scanPosts drains a post row set using the shared SELECT column layout.
+func scanPosts(rows *sql.Rows) ([]model.Post, []int64, error) {
+	posts := make([]model.Post, 0)
+	postIDs := make([]int64, 0)
+	for rows.Next() {
+		var post model.Post
+		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.NameColors, &post.NameGradientDirection, &post.AvatarFrame, &post.ReplyCount, &post.FavoriteCount, &post.TipTotal); err != nil {
+			return nil, nil, fmt.Errorf("failed to scan post: %w", err)
+		}
+		applyMemberStatus(&post.MemberLevel, &post.MemberExpiresAt, &post.MemberActive)
+		posts = append(posts, post)
+		postIDs = append(postIDs, post.ID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("rows error: %w", err)
+	}
+	return posts, postIDs, nil
+}
+
 // visibilityCondition returns the SQL predicate limiting posts to those the
 // viewer may see, referencing the viewer id as the given placeholder (e.g.
 // "$2"). The placeholder must hold the viewer id (0 for anonymous readers) and
@@ -61,8 +80,10 @@ func visibilityCondition(viewerID int64, prefix, viewerParam string) string {
 		)))`, prefix, viewerParam)
 }
 
-// Create creates a new post with optional attachments.
-func (r *PostRepository) Create(userID int64, content, visibility string, attachmentIDs []int64) (*model.Post, error) {
+// Create creates a new post with optional attachments and an optional
+// attached check ([checkID] > 0 binds an active unattached check owned by the
+// same user).
+func (r *PostRepository) Create(userID int64, content, visibility string, attachmentIDs []int64, checkID int64) (*model.Post, error) {
 	post := &model.Post{}
 	err := database.DB.QueryRow(
 		"INSERT INTO posts (user_id, content, visibility) VALUES ($1, $2, $3) RETURNING id, user_id, content, visibility, created_at, updated_at",
@@ -78,6 +99,13 @@ func (r *PostRepository) Create(userID int64, content, visibility string, attach
 		}
 	}
 
+	if checkID > 0 {
+		checkRepo := NewCheckRepository()
+		if err := checkRepo.AttachToPost(checkID, userID, post.ID); err != nil {
+			return nil, err
+		}
+	}
+
 	post.Attachments, err = r.attachmentRepo.GetByPostID(post.ID)
 	if err != nil {
 		return nil, err
@@ -87,6 +115,9 @@ func (r *PostRepository) Create(userID int64, content, visibility string, attach
 		return nil, err
 	}
 	if err := r.populateStats([]model.Post{*post}, []int64{post.ID}); err != nil {
+		return nil, err
+	}
+	if err := populateChecks([]model.Post{*post}, []int64{post.ID}, userID); err != nil {
 		return nil, err
 	}
 	return post, nil
@@ -123,6 +154,9 @@ func (r *PostRepository) GetByID(id int64) (*model.Post, error) {
 	if err := r.populateStats([]model.Post{*post}, []int64{post.ID}); err != nil {
 		return nil, err
 	}
+	if err := populateChecks([]model.Post{*post}, []int64{post.ID}, 0); err != nil {
+		return nil, err
+	}
 	return post, nil
 }
 
@@ -141,6 +175,11 @@ func (r *PostRepository) GetByIDWithViewer(id, viewerID int64) (*model.Post, err
 		post.Favorited, err = r.IsPostFavorited(post.ID, viewerID)
 		if err != nil {
 			return nil, err
+		}
+		if post.Check != nil {
+			if err := populateChecks([]model.Post{*post}, []int64{post.ID}, viewerID); err != nil {
+				return nil, err
+			}
 		}
 	}
 	return post, nil
@@ -337,15 +376,57 @@ func (r *PostRepository) List(page, limit int, viewerID int64) ([]model.Post, er
 	if err := r.populateFavorited(posts, postIDs, viewerID); err != nil {
 		return nil, err
 	}
+	if err := populateChecks(posts, postIDs, viewerID); err != nil {
+		return nil, err
+	}
 	return posts, nil
 }
 
-// Search retrieves paginated posts whose content matches query (ILIKE),
-// restricted to posts the viewer may see based on their visibility.
-func (r *PostRepository) Search(query string, page, limit int, viewerID int64) ([]model.Post, error) {
-	if query == "" {
-		return r.List(page, limit, viewerID)
+// PostSearchFilter narrows a post listing/search. Zero values are ignored;
+// all criteria combine with AND. Query is a case-insensitive content
+// substring; AuthorID filters by author; AuthorName matches username or
+// nickname substrings; From/To bound created_at inclusively.
+type PostSearchFilter struct {
+	Query      string
+	AuthorID   int64
+	AuthorName string
+	From       *time.Time
+	To         *time.Time
+}
+
+// searchQuery builds the shared post SELECT with the visibility rule and any
+// active [f] criteria. Args are appended in placeholder order starting from
+// the given next index; it returns the WHERE clause fragment.
+func buildPostFilter(f PostSearchFilter) (string, []interface{}) {
+	where := "TRUE"
+	args := make([]interface{}, 0, 5)
+	if f.Query != "" {
+		args = append(args, "%"+f.Query+"%")
+		where += fmt.Sprintf(" AND p.content ILIKE $%d", len(args))
 	}
+	if f.AuthorID > 0 {
+		args = append(args, f.AuthorID)
+		where += fmt.Sprintf(" AND p.user_id = $%d", len(args))
+	}
+	if f.AuthorName != "" {
+		args = append(args, "%"+f.AuthorName+"%")
+		n := len(args)
+		where += fmt.Sprintf(" AND (u.username ILIKE $%d OR u.nickname ILIKE $%d)", n, n)
+	}
+	if f.From != nil {
+		args = append(args, *f.From)
+		where += fmt.Sprintf(" AND p.created_at >= $%d", len(args))
+	}
+	if f.To != nil {
+		args = append(args, *f.To)
+		where += fmt.Sprintf(" AND p.created_at <= $%d", len(args))
+	}
+	return where, args
+}
+
+// Search retrieves paginated posts matching the filter, restricted to posts
+// the viewer may see based on their visibility.
+func (r *PostRepository) Search(f PostSearchFilter, page, limit int, viewerID int64) ([]model.Post, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -353,40 +434,32 @@ func (r *PostRepository) Search(query string, page, limit int, viewerID int64) (
 		limit = 20
 	}
 	offset := (page - 1) * limit
-	pattern := "%" + query + "%"
+	where, args := buildPostFilter(f)
+	// Visibility takes the first placeholder.
+	args = append([]interface{}{viewerID}, args...)
+	visibility := visibilityCondition(viewerID, "p.", "$1")
 
-	rows, err := database.DB.Query(
-		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url, u.is_verified`+authorMemberCols+`,
-		        (SELECT COUNT(*) FROM post_replies pr WHERE pr.post_id = p.id AND pr.deleted_at IS NULL) AS reply_count,
-		        (SELECT COUNT(*) FROM post_favorites pf WHERE pf.post_id = p.id) AS favorite_count,
-		        ` + tipTotalExpr + `
-		 FROM posts p
-		 JOIN users u ON p.user_id = u.id
-		 WHERE p.content ILIKE $1 AND `+visibilityCondition(viewerID, "p.", "$2")+`
-		 ORDER BY p.created_at DESC
-		 LIMIT $3 OFFSET $4`,
-		pattern, viewerID, limit, offset,
-	)
+	query := `SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url, u.is_verified` + authorMemberCols + `,
+	        (SELECT COUNT(*) FROM post_replies pr WHERE pr.post_id = p.id AND pr.deleted_at IS NULL) AS reply_count,
+	        (SELECT COUNT(*) FROM post_favorites pf WHERE pf.post_id = p.id) AS favorite_count,
+	        ` + tipTotalExpr + `
+	 FROM posts p
+	 JOIN users u ON p.user_id = u.id
+	 WHERE ` + where + ` AND ` + visibility + `
+	 ORDER BY p.created_at DESC` +
+		fmt.Sprintf(" LIMIT $%d OFFSET $%d", len(args)+1, len(args)+2)
+	args = append(args, limit, offset)
+
+	rows, err := database.DB.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to search posts: %w", err)
 	}
 	defer rows.Close()
 
-	posts := make([]model.Post, 0)
-	var postIDs []int64
-	for rows.Next() {
-		var post model.Post
-		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.NameColors, &post.NameGradientDirection, &post.AvatarFrame, &post.ReplyCount, &post.FavoriteCount, &post.TipTotal); err != nil {
-			return nil, fmt.Errorf("failed to scan post: %w", err)
-		}
-		applyMemberStatus(&post.MemberLevel, &post.MemberExpiresAt, &post.MemberActive)
-		posts = append(posts, post)
-		postIDs = append(postIDs, post.ID)
+	posts, postIDs, err := scanPosts(rows)
+	if err != nil {
+		return nil, err
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("rows error: %w", err)
-	}
-
 	if err := r.populateAttachments(posts, postIDs); err != nil {
 		return nil, err
 	}
@@ -394,6 +467,9 @@ func (r *PostRepository) Search(query string, page, limit int, viewerID int64) (
 		return nil, err
 	}
 	if err := r.populateFavorited(posts, postIDs, viewerID); err != nil {
+		return nil, err
+	}
+	if err := populateChecks(posts, postIDs, viewerID); err != nil {
 		return nil, err
 	}
 	return posts, nil
@@ -451,6 +527,9 @@ func (r *PostRepository) ListByUser(userID int64, page, limit int, viewerID int6
 	if err := r.populateFavorited(posts, postIDs, viewerID); err != nil {
 		return nil, err
 	}
+	if err := populateChecks(posts, postIDs, viewerID); err != nil {
+		return nil, err
+	}
 	return posts, nil
 }
 
@@ -503,6 +582,9 @@ func (r *PostRepository) ListFavoritePosts(userID int64, page, limit int) ([]mod
 		return nil, err
 	}
 	if err := r.populateStats(posts, postIDs); err != nil {
+		return nil, err
+	}
+	if err := populateChecks(posts, postIDs, userID); err != nil {
 		return nil, err
 	}
 	return posts, nil
