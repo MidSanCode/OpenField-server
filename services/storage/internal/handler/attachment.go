@@ -286,6 +286,12 @@ func (h *AttachmentHandler) Delete(c *gin.Context) {
 		return
 	}
 
+	// Without this guard h.store.For below yields a nil store whenever object
+	// storage is not configured, panicking on store.Delete.
+	if !h.storageAvailable(c) {
+		return
+	}
+
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid attachment ID"})

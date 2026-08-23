@@ -101,3 +101,35 @@ The Flutter client mirrors the effective quota in `User.effectiveStorageQuota`
 labelling/locking on the storage bucket settings page
 (`lib/pages/account/storage_bucket_page.dart`), reachable from account
 settings.
+
+## Public URLs are persisted at upload time
+
+`attachments.url` / `attachments.thumb_url` are generated **once, at upload
+time**, from the `public_base_url` (or derived from `endpoint`) that was
+configured when the file was uploaded. Changing the config later does **not**
+rewrite stored rows: old attachments keep serving the old host (e.g.
+`http://127.0.0.1:9000/...`) while new uploads use the new one. The object
+itself is unaffected — only the stored link is stale.
+
+After changing `endpoint` / `public_base_url`, rewrite historical rows once so
+they match the new public base. Example for moving from a local MinIO/RustFS to
+a domain:
+
+```sql
+UPDATE attachments SET
+  url       = REPLACE(url,       'http://127.0.0.1:9000/openfield', 'https://io.msc-studio.eu.cc/openfield'),
+  thumb_url = REPLACE(thumb_url, 'http://127.0.0.1:9000/openfield', 'https://io.msc-studio.eu.cc/openfield')
+WHERE url LIKE 'http://127.0.0.1:9000/%' OR thumb_url LIKE 'http://127.0.0.1:9000/%';
+```
+
+Replace both sides with the actual old and new `<scheme>://<host>[/bucket]`
+prefixes (`public_base_url` + object key is exactly what gets stored). Run this
+only while the service is stopped or quiescent to avoid racing new uploads.
+
+Note that environment variables override the YAML (`STORAGE_ENDPOINT`,
+`STORAGE_PUBLIC_BASE_URL`, ...) — a stale env var silently wins over the config
+file. When storage seems "not configured" at runtime, check the storage service
+startup log: it prints either `storage not configured; running without object
+storage` or `storage initialized endpoint=... bucket=...`. With storage not
+configured, uploads return `503` and deletes refuse with `503` instead of
+crashing.
