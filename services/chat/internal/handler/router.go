@@ -50,6 +50,7 @@ func RegisterRoutes(r *gin.Engine, convHandler *ConversationHandler, consentHand
 		msgs := api.Group("/conversations/:id/messages")
 		{
 			msgs.GET("", msgHandler.List)
+			msgs.GET("/search", msgHandler.Search)
 			msgs.POST("", msgHandler.Send)
 			msgs.PUT("/:message_id", msgHandler.Update)
 			msgs.DELETE("/:message_id", msgHandler.Delete)

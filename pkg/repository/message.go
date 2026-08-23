@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/lib/pq"
 	"github.com/openfield/server/pkg/database"
@@ -143,6 +144,94 @@ func (r *MessageRepository) ListByConversation(conversationID int64, beforeID in
 	// reverse to chronological order
 	for i, j := 0, len(msgs)-1; i < j; i, j = i+1, j-1 {
 		msgs[i], msgs[j] = msgs[j], msgs[i]
+	}
+	return msgs, nil
+}
+
+// MessageSearchFilter narrows a chat history search. Zero values are ignored,
+// so callers only set the criteria they want to enforce. Content and file name
+// filters use case-insensitive substring matching; From/To bound CreatedAt
+// inclusively; HasAttachments requires at least one attachment.
+type MessageSearchFilter struct {
+	Content        string
+	SenderID       int64
+	From           *time.Time
+	To             *time.Time
+	HasAttachments bool
+	FileName       string
+}
+
+// Search retrieves messages in a conversation matching the filter, newest
+// first (opposite of ListByConversation, which pages chronologically). Only
+// regular text messages are considered; system notices are not searchable.
+func (r *MessageRepository) Search(conversationID int64, f MessageSearchFilter, limit int) ([]model.Message, error) {
+	if limit < 1 || limit > 100 {
+		limit = 50
+	}
+	query := `SELECT m.id, m.conversation_id, m.sender_id, m.kind, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at, m.mentions,
+	                 COALESCE(NULLIF(u.nickname, ''), u.username) AS sender_name, u.avatar_url, u.is_verified`+authorMemberCols+`
+	          FROM messages m
+	          JOIN users u ON m.sender_id = u.id
+	          WHERE m.conversation_id = $1 AND m.deleted_at IS NULL AND m.kind = 'text'`
+	args := []interface{}{conversationID}
+	if f.Content != "" {
+		args = append(args, "%"+f.Content+"%")
+		query += fmt.Sprintf(" AND m.content ILIKE $%d", len(args))
+	}
+	if f.SenderID > 0 {
+		args = append(args, f.SenderID)
+		query += fmt.Sprintf(" AND m.sender_id = $%d", len(args))
+	}
+	if f.From != nil {
+		args = append(args, *f.From)
+		query += fmt.Sprintf(" AND m.created_at >= $%d", len(args))
+	}
+	if f.To != nil {
+		args = append(args, *f.To)
+		query += fmt.Sprintf(" AND m.created_at <= $%d", len(args))
+	}
+	if f.HasAttachments || f.FileName != "" {
+		cond := "EXISTS (SELECT 1 FROM message_attachments ma JOIN attachments a ON ma.attachment_id = a.id WHERE ma.message_id = m.id"
+		if f.FileName != "" {
+			args = append(args, "%"+f.FileName+"%")
+			cond += fmt.Sprintf(" AND a.original_name ILIKE $%d", len(args))
+		}
+		query += " AND " + cond + ")"
+	}
+	query += " ORDER BY m.created_at DESC, m.id DESC LIMIT " + fmt.Sprintf("%d", limit)
+
+	rows, err := database.DB.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search messages: %w", err)
+	}
+	defer rows.Close()
+
+	msgs := make([]model.Message, 0)
+	var msgIDs []int64
+	for rows.Next() {
+		var m model.Message
+		var mentionsData []byte
+		if err := rows.Scan(&m.ID, &m.ConversationID, &m.SenderID, &m.Kind, &m.Content, &m.ReplyToID, &m.EditedAt, &m.DeletedAt, &m.CreatedAt, &mentionsData, &m.SenderName, &m.SenderAvatar, &m.SenderVerified, &m.SenderMemberLevel, &m.SenderMemberExpiresAt, &m.SenderNameColor, &m.SenderNameColorTo, &m.SenderNameDynamic, &m.SenderNameColors, &m.SenderNameGradientDirection, &m.SenderAvatarFrame); err != nil {
+			return nil, fmt.Errorf("failed to scan message: %w", err)
+		}
+		applyMemberStatus(&m.SenderMemberLevel, &m.SenderMemberExpiresAt, &m.SenderMemberActive)
+		m.Mentions, err = parseMentions(mentionsData)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse message mentions: %w", err)
+		}
+		msgs = append(msgs, m)
+		msgIDs = append(msgIDs, m.ID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows error: %w", err)
+	}
+
+	if err := r.populateAttachments(msgs, msgIDs); err != nil {
+		return nil, err
+	}
+
+	if err := r.populateReplyPreviews(msgs); err != nil {
+		return nil, err
 	}
 	return msgs, nil
 }

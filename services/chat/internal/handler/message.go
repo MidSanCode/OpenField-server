@@ -3,8 +3,10 @@ package handler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -64,6 +66,100 @@ func (h *MessageHandler) List(c *gin.Context) {
 	if err != nil {
 		logger.Log.Error("failed to list messages", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list messages"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"messages": msgs})
+}
+
+// Search looks up chat history in a conversation by content keyword, sender,
+// time range and/or attachments (presence or file name). All criteria are
+// optional and combined with AND; an empty filter returns the newest messages.
+func (h *MessageHandler) Search(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	convID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid conversation ID"})
+		return
+	}
+
+	isMember, err := h.convRepo.IsMember(convID, userID)
+	if err != nil {
+		logger.Log.Error("failed to check membership", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to search messages"})
+		return
+	}
+	if !isMember {
+		// Same visibility rule as List: public groups are readable by anyone.
+		conv, convErr := h.convRepo.GetByID(convID)
+		if convErr != nil || conv == nil || conv.Type != "group" || !conv.IsPublic {
+			c.JSON(http.StatusForbidden, gin.H{"error": "you are not a member of this conversation"})
+			return
+		}
+	}
+
+	filter := repository.MessageSearchFilter{
+		Content:  c.Query("q"),
+		FileName: c.Query("file_name"),
+	}
+	filter.Content = strings.TrimSpace(filter.Content)
+	filter.FileName = strings.TrimSpace(filter.FileName)
+
+	if v := c.Query("sender_id"); v != "" {
+		senderID, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || senderID <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid sender ID"})
+			return
+		}
+		filter.SenderID = senderID
+	}
+	parseTime := func(name string) (*time.Time, error) {
+		v := c.Query(name)
+		if v == "" {
+			return nil, nil
+		}
+		if ts, err := strconv.ParseInt(v, 10, 64); err == nil {
+			t := time.Unix(ts, 0).UTC()
+			return &t, nil
+		}
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			return &t, nil
+		}
+		return nil, fmt.Errorf("invalid %s (use RFC3339 or unix seconds)", name)
+	}
+	from, err := parseTime("from")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	to, err := parseTime("to")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	filter.From = from
+	filter.To = to
+
+	switch c.DefaultQuery("has_attachment", "") {
+	case "true", "1":
+		filter.HasAttachments = true
+	case "false", "0", "":
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid has_attachment value"})
+		return
+	}
+
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+
+	msgs, err := h.msgRepo.Search(convID, filter, limit)
+	if err != nil {
+		logger.Log.Error("failed to search messages", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to search messages"})
 		return
 	}
 
