@@ -295,6 +295,10 @@ func main() {
 	r.Use(logger.GinLogger())
 	r.Use(middleware.CORS(cfg))
 
+	// Aggregate service health (public): fans out to every backend's
+	// /healthz. Registered explicitly so it never falls into the proxy.
+	r.GET("/api/v1/health", healthHandler(cfg))
+
 	r.NoRoute(func(c *gin.Context) {
 		path := c.Request.URL.Path
 		method := c.Request.Method

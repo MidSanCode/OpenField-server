@@ -7,6 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/openfield/server/pkg/config"
 	"github.com/openfield/server/pkg/database"
+	"github.com/openfield/server/pkg/health"
 	"github.com/openfield/server/pkg/logger"
 	"github.com/openfield/server/pkg/middleware"
 	"github.com/openfield/server/services/posts/internal/handler"
@@ -45,6 +46,8 @@ func main() {
 	r.Use(logger.GinLogger())
 	r.NoRoute(middleware.NotFound())
 	r.NoMethod(middleware.MethodNotAllowed())
+
+	r.GET("/healthz", health.Handler(nil))
 
 	handler.RegisterRoutes(r, postHandler)
 

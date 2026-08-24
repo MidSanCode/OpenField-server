@@ -9,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/openfield/server/pkg/config"
 	"github.com/openfield/server/pkg/database"
+	"github.com/openfield/server/pkg/health"
 	"github.com/openfield/server/pkg/logger"
 	"github.com/openfield/server/pkg/middleware"
 	"github.com/openfield/server/pkg/repository"
@@ -94,6 +95,9 @@ func main() {
 	r.Use(logger.GinLogger())
 	r.NoRoute(middleware.NotFound())
 	r.NoMethod(middleware.MethodNotAllowed())
+
+	// Liveness/readiness probe consumed by the gateway's aggregate health API.
+	r.GET("/healthz", health.Handler(nil))
 
 	handler.RegisterRoutes(r, authHandler, userHandler, walletHandler, capabilitiesHandler, taskHandler, transferHandler, pinHandler, membershipHandler, punishmentHandler, checkHandler)
 

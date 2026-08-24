@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/openfield/server/pkg/config"
+	"github.com/openfield/server/pkg/health"
 	"github.com/openfield/server/pkg/logger"
 	"github.com/openfield/server/pkg/middleware"
 	"github.com/openfield/server/services/push/internal/handler"
@@ -46,6 +47,10 @@ func main() {
 	r.Use(logger.GinLogger())
 	r.NoRoute(middleware.NotFound())
 	r.NoMethod(middleware.MethodNotAllowed())
+
+	// Liveness probe (the push service owns its DB LISTEN connection, so the
+	// shared pool check reports n/a).
+	r.GET("/healthz", health.Handler(nil))
 
 	handler.RegisterRoutes(r, wsHandler, &handler.TicketHandler{})
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"os"
 	"time"
@@ -8,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/openfield/server/pkg/config"
 	"github.com/openfield/server/pkg/database"
+	"github.com/openfield/server/pkg/health"
 	"github.com/openfield/server/pkg/logger"
 	"github.com/openfield/server/pkg/middleware"
 	"github.com/openfield/server/pkg/repository"
@@ -66,6 +68,14 @@ func main() {
 	r.Use(logger.GinLogger())
 	r.NoRoute(middleware.NotFound())
 	r.NoMethod(middleware.MethodNotAllowed())
+
+	// Liveness/readiness probe; also reports whether object storage is usable.
+	r.GET("/healthz", health.Handler(func(ctx context.Context) map[string]string {
+		if store.Enabled() {
+			return map[string]string{"storage": "up"}
+		}
+		return map[string]string{"status": "down", "storage": "disabled"}
+	}))
 
 	handler.RegisterRoutes(r, attHandler)
 
