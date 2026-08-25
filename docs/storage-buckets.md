@@ -102,6 +102,35 @@ labelling/locking on the storage bucket settings page
 (`lib/pages/account/storage_bucket_page.dart`), reachable from account
 settings.
 
+## Internal proxy mode (private buckets)
+
+By default attachment URLs point straight at the bucket host, so buckets must
+allow anonymous reads. `internal_proxy` mode instead serves files **through
+the API**: clients request them from the gateway, and the storage service
+streams the bytes from the bucket server-side. Buckets can then stay fully
+private.
+
+```yaml
+storage:
+  endpoint: "127.0.0.1:9000"        # S3 API, server-side only
+  ...
+  public_base_url: "https://api.example.com/api/v1/files"
+  internal_proxy:
+    enabled: true
+```
+
+- Generated URLs become `<public_base_url>/<physical-bucket>/<object-key>`
+  served by `GET /api/v1/files/<bucket>/<key>` (public read — parity with what
+  direct bucket URLs offered). The route also serves thumbnails
+  (`<key>.thumb.jpg`) because they live next to their parent object.
+- Single-range requests are honoured (`206 Partial Content`) so media players
+  can seek; responses carry long-lived immutable cache headers.
+- Upload-chunk working objects (`chunks/...`) are never exposed.
+- `public_base_url` must be the **gateway's** client-facing address ending in
+  `/api/v1/files` — never the raw bucket host.
+- Legacy rows uploaded before enabling the mode keep their old URLs; rewrite
+  them once as described below if needed.
+
 ## Public URLs are persisted at upload time
 
 `attachments.url` / `attachments.thumb_url` are generated **once, at upload

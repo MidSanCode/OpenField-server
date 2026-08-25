@@ -28,6 +28,10 @@ type Store struct {
 	// name is the logical bucket id from the storage config. The empty string
 	// means "unconfigured / default".
 	name string
+	// proxied marks internal-proxy mode: generated URLs point at the gateway
+	// (<public_base_url>/<bucket>/<key>) and objects are streamed back by the
+	// storage service, so buckets never need public read access.
+	proxied bool
 }
 
 // IsConfigured reports whether object storage has been configured. When no
@@ -105,6 +109,15 @@ func New(cfg config.StorageConfig) (*Manager, error) {
 		return m, nil
 	}
 
+	// Internal-proxy mode: URLs go through the gateway's file route. The
+	// public base must be configured explicitly, since only the operator knows
+	// the client-facing gateway address; fall back to direct URLs otherwise.
+	proxied := cfg.InternalProxy.Enabled
+	if proxied && cfg.PublicBaseURL == "" {
+		logger.Log.Warn("internal_proxy enabled but storage.public_base_url is empty; falling back to direct bucket URLs")
+		proxied = false
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
@@ -115,6 +128,10 @@ func New(cfg config.StorageConfig) (*Manager, error) {
 			publicBaseURL: resolvePublicBaseURL(cfg, b),
 			enabled:       true,
 			name:          b.Name,
+			proxied:       proxied,
+		}
+		if proxied {
+			store.publicBaseURL = strings.TrimRight(cfg.PublicBaseURL, "/")
 		}
 
 		exists, err := client.BucketExists(ctx, store.bucket)
@@ -159,16 +176,49 @@ func resolvePublicBaseURL(cfg config.StorageConfig, b config.StorageBucketConfig
 	return fmt.Sprintf("%s://%s/%s", scheme, normalizeEndpoint(cfg.Endpoint), b.Bucket)
 }
 
-// publicURL builds the full URL for an object key against the resolved base.
-// The base may already contain a bucket path (e.g. http://host/openfield), so
-// append the key as additional path segments, keeping "/" as separators.
+// publicURL builds the full URL for an object key. In internal-proxy mode the
+// URL points at the gateway's file route with the physical bucket and key in
+// the path (<public_base_url>/<bucket>/<key>); otherwise it targets the
+// bucket host directly (the base may already contain a bucket path, e.g.
+// http://host/openfield).
 func (s *Store) publicURL(objectKey string) string {
+	if s.proxied {
+		return fmt.Sprintf("%s/%s/%s", s.publicBaseURL, s.bucket, objectKey)
+	}
 	base, err := url.Parse(s.publicBaseURL)
 	if err != nil {
 		return s.publicBaseURL + "/" + objectKey
 	}
 	base.Path = strings.TrimRight(base.Path, "/") + "/" + objectKey
 	return base.String()
+}
+
+// Open streams an object for server-side delivery (internal proxy mode). The
+// caller owns the returned object and must Close it; metadata such as size
+// and content type is read lazily via [minio.Object.Stat].
+func (s *Store) Open(ctx context.Context, objectKey string) (*minio.Object, error) {
+	obj, err := s.client.GetObject(ctx, s.bucket, objectKey, minio.GetObjectOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to open object: %w", err)
+	}
+	return obj, nil
+}
+
+// OpenOpts is [Open] with explicit options (used for Range requests).
+func (s *Store) OpenOpts(ctx context.Context, objectKey string, opts minio.GetObjectOptions) (*minio.Object, error) {
+	obj, err := s.client.GetObject(ctx, s.bucket, objectKey, opts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open object: %w", err)
+	}
+	return obj, nil
+}
+
+// Bucket returns the physical S3 bucket name this store writes to.
+func (s *Store) Bucket() string {
+	if s == nil {
+		return ""
+	}
+	return s.bucket
 }
 
 // Upload stores a file and returns its object key and public URL.

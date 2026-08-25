@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"mime"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/minio/minio-go/v7"
 	"github.com/openfield/server/pkg/config"
 	"github.com/openfield/server/pkg/imaging"
 	"github.com/openfield/server/pkg/logger"
@@ -346,4 +348,140 @@ func (h *AttachmentHandler) ListByUser(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"attachments": atts})
+}
+
+// parseByteRange parses a single-range Range header ("bytes=a-b", "bytes=a-",
+// "bytes=-suffix") against the object size. Returns (start, end, true) for an
+// applicable range or (0, 0, false) when absent/unparseable/unsatisfiable.
+func parseByteRange(header string, size int64) (int64, int64, bool) {
+	const prefix = "bytes="
+	if size <= 0 || !strings.HasPrefix(header, prefix) {
+		return 0, 0, false
+	}
+	spec := strings.TrimSpace(strings.TrimPrefix(header, prefix))
+	if strings.ContainsAny(spec, ",/") { // multi-range & unsatisfied forms: serve full
+		return 0, 0, false
+	}
+	dash := strings.Index(spec, "-")
+	if dash < 0 {
+		return 0, 0, false
+	}
+	startStr, endStr := spec[:dash], spec[dash+1:]
+	var start, end int64
+	switch {
+	case startStr == "" && endStr == "":
+		return 0, 0, false
+	case startStr == "": // bytes=-N : final N bytes
+		n, err := strconv.ParseInt(endStr, 10, 64)
+		if err != nil || n <= 0 {
+			return 0, 0, false
+		}
+		if n > size {
+			n = size
+		}
+		start, end = size-n, size-1
+	default:
+		s, err := strconv.ParseInt(startStr, 10, 64)
+		if err != nil || s < 0 || s >= size {
+			return 0, 0, false
+		}
+		start = s
+		if endStr == "" {
+			end = size - 1
+		} else {
+			e, err := strconv.ParseInt(endStr, 10, 64)
+			if err != nil {
+				return 0, 0, false
+			}
+			end = e
+			if end >= size {
+				end = size - 1
+			}
+		}
+	}
+	if end < start {
+		return 0, 0, false
+	}
+	return start, end, true
+}
+
+// ServeFile streams an object from the bucket through the API (internal proxy
+// mode). Path form: GET /api/v1/files/<physical-bucket>/<object-key>. Public:
+// read access matches what direct bucket URLs offered before; chunk uploads
+// are never exposed. Supports single Range requests so media players can seek.
+func (h *AttachmentHandler) ServeFile(c *gin.Context) {
+	if !h.storageAvailable(c) {
+		return
+	}
+
+	parts := strings.SplitN(strings.Trim(c.Param("path"), "/"), "/", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	bucketName, key := parts[0], parts[1]
+	if strings.Contains(bucketName, "..") || strings.Contains(key, "..") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid path"})
+		return
+	}
+	// In-progress upload chunks are internal state, not user-facing files.
+	if strings.HasPrefix(key, "chunks/") {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	store := h.store.ForPhysical(bucketName)
+	if store == nil || !store.Enabled() {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+
+	ctx := c.Request.Context()
+	obj, err := store.Open(ctx, key)
+	if err != nil {
+		logger.Log.Error("failed to open proxied object", "error", err, "bucket", bucketName)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read file"})
+		return
+	}
+	defer obj.Close()
+	stat, err := obj.Stat()
+	if err != nil {
+		// minio resolves lazily: missing objects surface here.
+		logger.Log.Warn("proxied object stat failed", "error", err, "bucket", bucketName, "key", key)
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+
+	// Object keys embed a fresh UUID, so successful responses are immutable.
+	c.Header("Cache-Control", "public, max-age=31536000, immutable")
+	c.Header("Accept-Ranges", "bytes")
+	c.Header("X-Content-Type-Options", "nosniff")
+	contentType := stat.ContentType
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	c.Header("Content-Type", contentType)
+
+	// Single-range requests (media seeking): re-open with the parsed range.
+	// Any failure falls back to serving the full object.
+	if start, end, ok := parseByteRange(c.GetHeader("Range"), stat.Size); ok {
+		opts := minio.GetObjectOptions{}
+		if serr := opts.SetRange(start, end); serr == nil {
+			rangedObj, rerr := store.OpenOpts(ctx, key, opts)
+			if rerr == nil {
+				defer rangedObj.Close()
+				c.Header("Content-Range",
+					fmt.Sprintf("bytes %d-%d/%d", start, end, stat.Size))
+				c.Header("Content-Length", strconv.FormatInt(end-start+1, 10))
+				c.Status(http.StatusPartialContent)
+				_, _ = io.Copy(c.Writer, rangedObj)
+				return
+			}
+			logger.Log.Warn("range request failed; serving full object",
+				"bucket", bucketName, "key", key, "error", rerr)
+		}
+	}
+
+	c.Header("Content-Length", strconv.FormatInt(stat.Size, 10))
+	c.Status(http.StatusOK)
+	_, _ = io.Copy(c.Writer, obj)
 }

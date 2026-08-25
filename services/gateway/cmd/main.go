@@ -302,6 +302,17 @@ func main() {
 	r.NoRoute(func(c *gin.Context) {
 		path := c.Request.URL.Path
 		method := c.Request.Method
+
+		// Internal file proxy (public read, matching direct bucket URL
+		// semantics): object keys contain multiple path segments which the
+		// per-segment route matcher cannot express, so this prefix is
+		// special-cased before normal routing.
+		if method == http.MethodGet && strings.HasPrefix(path, "/api/v1/files/") {
+			c.Request.Header.Del(middleware.UserIDHeader)
+			proxies[cfg.Services.Storage].proxy.ServeHTTP(c.Writer, c.Request)
+			return
+		}
+
 		rt := matchRoute(routes, method, path)
 		if rt == nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})

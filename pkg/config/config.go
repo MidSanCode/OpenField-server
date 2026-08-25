@@ -94,6 +94,18 @@ type StorageBucketConfig struct {
 	PublicBaseURL string `yaml:"public_base_url"`
 }
 
+// InternalProxyConfig controls serving objects through the API itself
+// instead of handing out direct bucket URLs. When enabled, buckets can stay
+// private: clients fetch files from the gateway, which streams them from the
+// object store server-side.
+type InternalProxyConfig struct {
+	// Enabled switches attachment URL generation to the gateway path form
+	// (<public_base_url>/<physical-bucket>/<object-key>). Requires
+	// storage.public_base_url to point at the gateway's file route base
+	// (e.g. https://api.example.com/api/v1/files).
+	Enabled bool `yaml:"enabled"`
+}
+
 // StorageConfig holds S3-compatible object storage configuration.
 type StorageConfig struct {
 	Endpoint       string               `yaml:"endpoint"`
@@ -109,6 +121,9 @@ type StorageConfig struct {
 	// bucket is synthesized from the legacy Bucket/PublicBaseURL fields so
 	// single-bucket configs keep working unchanged.
 	Buckets []StorageBucketConfig `yaml:"buckets"`
+	// InternalProxy serves files through the gateway instead of exposing the
+	// bucket host publicly; see InternalProxyConfig.
+	InternalProxy InternalProxyConfig `yaml:"internal_proxy"`
 }
 
 // BucketList returns the configured storage buckets, synthesizing a single

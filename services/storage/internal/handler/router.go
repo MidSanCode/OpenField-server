@@ -6,8 +6,14 @@ import (
 )
 
 // RegisterRoutes registers all storage service routes.
-// Every route requires a validated gateway identity (X-User-ID).
+// Every route requires a validated gateway identity (X-User-ID), except the
+// internal file proxy which serves objects publicly (parity with direct
+// bucket URLs).
 func RegisterRoutes(r *gin.Engine, attHandler *AttachmentHandler) {
+	// Internal proxy mode: GET /api/v1/files/<physical-bucket>/<object-key>.
+	// The gateway forwards this prefix without authentication.
+	r.GET("/api/v1/files/*path", attHandler.ServeFile)
+
 	api := r.Group("/api/v1")
 	api.Use(middleware.GatewayAuthMiddleware())
 	{

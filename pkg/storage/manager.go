@@ -47,6 +47,21 @@ func (m *Manager) For(name string) *Store {
 	return m.Default()
 }
 
+// ForPhysical returns the store writing to the given physical S3 bucket name,
+// used by the internal file proxy to resolve URLs like /files/<bucket>/<key>.
+// It returns nil when no configured store uses that physical bucket.
+func (m *Manager) ForPhysical(physicalBucket string) *Store {
+	if m == nil {
+		return nil
+	}
+	for _, s := range m.stores {
+		if s != nil && s.bucket == physicalBucket {
+			return s
+		}
+	}
+	return nil
+}
+
 // Buckets returns the configured logical buckets in config order.
 func (m *Manager) Buckets() []config.StorageBucketConfig {
 	if m == nil {
