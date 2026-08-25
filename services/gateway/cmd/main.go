@@ -266,6 +266,15 @@ func main() {
 		{http.MethodPut, "/api/v1/conversations/:id/messages/:message_id", cfg.Services.Chat, authPermission, "chat.edit"},
 		{http.MethodDelete, "/api/v1/conversations/:id/messages/:message_id", cfg.Services.Chat, authPermission, "chat.delete"},
 
+		// ---- plugins (store) ----
+		{http.MethodGet, "/api/v1/plugins", cfg.Services.Plugin, authPublic, ""},
+		{http.MethodGet, "/api/v1/plugins/:id", cfg.Services.Plugin, authPublic, ""},
+		{http.MethodGet, "/api/v1/plugins/:id/download", cfg.Services.Plugin, authRequired, ""},
+		{http.MethodPost, "/api/v1/plugins/admin/upload", cfg.Services.Plugin, authPermission, "plugin.manage"},
+		{http.MethodPut, "/api/v1/plugins/admin/:id/publish", cfg.Services.Plugin, authPermission, "plugin.manage"},
+		{http.MethodPut, "/api/v1/plugins/admin/:id/unpublish", cfg.Services.Plugin, authPermission, "plugin.manage"},
+		{http.MethodDelete, "/api/v1/plugins/admin/:id", cfg.Services.Plugin, authPermission, "plugin.manage"},
+
 		// ---- push (realtime) ----
 		// GET upgrades the connection using a single-use ticket minted via
 		// POST below (required for browsers, which cannot set headers during

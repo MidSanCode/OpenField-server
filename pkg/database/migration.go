@@ -314,6 +314,36 @@ var versionedMigrations = []migration{
 			ALTER TABLE messages ADD COLUMN IF NOT EXISTS check_id BIGINT REFERENCES checks(id) ON DELETE SET NULL;
 		`,
 	},
+	{
+		version: 16,
+		name:    "plugins",
+		sql: `
+			-- Plugin store registry. Admins upload plugin bundles (zip with a
+			-- manifest.json + entry script) through the admin panel; published
+			-- rows are what clients see in the in-app store. The bundle file
+			-- itself lives on local disk (file_path), keyed by sha256 so an
+			-- edited file cannot silently replace a reviewed one.
+			CREATE TABLE IF NOT EXISTS plugins (
+				id VARCHAR(128) PRIMARY KEY,
+				name VARCHAR(255) NOT NULL,
+				version VARCHAR(32) NOT NULL,
+				author VARCHAR(255) NOT NULL DEFAULT '',
+				description TEXT NOT NULL DEFAULT '',
+				permissions TEXT NOT NULL DEFAULT '[]',
+				min_app_version VARCHAR(32) NOT NULL DEFAULT '',
+				entry VARCHAR(255) NOT NULL DEFAULT 'main.js',
+				file_path TEXT NOT NULL DEFAULT '',
+				file_size BIGINT NOT NULL DEFAULT 0,
+				sha256 CHAR(64) NOT NULL DEFAULT '',
+				verified BOOLEAN NOT NULL DEFAULT FALSE,
+				published BOOLEAN NOT NULL DEFAULT FALSE,
+				downloads BIGINT NOT NULL DEFAULT 0,
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+				updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			);
+			CREATE INDEX IF NOT EXISTS idx_plugins_published ON plugins(published, updated_at DESC);
+		`,
+	},
 }
 
 // latestMigrationVersion returns the newest schema version the code knows

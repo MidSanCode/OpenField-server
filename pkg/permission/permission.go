@@ -46,6 +46,9 @@ const (
 	// Wallet
 	WalletView   = "wallet.view"
 	WalletManage = "wallet.manage"
+
+	// Plugins
+	PluginManage = "plugin.manage"
 )
 
 // All returns every known permission key.
@@ -57,6 +60,7 @@ func All() []string {
 		ChatGroupCreate, ChatGroupInvite, ChatGroupManage, ChatNoteEdit, ChatGroupNickname,
 		PostsView, PostsCreate, PostsEdit, PostsDelete, PostsReplyCreate, PostsReplyEdit, PostsReplyDelete, PostsReact, PostsFavorite,
 		WalletView, WalletManage,
+		PluginManage,
 	}
 }
 

@@ -39,6 +39,7 @@ func healthHandler(cfg *config.Config) gin.HandlerFunc {
 		{"posts", cfg.Services.Posts},
 		{"push", cfg.Services.Push},
 		{"storage", cfg.Services.Storage},
+		{"plugin", cfg.Services.Plugin},
 	}
 
 	client := &http.Client{Timeout: probeTimeout}

@@ -4,4 +4,5 @@ cd /d services\storage && go build -o ..\..\bin\openfield-storage.exe .\cmd && c
 cd /d services\chat && go build -o ..\..\bin\openfield-chat.exe .\cmd && cd /d ..\..
 cd /d services\posts && go build -o ..\..\bin\openfield-posts.exe .\cmd && cd /d ..\..
 cd /d services\push && go build -o ..\..\bin\openfield-push.exe .\cmd && cd /d ..\..
+cd /d services\plugin && go build -o ..\..\bin\openfield-plugin.exe .\cmd && cd /d ..\..
 pause

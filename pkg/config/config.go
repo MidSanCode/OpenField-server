@@ -177,6 +177,7 @@ type ServicesConfig struct {
 	Chat    string `yaml:"chat"`
 	Posts   string `yaml:"posts"`
 	Push    string `yaml:"push"`
+	Plugin  string `yaml:"plugin"`
 }
 
 // GameConfig holds gameplay / level-system configuration.
@@ -345,6 +346,9 @@ func (c *Config) overrideFromEnv() {
 	if v := os.Getenv("SERVICE_PUSH"); v != "" {
 		c.Services.Push = v
 	}
+	if v := os.Getenv("SERVICE_PLUGIN"); v != "" {
+		c.Services.Plugin = v
+	}
 	if v := os.Getenv("GAME_DAILY_BONUS_EXP"); v != "" {
 		fmt.Sscanf(v, "%d", &c.Game.DailyBonusExp)
 	}
@@ -379,6 +383,8 @@ func (c *Config) ServicePort(name string) string {
 		base = c.Services.Posts
 	case "PUSH":
 		base = c.Services.Push
+	case "PLUGIN":
+		base = c.Services.Plugin
 	}
 	if base != "" {
 		if u, err := url.Parse(base); err == nil {

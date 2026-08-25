@@ -5,5 +5,5 @@ start bin/openfield-gateway.exe
 start bin/openfield-posts.exe
 start bin/openfield-push.exe
 start bin/openfield-storage.exe
-start bin/openfield-push.exe
+start bin/openfield-plugin.exe
 pause
