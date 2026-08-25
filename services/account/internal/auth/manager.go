@@ -45,6 +45,10 @@ func (m *Manager) Authenticate(ctx context.Context, code string) (*model.User, e
 
 	logger.Log.Info("oidc user info received", "email", userInfo.Email)
 
+	if userInfo.OAuth2ID == "" {
+		return nil, fmt.Errorf("oauth provider returned no subject (sub) claim")
+	}
+
 	// Try to find existing user by oidc id
 	user, err := findUserByOAuth2(m.provider.Name(), userInfo.OAuth2ID)
 	if err != nil {
@@ -79,6 +83,10 @@ func (m *Manager) Bind(ctx context.Context, code string, userID int64) (*model.U
 	}
 
 	logger.Log.Info("oidc bind user info received", "email", userInfo.Email)
+
+	if userInfo.OAuth2ID == "" {
+		return nil, fmt.Errorf("oauth provider returned no subject (sub) claim")
+	}
 
 	existing, err := findUserByOAuth2(m.provider.Name(), userInfo.OAuth2ID)
 	if err != nil {
