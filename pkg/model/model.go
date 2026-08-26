@@ -111,6 +111,14 @@ type User struct {
 	// BannedUntil is when a temporary ban lifts automatically. NULL means a
 	// permanent ban (or no ban when Status is active).
 	BannedUntil *time.Time `json:"banned_until,omitempty"`
+	// IsBot marks an automated account created by a human owner through the
+	// bots API. Bot accounts behave like normal users everywhere (they can
+	// send messages, post, etc.) but render with a robot badge next to their
+	// name and cannot log in interactively — they authenticate with a static
+	// API token issued to their owner.
+	IsBot bool `json:"is_bot"`
+	// BotOwnerID is the human user who created this bot (0 for humans).
+	BotOwnerID int64 `json:"bot_owner_id,omitempty"`
 }
 
 // Post represents a text post with optional attachments.
@@ -139,6 +147,9 @@ type Post struct {
 	Nickname      string       `json:"nickname,omitempty"`
 	AvatarURL     string       `json:"avatar_url,omitempty"`
 	IsVerified    bool         `json:"is_verified,omitempty"`
+	// IsBot mirrors the author's bot flag so clients render the robot badge
+	// next to the name without an extra lookup.
+	IsBot        bool         `json:"is_bot,omitempty"`
 	// MemberLevel/MemberActive are the author's current membership tier (0 =
 	// none) and whether it is still active. Driver-end denormalization so
 	// clients can render the member tier badge next to the author name.
@@ -172,6 +183,7 @@ type PostReply struct {
 	Nickname   string     `json:"nickname,omitempty"`
 	AvatarURL  string     `json:"avatar_url,omitempty"`
 	IsVerified bool       `json:"is_verified,omitempty"`
+	IsBot      bool       `json:"is_bot,omitempty"`
 	MemberLevel int64     `json:"member_level,omitempty"`
 	MemberActive bool     `json:"member_active,omitempty"`
 	MemberExpiresAt *time.Time `json:"member_expires_at,omitempty"`
@@ -258,6 +270,7 @@ type ConversationMember struct {
 	Nickname   string     `json:"nickname,omitempty"`
 	AvatarURL  string     `json:"avatar_url,omitempty"`
 	IsVerified bool       `json:"is_verified,omitempty"`
+	IsBot      bool       `json:"is_bot,omitempty"`
 	// MemberLevel/MemberActive/name styling mirror the member's user record so
 	// chat listings render the tier badge and colored name without extra joins.
 	MemberLevel     int64      `json:"member_level,omitempty"`
@@ -313,6 +326,7 @@ type Message struct {
 	SenderName     string     `json:"sender_name,omitempty"`
 	SenderAvatar   string     `json:"sender_avatar,omitempty"`
 	SenderVerified bool       `json:"sender_verified,omitempty"`
+	SenderIsBot    bool       `json:"sender_is_bot,omitempty"`
 	SenderMemberLevel int64   `json:"sender_member_level,omitempty"`
 	SenderMemberActive bool   `json:"sender_member_active,omitempty"`
 	SenderMemberExpiresAt *time.Time `json:"sender_member_expires_at,omitempty"`

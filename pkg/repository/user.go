@@ -18,11 +18,11 @@ func NewUserRepository() *UserRepository {
 	return &UserRepository{}
 }
 
-const userColumns = "id, username, nickname, email, avatar_url, banner_url, role, password_hash, needs_registration, bio, is_verified, storage_quota, storage_bucket, oauth2_provider, oauth2_id, oauth2_username, verified_note, verified_by, e2ee_public_key, exp, last_daily_bonus_at, checkin_streak, pin_hash, region, lang, member_level, member_expires_at, auto_renew, name_color, name_color_to, name_dynamic, name_colors, name_gradient_direction, avatar_frame, status, banned_until, hide_follow_lists, created_at, updated_at"
+const userColumns = "id, username, nickname, email, avatar_url, banner_url, role, password_hash, needs_registration, bio, is_verified, storage_quota, storage_bucket, oauth2_provider, oauth2_id, oauth2_username, verified_note, verified_by, e2ee_public_key, exp, last_daily_bonus_at, checkin_streak, pin_hash, region, lang, member_level, member_expires_at, auto_renew, name_color, name_color_to, name_dynamic, name_colors, name_gradient_direction, avatar_frame, status, banned_until, hide_follow_lists, is_bot, bot_owner_id, created_at, updated_at"
 
 func scanUser(row interface{ Scan(...any) error }) (*model.User, error) {
 	user := &model.User{}
-	err := row.Scan(&user.ID, &user.Username, &user.Nickname, &user.Email, &user.AvatarURL, &user.BannerURL, &user.Role, &user.PasswordHash, &user.NeedsRegistration, &user.Bio, &user.IsVerified, &user.StorageQuota, &user.StorageBucket, &user.OAuth2Provider, &user.OAuth2ID, &user.OAuth2Username, &user.VerifiedNote, &user.VerifiedBy, &user.E2EEPublicKey, &user.Exp, &user.LastDailyBonusAt, &user.CheckinStreak, &user.PinHash, &user.Region, &user.Lang, &user.MemberLevel, &user.MemberExpiresAt, &user.AutoRenew, &user.NameColor, &user.NameColorTo, &user.NameDynamic, &user.NameColors, &user.NameGradientDirection, &user.AvatarFrame, &user.Status, &user.BannedUntil, &user.HideFollowLists, &user.CreatedAt, &user.UpdatedAt)
+	err := row.Scan(&user.ID, &user.Username, &user.Nickname, &user.Email, &user.AvatarURL, &user.BannerURL, &user.Role, &user.PasswordHash, &user.NeedsRegistration, &user.Bio, &user.IsVerified, &user.StorageQuota, &user.StorageBucket, &user.OAuth2Provider, &user.OAuth2ID, &user.OAuth2Username, &user.VerifiedNote, &user.VerifiedBy, &user.E2EEPublicKey, &user.Exp, &user.LastDailyBonusAt, &user.CheckinStreak, &user.PinHash, &user.Region, &user.Lang, &user.MemberLevel, &user.MemberExpiresAt, &user.AutoRenew, &user.NameColor, &user.NameColorTo, &user.NameDynamic, &user.NameColors, &user.NameGradientDirection, &user.AvatarFrame, &user.Status, &user.BannedUntil, &user.HideFollowLists, &user.IsBot, &user.BotOwnerID, &user.CreatedAt, &user.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}

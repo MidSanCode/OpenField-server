@@ -77,6 +77,7 @@ func main() {
 	membershipHandler := handler.NewMembershipHandler()
 	punishmentHandler := handler.NewPunishmentHandler()
 	checkHandler := handler.NewCheckHandler()
+	botHandler := handler.NewBotHandler()
 
 	// Background sweeper: refund pending transfers that are 24h unanswered.
 	go startTransferSweeper()
@@ -99,7 +100,7 @@ func main() {
 	// Liveness/readiness probe consumed by the gateway's aggregate health API.
 	r.GET("/healthz", health.Handler(nil))
 
-	handler.RegisterRoutes(r, authHandler, userHandler, walletHandler, capabilitiesHandler, taskHandler, transferHandler, pinHandler, membershipHandler, punishmentHandler, checkHandler)
+	handler.RegisterRoutes(r, authHandler, userHandler, walletHandler, capabilitiesHandler, taskHandler, transferHandler, pinHandler, membershipHandler, punishmentHandler, checkHandler, botHandler)
 
 	addr := "127.0.0.1:" + cfg.ServicePort("ACCOUNT")
 	logger.Log.Info("account service starting", "address", addr)

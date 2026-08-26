@@ -7,7 +7,7 @@ import (
 
 // RegisterRoutes registers all account service routes.
 // Public auth endpoints and protected user endpoints.
-func RegisterRoutes(r *gin.Engine, authHandler *AuthHandler, userHandler *UserHandler, walletHandler *WalletHandler, capabilitiesHandler *CapabilitiesHandler, taskHandler *TaskHandler, transferHandler *TransferHandler, pinHandler *PinHandler, membershipHandler *MembershipHandler, punishmentHandler *PunishmentHandler, checkHandler *CheckHandler) {
+func RegisterRoutes(r *gin.Engine, authHandler *AuthHandler, userHandler *UserHandler, walletHandler *WalletHandler, capabilitiesHandler *CapabilitiesHandler, taskHandler *TaskHandler, transferHandler *TransferHandler, pinHandler *PinHandler, membershipHandler *MembershipHandler, punishmentHandler *PunishmentHandler, checkHandler *CheckHandler, botHandler *BotHandler) {
 	api := r.Group("/api/v1")
 	{
 		// Public capabilities introspection — unauthenticated so the client
@@ -127,6 +127,18 @@ func RegisterRoutes(r *gin.Engine, authHandler *AuthHandler, userHandler *UserHa
 			checks.POST("", checkHandler.Create)
 			checks.GET("/:id", checkHandler.Get)
 			checks.POST("/:id/claim", checkHandler.Claim)
+		}
+
+		// Bots: automated accounts owned by the requesting human user. The
+		// static ofb_ token returned at creation is what the bot itself uses
+		// against every other API.
+		bots := api.Group("/bots")
+		bots.Use(middleware.GatewayAuthMiddleware())
+		{
+			bots.POST("", botHandler.Create)
+			bots.GET("", botHandler.List)
+			bots.POST("/:id/regenerate", botHandler.Regenerate)
+			bots.DELETE("/:id", botHandler.Delete)
 		}
 	}
 }

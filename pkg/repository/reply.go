@@ -82,7 +82,7 @@ func (r *PostReplyRepository) ListByPost(postID int64, page, limit int, viewerID
 	ptrReplies := make([]*model.PostReply, 0)
 	for rows.Next() {
 		var reply model.PostReply
-		if err := rows.Scan(&reply.ID, &reply.PostID, &reply.UserID, &reply.Content, &reply.ParentID, &reply.CreatedAt, &reply.UpdatedAt, &reply.DeletedAt, &reply.Username, &reply.Nickname, &reply.AvatarURL, &reply.IsVerified, &reply.MemberLevel, &reply.MemberExpiresAt, &reply.NameColor, &reply.NameColorTo, &reply.NameDynamic, &reply.NameColors, &reply.NameGradientDirection, &reply.AvatarFrame); err != nil {
+		if err := rows.Scan(&reply.ID, &reply.PostID, &reply.UserID, &reply.Content, &reply.ParentID, &reply.CreatedAt, &reply.UpdatedAt, &reply.DeletedAt, &reply.Username, &reply.Nickname, &reply.AvatarURL, &reply.IsVerified, &reply.IsBot, &reply.MemberLevel, &reply.MemberExpiresAt, &reply.NameColor, &reply.NameColorTo, &reply.NameDynamic, &reply.NameColors, &reply.NameGradientDirection, &reply.AvatarFrame); err != nil {
 			return nil, fmt.Errorf("failed to scan reply: %w", err)
 		}
 		applyMemberStatus(&reply.MemberLevel, &reply.MemberExpiresAt, &reply.MemberActive)
@@ -165,7 +165,7 @@ func (r *PostReplyRepository) getWithDetails(id, viewerID int64) (*model.PostRep
 		 JOIN users u ON pr.user_id = u.id
 		 WHERE pr.id = $1`,
 		id,
-	).Scan(&reply.ID, &reply.PostID, &reply.UserID, &reply.Content, &reply.ParentID, &reply.CreatedAt, &reply.UpdatedAt, &reply.DeletedAt, &reply.Username, &reply.Nickname, &reply.AvatarURL, &reply.IsVerified, &reply.MemberLevel, &reply.MemberExpiresAt, &reply.NameColor, &reply.NameColorTo, &reply.NameDynamic, &reply.NameColors, &reply.NameGradientDirection, &reply.AvatarFrame)
+	).Scan(&reply.ID, &reply.PostID, &reply.UserID, &reply.Content, &reply.ParentID, &reply.CreatedAt, &reply.UpdatedAt, &reply.DeletedAt, &reply.Username, &reply.Nickname, &reply.AvatarURL, &reply.IsVerified, &reply.IsBot, &reply.MemberLevel, &reply.MemberExpiresAt, &reply.NameColor, &reply.NameColorTo, &reply.NameDynamic, &reply.NameColors, &reply.NameGradientDirection, &reply.AvatarFrame)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -248,7 +248,7 @@ func (r *PostReplyRepository) ListFavoriteReplies(userID int64, page, limit int)
 	ptrReplies := make([]*model.PostReply, 0)
 	for rows.Next() {
 		var reply model.PostReply
-		if err := rows.Scan(&reply.ID, &reply.PostID, &reply.UserID, &reply.Content, &reply.ParentID, &reply.CreatedAt, &reply.UpdatedAt, &reply.DeletedAt, &reply.Username, &reply.Nickname, &reply.AvatarURL, &reply.IsVerified, &reply.MemberLevel, &reply.MemberExpiresAt, &reply.NameColor, &reply.NameColorTo, &reply.NameDynamic, &reply.NameColors, &reply.NameGradientDirection, &reply.AvatarFrame); err != nil {
+		if err := rows.Scan(&reply.ID, &reply.PostID, &reply.UserID, &reply.Content, &reply.ParentID, &reply.CreatedAt, &reply.UpdatedAt, &reply.DeletedAt, &reply.Username, &reply.Nickname, &reply.AvatarURL, &reply.IsVerified, &reply.IsBot, &reply.MemberLevel, &reply.MemberExpiresAt, &reply.NameColor, &reply.NameColorTo, &reply.NameDynamic, &reply.NameColors, &reply.NameGradientDirection, &reply.AvatarFrame); err != nil {
 			return nil, fmt.Errorf("failed to scan reply: %w", err)
 		}
 		applyMemberStatus(&reply.MemberLevel, &reply.MemberExpiresAt, &reply.MemberActive)

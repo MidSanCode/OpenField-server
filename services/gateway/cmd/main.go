@@ -13,6 +13,7 @@ import (
 	"github.com/openfield/server/pkg/database"
 	"github.com/openfield/server/pkg/logger"
 	"github.com/openfield/server/pkg/middleware"
+	"github.com/openfield/server/pkg/repository"
 )
 
 // serviceTarget maps an API prefix to the internal service base URL.
@@ -164,6 +165,15 @@ func main() {
 		{http.MethodPut, "/api/v1/users/:user_id/membership", cfg.Services.Account, authPermission, "user.membership.grant"},
 		{http.MethodPost, "/api/v1/users/:user_id/punishments", cfg.Services.Account, authPermission, "user.punish"},
 		{http.MethodGet, "/api/v1/users/:user_id/punishments", cfg.Services.Account, authPermission, "user.punish"},
+
+		// ---- bots (owned automated accounts) ----
+		// The bot itself calls every other API with its static ofb_ token,
+		// which resolves to the bot's own user id below — no per-service
+		// changes needed.
+		{http.MethodPost, "/api/v1/bots", cfg.Services.Account, authRequired, ""},
+		{http.MethodGet, "/api/v1/bots", cfg.Services.Account, authRequired, ""},
+		{http.MethodPost, "/api/v1/bots/:id/regenerate", cfg.Services.Account, authRequired, ""},
+		{http.MethodDelete, "/api/v1/bots/:id", cfg.Services.Account, authRequired, ""},
 
 		// ---- membership ----
 		{http.MethodGet, "/api/v1/membership", cfg.Services.Account, authRequired, ""},
@@ -338,9 +348,17 @@ func main() {
 		// the request anonymous.
 		if !authenticated {
 			if header := c.GetHeader("Authorization"); strings.HasPrefix(header, "Bearer ") {
-				if id, err := middleware.ParseToken(strings.TrimPrefix(header, "Bearer "), cfg.JWT.SecretKey); err == nil {
+				token := strings.TrimPrefix(header, "Bearer ")
+				if id, err := middleware.ParseToken(token, cfg.JWT.SecretKey); err == nil {
 					userID = id
 					authenticated = true
+				} else if strings.HasPrefix(token, repository.BotTokenPrefix) {
+					// Bot tokens authenticate on public routes too (e.g. a bot
+					// browsing the post feed).
+					if id, ok := repository.ResolveBotToken(token); ok {
+						userID = id
+						authenticated = true
+					}
 				}
 			}
 		}
@@ -369,10 +387,21 @@ func main() {
 				c.JSON(http.StatusUnauthorized, gin.H{"error": "missing authorization token"})
 				return
 			}
-			id, err := middleware.ParseToken(tokenStr, cfg.JWT.SecretKey)
-			if err != nil {
+			var id int64
+			if strings.HasPrefix(tokenStr, repository.BotTokenPrefix) {
+				// Static bot token: single indexed DB lookup resolves it to
+				// the bot's user id; revoked/banned tokens fail here.
+				botID, ok := repository.ResolveBotToken(tokenStr)
+				if !ok {
+					c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid bot token"})
+					return
+				}
+				id = botID
+			} else if parsed, err := middleware.ParseToken(tokenStr, cfg.JWT.SecretKey); err != nil {
 				c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired token"})
 				return
+			} else {
+				id = parsed
 			}
 			userID = id
 			authenticated = true

@@ -344,6 +344,32 @@ var versionedMigrations = []migration{
 			CREATE INDEX IF NOT EXISTS idx_plugins_published ON plugins(published, updated_at DESC);
 		`,
 	},
+	{
+		version: 17,
+		name:    "bots",
+		sql: `
+			-- Bot accounts. A human user may create automated companion
+			-- accounts ("bots") that act like normal users everywhere but
+			-- authenticate with a static API token instead of a password.
+			-- is_bot drives the robot badge; bot_owner_id records ownership
+			-- and cascades the deletion of a bot with its owner.
+			ALTER TABLE users ADD COLUMN IF NOT EXISTS is_bot BOOLEAN NOT NULL DEFAULT FALSE;
+			ALTER TABLE users ADD COLUMN IF NOT EXISTS bot_owner_id BIGINT REFERENCES users(id) ON DELETE CASCADE;
+			CREATE INDEX IF NOT EXISTS idx_users_bot_owner ON users(bot_owner_id) WHERE is_bot;
+
+			-- One revocable API token per bot. Only the SHA-256 hash is
+			-- stored; the plaintext ofb_... token is shown exactly once at
+			-- creation/regeneration. The gateway resolves these tokens to the
+			-- bot's user id before forwarding requests downstream.
+			CREATE TABLE IF NOT EXISTS bot_tokens (
+				user_id BIGINT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+				token_hash CHAR(64) NOT NULL,
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+				last_used_at TIMESTAMPTZ
+			);
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_bot_tokens_hash ON bot_tokens(token_hash);
+		`,
+	},
 }
 
 // latestMigrationVersion returns the newest schema version the code knows
