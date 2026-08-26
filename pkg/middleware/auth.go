@@ -59,6 +59,13 @@ func GatewayAuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		header := c.GetHeader(UserIDHeader)
 		if header == "" {
+			// WebSocket upgrades authenticate with a single-use ?ticket=
+			// minted via POST /api/v1/ws (browsers cannot set headers).
+			// Let them through; the handler redeems the ticket.
+			if c.Query("ticket") != "" {
+				c.Next()
+				return
+			}
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 			c.Abort()
 			return
