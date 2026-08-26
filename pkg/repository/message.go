@@ -57,7 +57,7 @@ func (r *MessageRepository) Create(conversationID, senderID int64, content strin
 	msg := &model.Message{}
 	if err := database.DB.QueryRow(
 		`INSERT INTO messages (conversation_id, sender_id, kind, content, reply_to_id, mentions, check_id)
-		 VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
+		 VALUES ($1, $2, $3, $4, $5, $6::jsonb, NULLIF($7, 0))
 		 RETURNING id, conversation_id, sender_id, content, reply_to_id, edited_at, deleted_at, created_at`,
 		conversationID, senderID, kind, content, replyToID, string(mentionsJSON), checkID,
 	).Scan(&msg.ID, &msg.ConversationID, &msg.SenderID, &msg.Content, &msg.ReplyToID, &msg.EditedAt, &msg.DeletedAt, &msg.CreatedAt); err != nil {
@@ -100,7 +100,7 @@ func (r *MessageRepository) ListByConversation(conversationID int64, beforeID in
 	if limit < 1 || limit > 100 {
 		limit = 50
 	}
-	query := `SELECT m.id, m.conversation_id, m.sender_id, m.kind, m.check_id, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at, m.mentions,
+	query := `SELECT m.id, m.conversation_id, m.sender_id, m.kind, COALESCE(m.check_id, 0) AS check_id, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at, m.mentions,
 	                 COALESCE(NULLIF(u.nickname, ''), u.username) AS sender_name, u.avatar_url, u.is_verified`+authorMemberCols+`
 	          FROM messages m
 	          JOIN users u ON m.sender_id = u.id
@@ -173,7 +173,7 @@ func (r *MessageRepository) Search(conversationID int64, f MessageSearchFilter, 
 	if limit < 1 || limit > 100 {
 		limit = 50
 	}
-	query := `SELECT m.id, m.conversation_id, m.sender_id, m.kind, m.check_id, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at, m.mentions,
+	query := `SELECT m.id, m.conversation_id, m.sender_id, m.kind, COALESCE(m.check_id, 0) AS check_id, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at, m.mentions,
 	                 COALESCE(NULLIF(u.nickname, ''), u.username) AS sender_name, u.avatar_url, u.is_verified`+authorMemberCols+`
 	          FROM messages m
 	          JOIN users u ON m.sender_id = u.id
@@ -245,7 +245,7 @@ func (r *MessageRepository) getWithSender(id int64) (*model.Message, error) {
 	msg := &model.Message{}
 	var mentionsData []byte
 	err := database.DB.QueryRow(
-		`SELECT m.id, m.conversation_id, m.sender_id, m.kind, m.check_id, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at, m.mentions,
+		`SELECT m.id, m.conversation_id, m.sender_id, m.kind, COALESCE(m.check_id, 0) AS check_id, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at, m.mentions,
 		        COALESCE(NULLIF(u.nickname, ''), u.username) AS sender_name, u.avatar_url, u.is_verified`+authorMemberCols+`
 		 FROM messages m
 		 JOIN users u ON m.sender_id = u.id

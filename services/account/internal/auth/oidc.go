@@ -55,8 +55,15 @@ func (p *OIDCProvider) GetUserInfo(ctx context.Context, token *oauth2.Token) (*U
 		return nil, fmt.Errorf("failed to decode user info: %w", err)
 	}
 
+	// Standard OIDC userinfo identifies the end user by the "sub" claim;
+	// some non-conforming providers expose "id" instead.
+	subject := getString(data, "sub")
+	if subject == "" {
+		subject = getString(data, "id")
+	}
+
 	userInfo := &UserInfo{
-		OAuth2ID:  getString(data, "id"),
+		OAuth2ID:  subject,
 		Username:  getString(data, "name"),
 		Email:     getString(data, "email"),
 		AvatarURL: getString(data, "picture"),
