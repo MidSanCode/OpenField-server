@@ -341,6 +341,7 @@ func main() {
 
 		// Auth handling.
 		userID, authenticated := middleware.GetUserID(c)
+		nreg := false
 
 		// On public routes, still honor a valid Bearer token so downstream
 		// services can personalize reads (e.g. my_reaction, is_following,
@@ -349,9 +350,10 @@ func main() {
 		if !authenticated {
 			if header := c.GetHeader("Authorization"); strings.HasPrefix(header, "Bearer ") {
 				token := strings.TrimPrefix(header, "Bearer ")
-				if id, err := middleware.ParseToken(token, cfg.JWT.SecretKey); err == nil {
+				if id, needsReg, err := middleware.ParseTokenWithClaims(token, cfg.JWT.SecretKey); err == nil {
 					userID = id
 					authenticated = true
+					nreg = needsReg
 				} else if strings.HasPrefix(token, repository.BotTokenPrefix) {
 					// Bot tokens authenticate on public routes too (e.g. a bot
 					// browsing the post feed).
@@ -368,6 +370,7 @@ func main() {
 			// redeems the single-use ticket and binds the socket to the right
 			// user. Any client-supplied identity header is dropped first.
 			c.Request.Header.Del(middleware.UserIDHeader)
+			c.Request.Header.Del(middleware.UserNeedsRegHeader)
 			best.proxy.ServeHTTP(c.Writer, c.Request)
 			return
 		}
@@ -397,14 +400,26 @@ func main() {
 					return
 				}
 				id = botID
-			} else if parsed, err := middleware.ParseToken(tokenStr, cfg.JWT.SecretKey); err != nil {
+			} else if parsed, needsReg, err := middleware.ParseTokenWithClaims(tokenStr, cfg.JWT.SecretKey); err != nil {
 				c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired token"})
 				return
 			} else {
 				id = parsed
+				nreg = needsReg
 			}
 			userID = id
 			authenticated = true
+		}
+
+		// OAuth sign-ups that have not picked a username yet are locked out of
+		// every authenticated route except the few endpoints they need to
+		// finish setting up. The allowlist is intentionally narrow: anything
+		// not on it must wait for /users/me PUT (register) to clear the flag.
+		if authenticated && nreg {
+			if !registrationAllowedPath(method, path) {
+				c.JSON(http.StatusForbidden, gin.H{"error": "registration required", "needs_registration": true})
+				return
+			}
 		}
 
 		if rt.level == authPermission {
@@ -423,8 +438,14 @@ func main() {
 		// Forward with the authenticated user id.
 		if authenticated {
 			c.Request.Header.Set(middleware.UserIDHeader, itoa(userID))
+			if nreg {
+				c.Request.Header.Set(middleware.UserNeedsRegHeader, "1")
+			} else {
+				c.Request.Header.Del(middleware.UserNeedsRegHeader)
+			}
 		} else {
 			c.Request.Header.Del(middleware.UserIDHeader)
+			c.Request.Header.Del(middleware.UserNeedsRegHeader)
 		}
 		// Ensure the request path keeps the full /api/v1 prefix.
 		best.proxy.ServeHTTP(c.Writer, c.Request)
@@ -457,4 +478,25 @@ func itoa(n int64) string {
 		buf[i] = '-'
 	}
 	return string(buf[i:])
+}
+
+// registrationAllowedPath reports whether an unfinished OAuth user may hit
+// this method+path. Anything outside the allowlist is rejected at the gateway
+// so the user cannot poke at private data until they finish registering.
+func registrationAllowedPath(method, path string) bool {
+	switch {
+	case method == "GET" && (path == "/api/v1/users/me" || path == "/api/v1/users/me/permissions" || path == "/api/v1/capabilities" || path == "/api/v1/users/storage-buckets"):
+		return true
+	case method == "PUT" && path == "/api/v1/users/me":
+		return true
+	case strings.HasPrefix(path, "/api/v1/auth/"):
+		// Login, refresh, OAuth, QR handshake, register endpoint. The whole
+		// auth namespace stays open so the user can finish or re-auth.
+		return true
+	case strings.HasPrefix(path, "/api/v1/notifications") && method == "GET":
+		// The bell badge can keep counting items so the user knows something
+		// arrived before they finished setup.
+		return true
+	}
+	return false
 }

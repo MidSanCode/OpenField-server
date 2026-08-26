@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
@@ -461,7 +462,7 @@ func (h *UserHandler) GetUser(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get user"})
 		return
 	}
-	if user == nil {
+	if user == nil || user.DeletedAt != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
 		return
 	}
@@ -875,4 +876,143 @@ func (h *UserHandler) AdjustExp(c *gin.Context) {
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{"exp": exp, "level": model.LevelForExp(exp)})
+}
+
+// --- presence / sessions / deletion / notifications ---
+
+// Heartbeat updates the user's online timestamp so friends can see them as
+// active. Clients should call it roughly once a minute; updates more often
+// than every ten seconds are throttled server-side via a no-op UPDATE.
+func (h *UserHandler) Heartbeat(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	if err := repository.TouchLastSeen(userID); err != nil {
+		logger.Log.Warn("failed to touch presence", "user_id", userID, "error", err)
+	}
+	c.JSON(http.StatusOK, gin.H{"online": true})
+}
+
+// RequestDeletion soft-deletes the current account. The account is hidden from
+// everywhere instantly; login is refused; the row is purged 30 days later.
+func (h *UserHandler) RequestDeletion(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	if err := repository.RequestAccountDeletion(userID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to schedule deletion"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"scheduled_for_deletion": true,
+		"grace_days":             30,
+	})
+}
+
+// CancelDeletion clears the soft-delete marker so the user can sign back in.
+func (h *UserHandler) CancelDeletion(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	if err := repository.CancelAccountDeletion(userID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to cancel deletion"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"scheduled_for_deletion": false})
+}
+
+// ListMySessions returns the user's active devices so they can audit them.
+func (h *UserHandler) ListMySessions(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	items, err := repository.ListSessions(userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list sessions"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"sessions": items})
+}
+
+// DeleteMySession revokes one of the user's own sessions.
+func (h *UserHandler) DeleteMySession(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session id"})
+		return
+	}
+	if err := repository.DeleteSession(userID, id); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "session not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to revoke session"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"revoked": true})
+}
+
+// ListNotifications returns the authenticated user's notification inbox.
+func (h *UserHandler) ListNotifications(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+	if offset < 0 {
+		offset = 0
+	}
+	items, total, err := repository.ListNotifications(userID, limit, offset)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list notifications"})
+		return
+	}
+	unread, _ := repository.CountUnreadNotifications(userID)
+	c.JSON(http.StatusOK, gin.H{
+		"notifications": items,
+		"total":         total,
+		"unread":        unread,
+	})
+}
+
+// MarkNotificationsRead marks specific notifications (or all) as read.
+func (h *UserHandler) MarkNotificationsRead(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	var req struct {
+		IDs []int64 `json:"ids"`
+	}
+	if c.Request.ContentLength > 0 {
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+			return
+		}
+	}
+	affected, err := repository.MarkNotificationsRead(userID, req.IDs)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to mark read"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"marked_read": affected})
 }

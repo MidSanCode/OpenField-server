@@ -79,9 +79,69 @@ func main() {
 
 	handler.RegisterRoutes(r, attHandler)
 
+	// Background sweeper: recycle uploaded files that were never attached to
+	// anything (posts, replies, chat messages, profile pictures). Runs every
+	// five minutes by default; configurable through storage.recycle.
+	go startRecycleSweeper(store, cfg.Storage.Recycle)
+
 	addr := "127.0.0.1:" + cfg.ServicePort("STORAGE")
 	logger.Log.Info("storage service starting", "address", addr)
 	if err := r.Run(addr); err != nil {
 		log.Fatalf("failed to start storage service: %v", err)
 	}
+}
+
+// startRecycleSweeper removes orphan attachments on a fixed cadence. The
+// sweeper reads its buckets from config (an empty list means every bucket),
+// runs as soon as the process boots, then on the configured interval.
+func startRecycleSweeper(store *storage.Manager, cfg config.RecycleConfig) {
+	if !cfg.Enabled {
+		return
+	}
+	interval := time.Duration(cfg.RecycleInterval()) * time.Second
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	attRepo := repository.NewAttachmentRepository()
+	run := func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		items, err := attRepo.ListRecyclableAttachments(cfg.Buckets, cfg.RecycleMinAge(), 200)
+		if err != nil {
+			logger.Log.Error("failed to list recyclable attachments", "error", err)
+			return
+		}
+		if len(items) == 0 {
+			return
+		}
+		cleaned := 0
+		for _, item := range items {
+			bucketStore := store.For(item.Bucket)
+			if bucketStore == nil || !bucketStore.Enabled() {
+				bucketStore = store.Default()
+			}
+			if bucketStore == nil || !bucketStore.Enabled() {
+				continue
+			}
+			if err := bucketStore.Delete(ctx, item.ObjectKey); err != nil {
+				logger.Log.Warn("failed to delete recycled object", "bucket", item.Bucket, "key", item.ObjectKey, "error", err)
+				continue
+			}
+			if err := attRepo.DeleteByID(item.ID); err != nil {
+				logger.Log.Warn("failed to delete recycled attachment row", "id", item.ID, "error", err)
+				continue
+			}
+			cleaned++
+		}
+		if cleaned > 0 {
+			logger.Log.Info("recycled orphan attachments", "count", cleaned, "interval", interval)
+		}
+	}
+
+	go func() {
+		run()
+		for range ticker.C {
+			run()
+		}
+	}()
 }

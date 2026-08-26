@@ -3,6 +3,7 @@ package handler
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -26,17 +27,21 @@ type AuthHandler struct {
 	userRepo          *repository.UserRepository
 	punishRepo        *repository.PunishmentRepository
 	appRedirectURL    string
+	webRedirectURL    string
 	refreshExpiryDays int
 }
 
-// NewAuthHandler creates a new AuthHandler.
-func NewAuthHandler(manager *auth.Manager, tokenMgr *middleware.TokenManager, appRedirectURL string, refreshExpiryDays int) *AuthHandler {
+// NewAuthHandler creates a new AuthHandler. Both the app-protocol and the web
+// redirect URLs are honoured: OIDCLogin reads a `flow` query parameter to
+// decide which target to send the browser to on callback.
+func NewAuthHandler(manager *auth.Manager, tokenMgr *middleware.TokenManager, appRedirectURL, webRedirectURL string, refreshExpiryDays int) *AuthHandler {
 	return &AuthHandler{
 		authManager:       manager,
 		tokenMgr:          tokenMgr,
 		userRepo:          repository.NewUserRepository(),
 		punishRepo:        repository.NewPunishmentRepository(),
 		appRedirectURL:    appRedirectURL,
+		webRedirectURL:    webRedirectURL,
 		refreshExpiryDays: refreshExpiryDays,
 	}
 }
@@ -87,6 +92,11 @@ func (h *AuthHandler) GetProviders(c *gin.Context) {
 // A fresh single-use state nonce is minted for every login attempt and stored
 // server-side; the callback rejects any code exchange that does not carry it,
 // which blocks login CSRF and callback replay.
+//
+// The optional `flow` query parameter (values: "app" | "web") tells the
+// callback which redirect URL to use. Web logins bounce to the frontend's
+// callback route so the browser does not try to open the openfield://
+// protocol which most browsers refuse silently.
 func (h *AuthHandler) OIDCLogin(c *gin.Context) {
 	state, err := randomState()
 	if err != nil {
@@ -94,7 +104,11 @@ func (h *AuthHandler) OIDCLogin(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to start login"})
 		return
 	}
-	if err := repository.IssueOIDCState(state); err != nil {
+	flow := c.Query("flow")
+	if flow != "web" {
+		flow = "app"
+	}
+	if err := repository.IssueOIDCState(state, flow); err != nil {
 		logger.Log.Error("failed to store oidc state", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to start login"})
 		return
@@ -105,6 +119,7 @@ func (h *AuthHandler) OIDCLogin(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"auth_url": authURL,
 		"provider": "oidc",
+		"flow":     flow,
 	})
 }
 
@@ -187,8 +202,14 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	if h.bannedResponse(c, user) {
 		return
 	}
+	if user.DeletedAt != nil {
+		loginIPLimiter.Reset(ip)
+		loginAccountLimiter.Reset(accountKey)
+		c.JSON(http.StatusForbidden, gin.H{"error": "account scheduled for deletion"})
+		return
+	}
 
-	accessToken, err := h.tokenMgr.GenerateToken(user.ID, user.Email, user.Username)
+	accessToken, err := h.tokenMgr.GenerateToken(user.ID, user.Email, user.Username, false)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate token"})
 		return
@@ -199,10 +220,15 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate refresh token"})
 		return
 	}
-	if err := repository.StoreRefreshToken(user.ID, refreshToken, h.refreshExpiresIn()); err != nil {
-		logger.Log.Error("failed to store refresh token", "error", err)
+	device, devIP := clientDevice(c)
+	knownDevice, err := repository.CreateSession(user.ID, refreshToken, h.refreshExpiresIn(), device, devIP)
+	if err != nil {
+		logger.Log.Error("failed to create session", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to login"})
 		return
+	}
+	if !knownDevice {
+		h.notifyNewDeviceLogin(user.ID, device, devIP)
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -277,7 +303,8 @@ func (h *AuthHandler) OIDCCallback(c *gin.Context) {
 	}
 
 	// Plain login: the state must be a nonce we issued and not yet consumed.
-	if err := repository.ConsumeOIDCState(state); err != nil {
+	flow, err := repository.ConsumeOIDCState(state)
+	if err != nil {
 		logger.Log.Warn("oidc login rejected", "reason", "invalid or expired state")
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid oidc state"})
 		return
@@ -293,8 +320,12 @@ func (h *AuthHandler) OIDCCallback(c *gin.Context) {
 	if h.bannedResponse(c, user) {
 		return
 	}
+	if user.DeletedAt != nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "account scheduled for deletion"})
+		return
+	}
 
-	accessToken, err := h.tokenMgr.GenerateToken(user.ID, user.Email, user.Username)
+	accessToken, err := h.tokenMgr.GenerateToken(user.ID, user.Email, user.Username, user.NeedsRegistration)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate token"})
 		return
@@ -305,9 +336,23 @@ func (h *AuthHandler) OIDCCallback(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate refresh token"})
 		return
 	}
-	if err := repository.StoreRefreshToken(user.ID, refreshToken, h.refreshExpiresIn()); err != nil {
-		logger.Log.Error("failed to store refresh token", "error", err)
+	device, ip := clientDevice(c)
+	knownDevice, err := repository.CreateSession(user.ID, refreshToken, h.refreshExpiresIn(), device, ip)
+	if err != nil {
+		logger.Log.Error("failed to create session", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "authentication failed"})
+		return
+	}
+	if !knownDevice {
+		h.notifyNewDeviceLogin(user.ID, device, ip)
+	}
+
+	// Web sign-ins get redirected to the frontend callback page rather than
+	// the app-protocol deep link, which most browsers refuse to open.
+	if flow == "web" && h.webRedirectURL != "" {
+		webLink := fmt.Sprintf("%s?access_token=%s&refresh_token=%s&expires_in=%d&refresh_expires_in=%d&username=%s&email=%s&avatar_url=%s&needs_registration=%t",
+			h.webRedirectURL, accessToken, refreshToken, h.accessExpiresIn(), h.refreshExpiresIn(), url.QueryEscape(user.Username), url.QueryEscape(user.Email), url.QueryEscape(user.AvatarURL), user.NeedsRegistration)
+		c.Redirect(http.StatusFound, webLink)
 		return
 	}
 
@@ -555,8 +600,12 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 	if h.bannedResponse(c, user) {
 		return
 	}
+	if user.DeletedAt != nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "account scheduled for deletion"})
+		return
+	}
 
-	accessToken, err := h.tokenMgr.GenerateToken(user.ID, user.Email, user.Username)
+	accessToken, err := h.tokenMgr.GenerateToken(user.ID, user.Email, user.Username, user.NeedsRegistration)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate token"})
 		return
@@ -578,6 +627,8 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to refresh token"})
 		return
 	}
+	_, ip := clientDevice(c)
+	_ = repository.TouchSession(newRefreshToken, ip)
 
 	c.JSON(http.StatusOK, gin.H{
 		"access_token":       accessToken,
@@ -617,4 +668,153 @@ func generateRefreshToken() (string, error) {
 // validateRefreshToken checks if the refresh token is valid.
 func (h *AuthHandler) validateRefreshToken(token string) (int64, error) {
 	return repository.ValidateRefreshToken(token)
+}
+
+// --- helpers shared with the QR + sessions flow ---
+
+// clientDevice returns a short label describing the client (user-supplied or
+// parsed from the User-Agent) and the originating IP, used as session metadata.
+func clientDevice(c *gin.Context) (device, ip string) {
+	device = c.GetHeader("X-Client-Device")
+	if device == "" {
+		ua := c.GetHeader("User-Agent")
+		device = guessDevice(ua)
+	}
+	ip = clientAddress(c)
+	return
+}
+
+// guessDevice picks a short, human-readable device label from a User-Agent.
+// Unknown clients get the trimmed raw UA so they can still be distinguished.
+func guessDevice(ua string) string {
+	low := strings.ToLower(ua)
+	switch {
+	case strings.Contains(low, "openfield-ios"):
+		return "iOS App"
+	case strings.Contains(low, "openfield-android"):
+		return "Android App"
+	case strings.Contains(low, "openfield-macos"):
+		return "macOS App"
+	case strings.Contains(low, "openfield-windows"):
+		return "Windows App"
+	case strings.Contains(low, "openfield-linux"):
+		return "Linux App"
+	case strings.Contains(low, "openfield-web"):
+		return "Web App"
+	}
+	if strings.HasPrefix(strings.ToLower(ua), "mozilla/") || strings.Contains(low, "chrome") || strings.Contains(low, "safari") || strings.Contains(low, "firefox") {
+		return "Web Browser"
+	}
+	if ua == "" {
+		return "Unknown Device"
+	}
+	if len(ua) > 80 {
+		return ua[:80]
+	}
+	return ua
+}
+
+// notifyNewDeviceLogin drops a "new device" notification in the user's inbox.
+func (h *AuthHandler) notifyNewDeviceLogin(userID int64, device, ip string) {
+	data, _ := json.Marshal(map[string]string{"device": device, "ip": ip})
+	title := "新设备登录"
+	body := "你的账号在 " + device + " 上登录。如非本人操作，请尽快修改密码并注销其他会话。"
+	_ = repository.CreateNotification(userID, "auth.new_device", title, body, data)
+}
+
+// CreateQrLogin mints a fresh pending handshake code the caller can render as
+// a QR image. The code is single-use and short-lived.
+func (h *AuthHandler) CreateQrLogin(c *gin.Context) {
+	var req struct {
+		Device string `json:"device"`
+	}
+	_ = c.ShouldBindJSON(&req)
+	code, err := randomState()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create code"})
+		return
+	}
+	if req.Device == "" {
+		req.Device = "Unknown Device"
+	}
+	if err := repository.CreateQrLogin(code, req.Device); err != nil {
+		logger.Log.Error("failed to create qr login", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create code"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": code, "expires_in": 120})
+}
+
+// PollQrLogin returns the current state of a handshake. Once a phone approves
+// it, the poll response carries the access + refresh tokens that sign the
+// requesting device in.
+func (h *AuthHandler) PollQrLogin(c *gin.Context) {
+	code := c.Param("code")
+	qr, err := repository.GetQrLogin(code)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "code not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to poll code"})
+		return
+	}
+	resp := gin.H{"code": qr.Code, "status": qr.Status}
+	if qr.Status == "confirmed" && qr.AccessToken != "" {
+		resp["access_token"] = qr.AccessToken
+		resp["refresh_token"] = qr.RefreshToken
+		resp["expires_in"] = h.accessExpiresIn()
+		resp["refresh_expires_in"] = h.refreshExpiresIn()
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+// ApproveQrLogin consumes a pending handshake and grants tokens signed for
+// the approving user.
+func (h *AuthHandler) ApproveQrLogin(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	code := c.Param("code")
+	qr, err := repository.GetQrLogin(code)
+	if err != nil || qr == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "code not found"})
+		return
+	}
+	if qr.Status != "pending" {
+		c.JSON(http.StatusConflict, gin.H{"error": "code already used"})
+		return
+	}
+	user, err := h.userRepo.GetByID(userID)
+	if err != nil || user == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "user not found"})
+		return
+	}
+	if user.DeletedAt != nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "account scheduled for deletion"})
+		return
+	}
+	accessToken, err := h.tokenMgr.GenerateToken(user.ID, user.Email, user.Username, false)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate token"})
+		return
+	}
+	refreshToken, err := generateRefreshToken()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate refresh token"})
+		return
+	}
+	device, ip := clientDevice(c)
+	if _, err := repository.CreateSession(user.ID, refreshToken, h.refreshExpiresIn(), device, ip); err != nil {
+		logger.Log.Error("failed to record qr session", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to approve"})
+		return
+	}
+	if err := repository.ConfirmQrLogin(code, user.ID, accessToken, refreshToken); err != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": "code already used"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "confirmed"})
 }

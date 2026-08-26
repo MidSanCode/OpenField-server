@@ -392,6 +392,7 @@ type PostSearchFilter struct {
 	AuthorName string
 	From       *time.Time
 	To         *time.Time
+	Tag        string
 }
 
 // searchQuery builds the shared post SELECT with the visibility rule and any
@@ -628,6 +629,13 @@ func (r *PostRepository) IsPostFavorited(postID, userID int64) (bool, error) {
 // populateFavorited marks which of the given posts the viewer favorited.
 func (r *PostRepository) populateFavorited(posts []model.Post, postIDs []int64, viewerID int64) error {
 	if viewerID <= 0 || len(postIDs) == 0 {
+		// Anonymous viewers never see the tip totals either; masking happens
+		// unconditionally for anyone other than the author.
+		for i := range posts {
+			if posts[i].UserID != viewerID {
+				posts[i].TipTotal = 0
+			}
+		}
 		return nil
 	}
 	byID := make(map[int64]*model.Post, len(posts))
@@ -654,6 +662,14 @@ func (r *PostRepository) populateFavorited(posts []model.Post, postIDs []int64, 
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("rows error: %w", err)
+	}
+	// Hide tip totals from everyone except the post author. The amounts
+	// surface again when the owner views their own posts; everyone else
+	// sees a masked card.
+	for i := range posts {
+		if posts[i].UserID != viewerID {
+			posts[i].TipTotal = 0
+		}
 	}
 	return nil
 }

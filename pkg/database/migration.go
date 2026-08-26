@@ -370,6 +370,75 @@ var versionedMigrations = []migration{
 			CREATE UNIQUE INDEX IF NOT EXISTS idx_bot_tokens_hash ON bot_tokens(token_hash);
 		`,
 	},
+	{
+		version: 18,
+		name:    "presence-sessions-notifications",
+		sql: `
+			-- Online presence: clients heartbeat every minute; a user counts as
+			-- online while last_seen_at is within the freshness window.
+			ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ;
+			CREATE INDEX IF NOT EXISTS idx_users_last_seen ON users(last_seen_at);
+
+			-- Account self-deletion (soft). A deleted account hides instantly
+			-- and can be restored within the grace window by support; a purge
+			-- job erases everything once the window lapses.
+			ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+			CREATE INDEX IF NOT EXISTS idx_users_deleted ON users(deleted_at) WHERE deleted_at IS NOT NULL;
+
+			-- Session management: one row per logged-in device so users can
+			-- audit and revoke their sessions from any client.
+			ALTER TABLE refresh_tokens ADD COLUMN IF NOT EXISTS device_label TEXT NOT NULL DEFAULT '';
+			ALTER TABLE refresh_tokens ADD COLUMN IF NOT EXISTS last_used_at TIMESTAMPTZ;
+			ALTER TABLE refresh_tokens ADD COLUMN IF NOT EXISTS last_ip TEXT NOT NULL DEFAULT '';
+
+			-- In-app notifications (reply / payment / new-device-login ...).
+			CREATE TABLE IF NOT EXISTS notifications (
+				id BIGSERIAL PRIMARY KEY,
+				user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+				type VARCHAR(64) NOT NULL DEFAULT '',
+				title TEXT NOT NULL DEFAULT '',
+				body TEXT NOT NULL DEFAULT '',
+				data JSONB NOT NULL DEFAULT '{}'::jsonb,
+				read_at TIMESTAMPTZ,
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			);
+			CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, created_at DESC);
+			CREATE INDEX IF NOT EXISTS idx_notifications_unread ON notifications(user_id) WHERE read_at IS NULL;
+
+			-- Post tags live in their own table (see below) so list queries
+			-- don't have to load the whole TEXT[] for every post.
+
+			-- QR login handshakes. The desktop client renders the code, the
+			-- phone approves it, then the desktop polls until tokens appear.
+			CREATE TABLE IF NOT EXISTS qr_logins (
+				code VARCHAR(64) PRIMARY KEY,
+				user_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
+				status VARCHAR(16) NOT NULL DEFAULT 'pending',
+				access_token TEXT NOT NULL DEFAULT '',
+				refresh_token TEXT NOT NULL DEFAULT '',
+				device_label TEXT NOT NULL DEFAULT '',
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+				expires_at TIMESTAMPTZ NOT NULL
+			);
+			CREATE INDEX IF NOT EXISTS idx_qr_logins_expiry ON qr_logins(expires_at);
+
+			-- OIDC login states remember whether the originating client asked
+			-- for the app-protocol callback or the web callback so the
+			-- authorization code exchange lands on the right destination.
+			ALTER TABLE oidc_states ADD COLUMN IF NOT EXISTS flow VARCHAR(8) NOT NULL DEFAULT 'app';
+
+			-- Post tags live in their own table so we can load them in one
+			-- batched query alongside any list of posts without rewriting
+			-- every post SELECT.
+			CREATE TABLE IF NOT EXISTS post_tags (
+				post_id BIGINT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+				tag VARCHAR(64) NOT NULL,
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+				PRIMARY KEY (post_id, tag)
+			);
+			CREATE INDEX IF NOT EXISTS idx_post_tags_tag ON post_tags(tag, post_id DESC);
+		`,
+	},
 }
 
 // latestMigrationVersion returns the newest schema version the code knows

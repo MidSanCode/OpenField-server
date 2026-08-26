@@ -23,6 +23,12 @@ func RegisterRoutes(r *gin.Engine, authHandler *AuthHandler, userHandler *UserHa
 			auth.POST("/login", authHandler.Login)
 			auth.POST("/register", middleware.GatewayAuthMiddleware(), authHandler.Register)
 			auth.POST("/refresh", authHandler.RefreshToken)
+			// QR login handshake: the device that wants to sign in
+			// calls POST to receive a code, then polls GET until it sees
+			// "confirmed" with tokens; an already-authenticated device
+			// approves via POST /qr/:code/approve.
+			auth.POST("/qr", authHandler.CreateQrLogin)
+			auth.GET("/qr/:code", authHandler.PollQrLogin)
 		}
 
 		users := api.Group("/users")
@@ -39,11 +45,33 @@ func RegisterRoutes(r *gin.Engine, authHandler *AuthHandler, userHandler *UserHa
 			users.PUT("/me/privacy", userHandler.UpdatePrivacy)
 			users.PUT("/me/name-style", userHandler.UpdateNameStyle)
 			users.PUT("/me/storage-bucket", userHandler.SetMyStorageBucket)
+			users.POST("/me/heartbeat", userHandler.Heartbeat)
+			users.POST("/me/deletion-request", userHandler.RequestDeletion)
+			users.DELETE("/me/deletion-request", userHandler.CancelDeletion)
 			users.GET("/storage-buckets", userHandler.ListStorageBuckets)
 			users.GET("/search", userHandler.SearchUsers)
 			users.POST("/me/pin", pinHandler.SetPin)
 			users.PUT("/me/pin", pinHandler.ChangePin)
 			users.POST("/me/pin/verify", pinHandler.VerifyPin)
+		}
+		// Authenticated sessions audit: list the devices the user is signed in
+		// on and revoke any of them (sign-out everywhere except the current
+		// device is the canonical "sign out other sessions" pattern).
+		sessions := api.Group("/auth/sessions")
+		sessions.Use(middleware.GatewayAuthMiddleware())
+		{
+			sessions.GET("", userHandler.ListMySessions)
+			sessions.DELETE("/:id", userHandler.DeleteMySession)
+		}
+		// Authenticated QR approval: the already-logged-in phone scans and
+		// approves, granting the requesting device access tokens.
+		auth.POST("/qr/:code/approve", middleware.GatewayAuthMiddleware(), authHandler.ApproveQrLogin)
+		// In-app notifications inbox.
+		notifications := api.Group("/notifications")
+		notifications.Use(middleware.GatewayAuthMiddleware())
+		{
+			notifications.GET("", userHandler.ListNotifications)
+			notifications.POST("/read", userHandler.MarkNotificationsRead)
 		}
 		// Public profile lookup (used to view other users' public profiles).
 		api.GET("/users/:id", userHandler.GetUser)

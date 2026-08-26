@@ -65,7 +65,7 @@ func main() {
 	authManager := auth.NewManager(cfg)
 	tokenMgr := middleware.NewTokenManager(cfg.JWT.SecretKey, cfg.JWT.ExpiryHours)
 
-	authHandler := handler.NewAuthHandler(authManager, tokenMgr, cfg.OIDC.AppRedirectURL, cfg.JWT.RefreshExpiryDays)
+	authHandler := handler.NewAuthHandler(authManager, tokenMgr, cfg.OIDC.AppRedirectURL, cfg.OIDC.WebRedirectURL, cfg.JWT.RefreshExpiryDays)
 	userHandler := handler.NewUserHandler(store, cfg.Storage)
 	userHandler.SetGameConfig(cfg.Game)
 	walletHandler := handler.NewWalletHandler()
@@ -90,6 +90,10 @@ func main() {
 
 	// Background sweeper: purge expired refresh tokens and OIDC login states.
 	go startAuthDataSweeper()
+
+	// Background sweeper: hard-delete accounts that finished their grace
+	// window after self-deletion.
+	go startAccountPurger()
 
 	r := gin.New()
 	r.Use(middleware.Recovery())
@@ -180,6 +184,33 @@ func startAuthDataSweeper() {
 		}
 		if err := repository.PurgeExpiredOIDCStates(); err != nil {
 			logger.Log.Error("failed to purge expired oidc states", "error", err)
+		}
+		if err := repository.PurgeExpiredQrLogins(); err != nil {
+			logger.Log.Error("failed to purge expired qr logins", "error", err)
+		}
+	}
+}
+
+// startAccountPurger hard-deletes accounts whose soft-delete grace window
+// has elapsed. Object-store cleanup is best-effort: the bucket manager is not
+// reachable from this service so we only remove the database rows here, with
+// the storage service's recycle sweeper handling orphan objects.
+func startAccountPurger() {
+	ticker := time.NewTicker(6 * time.Hour)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		ids, err := repository.ListPurgeableUsers(30)
+		if err != nil {
+			logger.Log.Error("failed to list purgeable users", "error", err)
+			continue
+		}
+		for _, id := range ids {
+			if err := repository.PurgeUserData(id, nil); err != nil {
+				logger.Log.Error("failed to purge user", "user_id", id, "error", err)
+				continue
+			}
+			logger.Log.Info("purged scheduled-deletion account", "user_id", id)
 		}
 	}
 }

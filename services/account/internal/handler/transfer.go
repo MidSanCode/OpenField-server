@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -120,6 +121,15 @@ func (h *TransferHandler) AcceptTransfer(c *gin.Context) {
 	if err != nil {
 		h.respondTransferError(c, err)
 		return
+	}
+	// Notify the sender that the transfer was accepted: their balance is
+	// gone, the money is in the recipient's pocket.
+	if transfer != nil && transfer.SenderID != userID {
+		data, _ := json.Marshal(map[string]any{
+			"transfer_id": transfer.ID,
+			"amount":      transfer.Amount,
+		})
+		_ = repository.CreateNotification(transfer.SenderID, "transfer.accepted", "转账收款成功", "你的转账已被收款。", data)
 	}
 	c.JSON(http.StatusOK, gin.H{"transfer": transfer})
 }

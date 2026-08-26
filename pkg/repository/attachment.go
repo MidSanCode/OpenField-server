@@ -67,6 +67,32 @@ func (r *AttachmentRepository) GetByID(id int64) (*model.Attachment, error) {
 	return att, nil
 }
 
+// GetByIDsOwnedBy returns the attachments matching the given ids that are
+// owned by userID. Mismatched ids are silently skipped so callers can use
+// the returned count to detect "any missing?" without inspecting the input.
+func (r *AttachmentRepository) GetByIDsOwnedBy(userID int64, ids []int64) ([]model.Attachment, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	rows, err := database.DB.Query(
+		"SELECT id, user_id, object_key, original_name, mime_type, size_bytes, url, thumb_url, visibility, bucket, created_at FROM attachments WHERE user_id = $1 AND id = ANY($2)",
+		userID, pq.Array(ids),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query attachments: %w", err)
+	}
+	defer rows.Close()
+	atts := make([]model.Attachment, 0)
+	for rows.Next() {
+		var att model.Attachment
+		if err := rows.Scan(&att.ID, &att.UserID, &att.ObjectKey, &att.OriginalName, &att.MimeType, &att.SizeBytes, &att.URL, &att.ThumbURL, &att.Visibility, &att.Bucket, &att.CreatedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan attachment: %w", err)
+		}
+		atts = append(atts, att)
+	}
+	return atts, rows.Err()
+}
+
 // GetByObjectKey retrieves an attachment by object key.
 func (r *AttachmentRepository) GetByObjectKey(objectKey string) (*model.Attachment, error) {
 	att := &model.Attachment{}
@@ -246,4 +272,53 @@ func (r *AttachmentRepository) ListByUser(userID int64, limit int) ([]model.Atta
 		return nil, fmt.Errorf("rows error: %w", err)
 	}
 	return atts, nil
+}
+
+// RecyclableAttachment is an uploaded file that never landed anywhere (no
+// post, reply, or chat message references it) and is old enough to recycle.
+type RecyclableAttachment struct {
+	ID        int64
+	Bucket    string
+	ObjectKey string
+}
+
+// ListRecyclableAttachments returns unreferenced attachments older than
+// minAgeSeconds, restricted to the given logical buckets. Profiles are
+// protected too: avatar/banner URLs in users are excluded from cleanup.
+func (r *AttachmentRepository) ListRecyclableAttachments(buckets []string, minAgeSeconds int, limit int) ([]RecyclableAttachment, error) {
+	query := `SELECT a.id, COALESCE(a.bucket, ''), a.object_key
+		FROM attachments a
+		WHERE a.created_at < NOW() - ($1 || ' seconds')::interval
+		  AND NOT EXISTS (SELECT 1 FROM post_attachments pa WHERE pa.attachment_id = a.id)
+		  AND NOT EXISTS (SELECT 1 FROM reply_attachments ra WHERE ra.attachment_id = a.id)
+		  AND NOT EXISTS (SELECT 1 FROM message_attachments ma WHERE ma.attachment_id = a.id)
+		  AND NOT EXISTS (SELECT 1 FROM users u WHERE u.avatar_url = a.url OR u.banner_url = a.url)`
+	args := []interface{}{minAgeSeconds}
+	if len(buckets) > 0 {
+		query += fmt.Sprintf(" AND a.bucket = ANY($%d)", len(args)+1)
+		args = append(args, pq.Array(buckets))
+	}
+	query += fmt.Sprintf(" ORDER BY a.id LIMIT %d", limit)
+	rows, err := database.DB.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list recyclable attachments: %w", err)
+	}
+	defer rows.Close()
+
+	items := []RecyclableAttachment{}
+	for rows.Next() {
+		var item RecyclableAttachment
+		if err := rows.Scan(&item.ID, &item.Bucket, &item.ObjectKey); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+// DeleteAttachmentRow removes the attachment row after its object has been
+// deleted from the store.
+func (r *AttachmentRepository) DeleteByID(id int64) error {
+	_, err := database.DB.Exec("DELETE FROM attachments WHERE id = $1", id)
+	return err
 }

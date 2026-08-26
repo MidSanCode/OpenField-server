@@ -119,6 +119,17 @@ type User struct {
 	IsBot bool `json:"is_bot"`
 	// BotOwnerID is the human user who created this bot (0 for humans).
 	BotOwnerID int64 `json:"bot_owner_id,omitempty"`
+	// DeletedAt is set when the user requested account deletion. While set,
+	// the account is hidden everywhere and login is refused. A purge job
+	// erases the row 30 days later.
+	DeletedAt *time.Time `json:"deleted_at,omitempty"`
+	// LastSeenAt is the timestamp of the user's last heartbeat. A user is
+	// considered online while LastSeenAt is within the freshness window
+	// (see repository.IsUserOnline).
+	LastSeenAt *time.Time `json:"last_seen_at,omitempty"`
+	// Online mirrors the freshness check so JSON consumers do not have to
+	// hit the clock themselves. Recomputed on every scan.
+	Online bool `json:"online,omitempty"`
 }
 
 // Post represents a text post with optional attachments.
@@ -143,6 +154,9 @@ type Post struct {
 	Favorited bool `json:"favorited,omitempty"`
 	// FavoriteCount is the total number of users who favorited this post.
 	FavoriteCount int64        `json:"favorite_count,omitempty"`
+	// Tags are the free-form labels the author attached to the post. They
+	// drive feed filtering and the hashtag picker on the post card.
+	Tags         []string      `json:"tags,omitempty"`
 	Username      string       `json:"username,omitempty"`
 	Nickname      string       `json:"nickname,omitempty"`
 	AvatarURL     string       `json:"avatar_url,omitempty"`

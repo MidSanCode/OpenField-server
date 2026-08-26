@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -111,6 +112,7 @@ func (h *PostHandler) CreatePost(c *gin.Context) {
 		Visibility    string  `json:"visibility"`
 		AttachmentIDs []int64 `json:"attachment_ids"`
 		CheckID       int64   `json:"check_id"`
+		Tags          []string `json:"tags"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -138,11 +140,48 @@ func (h *PostHandler) CreatePost(c *gin.Context) {
 		return
 	}
 
+	// Posts cannot carry encrypted attachments: E2EE messages flow through
+	// the chat service, posts are public. Reject any attachment that was
+	// uploaded with private visibility or marked as E2EE ciphertext so a
+	// compromised client cannot smuggle an encrypted blob into a public
+	// post and have it be silently readable only by them.
+	if len(req.AttachmentIDs) > 0 {
+		attRepo := repository.NewAttachmentRepository()
+		atts, err := attRepo.GetByIDsOwnedBy(userID, req.AttachmentIDs)
+		if err != nil {
+			logger.Log.Error("failed to verify post attachments", "error", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to verify attachments"})
+			return
+		}
+		if len(atts) != len(req.AttachmentIDs) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "attachment not found or not owned by you"})
+			return
+		}
+		for _, a := range atts {
+			if a.Visibility != visibilityPublic {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "encrypted or non-public attachments cannot be used in posts"})
+				return
+			}
+			if isEncryptedMime(a.MimeType) {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "encrypted attachments cannot be used in posts"})
+				return
+			}
+		}
+	}
+
 	post, err := h.postRepo.Create(userID, req.Content, req.Visibility, req.AttachmentIDs, req.CheckID)
 	if err != nil {
 		logger.Log.Error("failed to create post", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create post"})
 		return
+	}
+
+	if len(req.Tags) > 0 {
+		if err := repository.SetPostTags(post.ID, req.Tags); err != nil {
+			logger.Log.Warn("failed to set post tags", "error", err, "post_id", post.ID)
+		} else {
+			post.Tags = req.Tags
+		}
 	}
 
 	// Realtime push respects the post's visibility: public/login posts go to
@@ -152,6 +191,14 @@ func (h *PostHandler) CreatePost(c *gin.Context) {
 	events.Publish(c.Request.Context(), events.PostCreated, postRecipients(userID, req.Visibility), post)
 
 	c.JSON(http.StatusCreated, post)
+}
+
+// isEncryptedMime returns true for MIME types that carry E2EE ciphertext. The
+// .ofe container carries an OpenField-encrypted blob and may only appear in
+// chat attachments, never in posts.
+func isEncryptedMime(mime string) bool {
+	return mime == "application/x-openfield-encrypted" || strings.HasPrefix(mime, "application/x-openfield-encrypted;") ||
+		strings.HasSuffix(mime, ".ofe")
 }
 
 // GetPost retrieves a single post by ID, recording a view.
@@ -179,7 +226,30 @@ func (h *PostHandler) GetPost(c *gin.Context) {
 		logger.Log.Warn("failed to record post view", "error", err, "post_id", postID)
 	}
 
+	attachTags([]model.Post{*post})
 	c.JSON(http.StatusOK, post)
+}
+
+// attachTags loads tags for every post in posts and stamps them onto the
+// matching struct. Failures are logged but never fail the parent request.
+func attachTags(posts []model.Post) {
+	if len(posts) == 0 {
+		return
+	}
+	ids := make([]int64, len(posts))
+	for i, p := range posts {
+		ids[i] = p.ID
+	}
+	tags, err := repository.LoadPostTagsFor(ids)
+	if err != nil {
+		logger.Log.Warn("failed to load post tags", "error", err)
+		return
+	}
+	for i := range posts {
+		if t, ok := tags[posts[i].ID]; ok {
+			posts[i].Tags = t
+		}
+	}
 }
 
 // requesterID returns the authenticated user id forwarded by the gateway, or 0
@@ -221,8 +291,9 @@ func parseTimeParam(v string) (*time.Time, error) {
 }
 
 // ListPosts retrieves paginated posts with optional advanced filters: a
-// content keyword (`q`), author (`author_id` or `author` name substring) and
-// an inclusive created-at time range (`from` / `to`). All combine with AND.
+// content keyword (`q`), author (`author_id` or `author` name substring), a
+// tag (`tag`) and an inclusive created-at time range (`from` / `to`). All
+// combine with AND.
 func (h *PostHandler) ListPosts(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
@@ -231,6 +302,7 @@ func (h *PostHandler) ListPosts(c *gin.Context) {
 	filter := repository.PostSearchFilter{
 		Query:      strings.TrimSpace(c.Query("q")),
 		AuthorName: strings.TrimSpace(c.Query("author")),
+		Tag:        strings.TrimPrefix(strings.ToLower(strings.TrimSpace(c.Query("tag"))), "#"),
 	}
 	if v := c.Query("author_id"); v != "" {
 		id, err := strconv.ParseInt(v, 10, 64)
@@ -260,11 +332,31 @@ func (h *PostHandler) ListPosts(c *gin.Context) {
 		return
 	}
 
+	// When a tag is supplied, narrow the result to the ids that carry it.
+	if filter.Tag != "" {
+		ids, terr := repository.ListPostsByTag(filter.Tag, 0)
+		if terr == nil {
+			allow := map[int64]struct{}{}
+			for _, id := range ids {
+				allow[id] = struct{}{}
+			}
+			filtered := posts[:0]
+			for _, p := range posts {
+				if _, ok := allow[p.ID]; ok {
+					filtered = append(filtered, p)
+				}
+			}
+			posts = filtered
+		}
+	}
+
+	attachTags(posts)
 	c.JSON(http.StatusOK, gin.H{
 		"posts": posts,
 		"page":  page,
 		"limit": limit,
 		"query": filter.Query,
+		"tag":   filter.Tag,
 	})
 }
 
@@ -286,6 +378,7 @@ func (h *PostHandler) ListPostsByUser(c *gin.Context) {
 		return
 	}
 
+	attachTags(posts)
 	c.JSON(http.StatusOK, gin.H{
 		"posts": posts,
 		"page":  page,
@@ -321,6 +414,7 @@ func (h *PostHandler) ListFavoritePosts(c *gin.Context) {
 		return
 	}
 
+	attachTags(posts)
 	c.JSON(http.StatusOK, gin.H{
 		"posts": posts,
 		"page":  page,
@@ -753,10 +847,14 @@ func (h *PostHandler) CreateReply(c *gin.Context) {
 }
 
 // notifyReplyCreated pushes a new-reply event to the post author and, for
-// nested replies, the author of the parent reply (excluding the replier).
+// nested replies, the author of the parent reply (excluding the replier). It
+// also drops durable inbox notifications for every recipient so they find
+// out about the reply even when they were not online.
 func (h *PostHandler) notifyReplyCreated(ctx context.Context, reply interface{}, postAuthorID int64) {
 	recipients := []int64{postAuthorID}
-	if r, ok := reply.(*model.PostReply); ok {
+	var r *model.PostReply
+	if cast, ok := reply.(*model.PostReply); ok {
+		r = cast
 		if r.ParentID != nil {
 			parent, err := h.replyRepo.GetByID(*r.ParentID)
 			if err == nil && parent != nil && parent.UserID != postAuthorID {
@@ -765,6 +863,22 @@ func (h *PostHandler) notifyReplyCreated(ctx context.Context, reply interface{},
 		}
 	}
 	events.Publish(ctx, events.ReplyCreated, recipients, reply)
+	if r == nil {
+		return
+	}
+	for _, uid := range recipients {
+		if uid == r.UserID {
+			continue
+		}
+		data, _ := json.Marshal(map[string]any{
+			"post_id":  r.PostID,
+			"reply_id": r.ID,
+			"author_id": r.UserID,
+		})
+		title := "新回复"
+		body := "你的帖子收到了新回复。"
+		_ = repository.CreateNotification(uid, "post.reply.created", title, body, data)
+	}
 }
 
 // ListReplies retrieves replies for a post.

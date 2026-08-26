@@ -31,16 +31,23 @@ type Claims struct {
 	UserID   int64  `json:"user_id"`
 	Email    string `json:"email"`
 	Username string `json:"username"`
-	Purpose  string `json:"purpose,omitempty"`
+	// NeedsRegistration marks an account that has logged in through OIDC but
+	// has not picked a username yet. The gateway refuses such tokens on most
+	// authenticated routes so unfinished sign-ups cannot poke at private data.
+	NeedsRegistration bool   `json:"nreg,omitempty"`
+	Purpose           string `json:"purpose,omitempty"`
 	jwt.RegisteredClaims
 }
 
-// GenerateToken creates a new JWT token for a user.
-func (tm *TokenManager) GenerateToken(userID int64, email, username string) (string, error) {
+// GenerateToken creates a new JWT token for a user. The needsRegistration flag
+// is embedded in the JWT so the gateway can lock down unfinished OAuth sign-ups
+// across every service without a database lookup.
+func (tm *TokenManager) GenerateToken(userID int64, email, username string, needsRegistration bool) (string, error) {
 	claims := &Claims{
-		UserID:   userID,
-		Email:    email,
-		Username: username,
+		UserID:            userID,
+		Email:             email,
+		Username:          username,
+		NeedsRegistration: needsRegistration,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(tm.expiry)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
@@ -51,6 +58,25 @@ func (tm *TokenManager) GenerateToken(userID int64, email, username string) (str
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString(tm.secretKey)
+}
+
+// TokenNeedsRegistration returns whether the given token belongs to an OAuth
+// user that has not finished registration yet.
+func (tm *TokenManager) TokenNeedsRegistration(tokenStr string) bool {
+	tk, err := jwt.ParseWithClaims(tokenStr, &Claims{}, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		return tm.secretKey, nil
+	})
+	if err != nil {
+		return false
+	}
+	claims, ok := tk.Claims.(*Claims)
+	if !ok {
+		return false
+	}
+	return claims.NeedsRegistration
 }
 
 // GeneratePurposeToken creates a short-lived JWT token for a specific purpose,
@@ -115,4 +141,25 @@ func ParseToken(tokenStr string, secretKey string) (int64, error) {
 	}
 
 	return 0, fmt.Errorf("invalid token claims")
+}
+
+// ParseTokenWithClaims is like ParseToken but also reports whether the
+// authenticated user still needs to finish registration. The gateway uses
+// this to forward the nreg flag to internal services so they can refuse
+// privileged operations until the user has picked a username.
+func ParseTokenWithClaims(tokenStr string, secretKey string) (int64, bool, error) {
+	token, err := jwt.ParseWithClaims(tokenStr, &Claims{}, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		return []byte(secretKey), nil
+	})
+	if err != nil {
+		return 0, false, err
+	}
+	claims, ok := token.Claims.(*Claims)
+	if !ok || !token.Valid {
+		return 0, false, fmt.Errorf("invalid token claims")
+	}
+	return claims.UserID, claims.NeedsRegistration, nil
 }

@@ -56,6 +56,12 @@ type OIDCConfig struct {
 	ClientSecret   string   `yaml:"client_secret"`
 	RedirectURL    string   `yaml:"redirect_url"`
 	AppRedirectURL string   `yaml:"app_redirect_url"`
+	// WebRedirectURL is where the OAuth callback sends the browser when the
+	// login started from the web client (flow=web). Tokens travel in the
+	// fragment-free query string of this URL; it must point at the frontend's
+	// callback route (e.g. https://app.example.com/#/oauth/callback). When
+	// empty, web logins fall back to the JSON token response.
+	WebRedirectURL string   `yaml:"web_redirect_url"`
 	Scopes         []string `yaml:"scopes"`
 }
 
@@ -124,6 +130,43 @@ type StorageConfig struct {
 	// InternalProxy serves files through the gateway instead of exposing the
 	// bucket host publicly; see InternalProxyConfig.
 	InternalProxy InternalProxyConfig `yaml:"internal_proxy"`
+	// Recycle controls the orphan-attachment sweeper; see RecycleConfig.
+	Recycle RecycleConfig `yaml:"recycle"`
+}
+
+// RecycleConfig configures automatic cleanup of uploaded files that were never
+// attached to a post, reply, or chat message.
+type RecycleConfig struct {
+	// Enabled turns the sweeper on. Off by default so existing deployments
+	// keep every uploaded byte until they opt in.
+	Enabled bool `yaml:"enabled"`
+	// Buckets lists the logical buckets the sweeper may clean. Empty means
+	// every bucket participates once Enabled is true.
+	Buckets []string `yaml:"buckets"`
+	// IntervalSeconds is how often the sweeper runs. Defaults to 300 (five
+	// minutes) when unset or non-positive.
+	IntervalSeconds int `yaml:"interval_seconds"`
+	// MinAgeSeconds is how old an unreferenced attachment must be before it
+	// may be recycled. Defaults to 3600 (one hour), which gives an upload a
+	// generous window to land in a post or message even if the client died
+	// right after uploading.
+	MinAgeSeconds int `yaml:"min_age_seconds"`
+}
+
+// RecycleInterval returns the sweep cadence with the default applied.
+func (c RecycleConfig) RecycleInterval() (seconds int) {
+	if c.IntervalSeconds <= 0 {
+		return 300
+	}
+	return c.IntervalSeconds
+}
+
+// RecycleMinAge returns the minimum age for recycling with the default applied.
+func (c RecycleConfig) RecycleMinAge() (seconds int) {
+	if c.MinAgeSeconds <= 0 {
+		return 3600
+	}
+	return c.MinAgeSeconds
 }
 
 // BucketList returns the configured storage buckets, synthesizing a single
