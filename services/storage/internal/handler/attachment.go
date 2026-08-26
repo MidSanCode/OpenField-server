@@ -236,6 +236,12 @@ func (h *AttachmentHandler) Upload(c *gin.Context) {
 
 // Get retrieves an attachment by ID.
 func (h *AttachmentHandler) Get(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid attachment ID"})
@@ -249,6 +255,13 @@ func (h *AttachmentHandler) Get(c *gin.Context) {
 		return
 	}
 	if att == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "attachment not found"})
+		return
+	}
+	// Metadata is visible to the owner, or to any authenticated user when the
+	// attachment is public (same rule as by-hash reuse). A 404 keeps foreign
+	// private attachments indistinguishable from nonexistent ones.
+	if att.UserID != userID && att.Visibility != "public" {
 		c.JSON(http.StatusNotFound, gin.H{"error": "attachment not found"})
 		return
 	}
