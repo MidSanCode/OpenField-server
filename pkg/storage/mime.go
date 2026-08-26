@@ -2,14 +2,25 @@ package storage
 
 import "strings"
 
-// allowedMimeTypes is the whitelist of content types users may upload.
+// Storage MIME policy.
 //
-// It doubles as a stored-XSS defense: active document types (HTML, XHTML, SVG,
-// JavaScript, ...) are deliberately excluded, so an object fetched straight
-// from the public bucket can never execute script in the serving origin.
-// Browsers sniff content only when the type is unknown; whitelisted static
-// media types keep them out of that path.
-var allowedMimeTypes = map[string]bool{
+// Two tiers:
+//
+//   - inlineSafe: whitelisted static media/document types that may be served
+//     inline from buckets without becoming a stored-XSS vector. Browsers never
+//     sniff script execution out of these.
+//   - forbidden: active document / script formats that must never be stored,
+//     because serving them (inline or downloaded same-origin) can execute code
+//     in a browser.
+//
+// Everything else (archives, office documents, design files, encrypted
+// containers such as OpenField's .ofe ciphertext, ...) is accepted and stored
+// under its declared type; the internal file proxy additionally forces
+// Content-Disposition: attachment for types that are not inline-safe so they
+// always download instead of rendering.
+
+// inlineSafeMimeTypes may be served directly to browsers.
+var inlineSafeMimeTypes = map[string]bool{
 	// Images
 	"image/jpeg": true,
 	"image/png":  true,
@@ -33,17 +44,33 @@ var allowedMimeTypes = map[string]bool{
 	"audio/flac":  true,
 
 	// Documents / data
-	"application/pdf":     true,
-	"application/json":    true,
-	"text/plain":          true,
-	"text/markdown":       true,
-	"application/zip":     true,
-	"application/gzip":    true,
-	"application/x-tar":   true,
-	"font/woff":           true,
-	"font/woff2":          true,
-	"font/ttf":            true,
-	"application/octet-stream": false, // explicit: binary blobs without a known type stay rejected
+	"application/pdf":   true,
+	"application/json":  true,
+	"text/plain":        true,
+	"text/markdown":     true,
+	"application/zip":   true,
+	"application/gzip":  true,
+	"application/x-tar": true,
+	"font/woff":         true,
+	"font/woff2":        true,
+	"font/ttf":          true,
+}
+
+// forbiddenMimeTypes are rejected outright: browsers execute or actively
+// render them, so storing them would create a stored-XSS / phishing vector.
+var forbiddenMimeTypes = map[string]bool{
+	"text/html":                true,
+	"application/xhtml+xml":    true,
+	"image/svg+xml":            true,
+	"text/xml":                 true,
+	"application/xml":          true,
+	"text/javascript":          true,
+	"application/javascript":   true,
+	"application/x-javascript": true,
+	"application/ecmascript":   true,
+	"application/x-ecmascript": true,
+	"application/wasm":         true,
+	"application/x-httpd-php":  true,
 }
 
 // NormalizeMimeType strips parameters ("; charset=...") and lowercases the
@@ -56,8 +83,17 @@ func NormalizeMimeType(contentType string) string {
 	return ct
 }
 
-// MimeAllowed reports whether the given content type may be stored. Unknown
-// and parameterized-but-unrecognized types are rejected.
+// MimeAllowed reports whether the given content type may be stored at all.
+// Active document/script formats are rejected; every inert binary or document
+// format passes, including application/octet-stream (unknown binaries and
+// encrypted containers).
 func MimeAllowed(contentType string) bool {
-	return allowedMimeTypes[NormalizeMimeType(contentType)]
+	return !forbiddenMimeTypes[NormalizeMimeType(contentType)]
+}
+
+// InlineSafeMime reports whether the type may be rendered inline by browsers.
+// Types outside this set are served as downloads (Content-Disposition:
+// attachment) through the internal file proxy.
+func InlineSafeMime(contentType string) bool {
+	return inlineSafeMimeTypes[NormalizeMimeType(contentType)]
 }

@@ -8,6 +8,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -153,8 +154,8 @@ func (h *AttachmentHandler) Upload(c *gin.Context) {
 			contentType = "application/octet-stream"
 		}
 	}
-	// Whitelist check: active document types (HTML/SVG/JS/...) are rejected so
-	// the public bucket can never serve executable content.
+	// Denylist check: active document / script formats are rejected so the
+	// bucket can never serve executable content; every inert type is accepted.
 	if !storage.MimeAllowed(contentType) {
 		c.JSON(http.StatusUnsupportedMediaType, gin.H{"error": "unsupported file type"})
 		return
@@ -363,6 +364,50 @@ func (h *AttachmentHandler) ListByUser(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"attachments": atts})
 }
 
+// Usage reports the current user's storage statistics: total count and size
+// plus a per-bucket breakdown, alongside the effective quota (base quota plus
+// the membership bonus on the default bucket).
+func (h *AttachmentHandler) Usage(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	total, buckets, err := h.attRepo.UsageByUser(userID)
+	if err != nil {
+		logger.Log.Error("failed to aggregate usage", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to aggregate usage"})
+		return
+	}
+
+	resp := gin.H{
+		"total_bytes": total.SizeBytes,
+		"total_count": total.Count,
+		"buckets":     buckets,
+	}
+
+	user, uerr := h.userRepo.GetByID(userID)
+	if uerr == nil && user != nil {
+		now := time.Now()
+		base := user.StorageQuota
+		bonus := int64(0)
+		effective := base
+		if bucket, ok := h.cfg.BucketByName(user.StorageBucket); ok && bucket.IsDefault {
+			bonus = model.MemberStorageBonusAt(user.MemberLevel, user.MemberExpiresAt, now)
+			effective += bonus
+		}
+		resp["quota"] = gin.H{
+			"base_bytes":      base,
+			"bonus_bytes":     bonus,
+			"effective_bytes": effective,
+			"used_bytes":      total.SizeBytes,
+		}
+	}
+
+	c.JSON(http.StatusOK, resp)
+}
+
 // parseByteRange parses a single-range Range header ("bytes=a-b", "bytes=a-",
 // "bytes=-suffix") against the object size. Returns (start, end, true) for an
 // applicable range or (0, 0, false) when absent/unparseable/unsatisfiable.
@@ -473,6 +518,13 @@ func (h *AttachmentHandler) ServeFile(c *gin.Context) {
 		contentType = "application/octet-stream"
 	}
 	c.Header("Content-Type", contentType)
+	// Types outside the inline-safe whitelist always download instead of
+	// rendering: inert binaries (archives, office documents, encrypted
+	// containers) must never be interpreted by the browser.
+	if !storage.InlineSafeMime(contentType) {
+		c.Header("Content-Disposition",
+			fmt.Sprintf("attachment; filename*=UTF-8''%s", url.PathEscape(key[strings.LastIndexByte(key, '/')+1:])))
+	}
 
 	// Single-range requests (media seeking): re-open with the parsed range.
 	// Any failure falls back to serving the full object.

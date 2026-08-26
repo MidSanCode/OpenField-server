@@ -33,6 +33,6 @@ func RegisterRoutes(r *gin.Engine, attHandler *AttachmentHandler) {
 				chunk.POST("/:upload_id/complete", attHandler.ChunkComplete)
 			}
 		}
-		api.GET("/storage/usage", attHandler.ListByUser)
+		api.GET("/storage/usage", attHandler.Usage)
 	}
 }

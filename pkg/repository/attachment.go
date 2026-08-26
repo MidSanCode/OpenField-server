@@ -181,6 +181,45 @@ func (r *AttachmentRepository) SumSizeByUser(userID int64) (int64, error) {
 	return total, nil
 }
 
+// BucketUsage aggregates attachment count and size per storage bucket for a
+// single user.
+type BucketUsage struct {
+	Bucket    string `json:"bucket"`
+	Count     int64  `json:"count"`
+	SizeBytes int64  `json:"size_bytes"`
+}
+
+// UsageByUser returns total count/size and a per-bucket breakdown of the
+// user's attachments, newest-first within each bucket. Backs the client's
+// storage statistics view.
+func (r *AttachmentRepository) UsageByUser(userID int64) (total BucketUsage, buckets []BucketUsage, err error) {
+	rows, err := database.DB.Query(
+		"SELECT COALESCE(bucket, ''), COUNT(*), COALESCE(SUM(size_bytes), 0) FROM attachments WHERE user_id = $1 GROUP BY bucket ORDER BY SUM(size_bytes) DESC",
+		userID,
+	)
+	if err != nil {
+		return total, nil, fmt.Errorf("failed to aggregate user usage: %w", err)
+	}
+	defer rows.Close()
+
+	buckets = make([]BucketUsage, 0)
+	for rows.Next() {
+		var b BucketUsage
+		if err := rows.Scan(&b.Bucket, &b.Count, &b.SizeBytes); err != nil {
+			return total, nil, fmt.Errorf("failed to scan bucket usage: %w", err)
+		}
+		buckets = append(buckets, b)
+	}
+	if err := rows.Err(); err != nil {
+		return total, nil, fmt.Errorf("rows error: %w", err)
+	}
+	for _, b := range buckets {
+		total.Count += b.Count
+		total.SizeBytes += b.SizeBytes
+	}
+	return total, buckets, nil
+}
+
 // ListByUser lists attachments uploaded by a user.
 func (r *AttachmentRepository) ListByUser(userID int64, limit int) ([]model.Attachment, error) {
 	if limit < 1 {
