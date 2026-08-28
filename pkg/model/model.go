@@ -117,8 +117,10 @@ type User struct {
 	// name and cannot log in interactively — they authenticate with a static
 	// API token issued to their owner.
 	IsBot bool `json:"is_bot"`
-	// BotOwnerID is the human user who created this bot (0 for humans).
-	BotOwnerID int64 `json:"bot_owner_id,omitempty"`
+	// BotOwnerID is the human user who created this bot (nil for humans and
+	// legacy rows that pre-date the bot accounts migration). The pointer type
+	// keeps Scan honest about NULL values rather than failing the whole login.
+	BotOwnerID *int64 `json:"bot_owner_id,omitempty"`
 	// DeletedAt is set when the user requested account deletion. While set,
 	// the account is hidden everywhere and login is refused. A purge job
 	// erases the row 30 days later.
