@@ -137,7 +137,7 @@ var versionedMigrations = []migration{
 		name:    "user-name-style-multicolor-purchases",
 		sql: `
 			ALTER TABLE users ADD COLUMN IF NOT EXISTS name_colors JSONB NOT NULL DEFAULT '[]'::jsonb;
-			ALTER TABLE users ADD COLUMN IF NOT EXISTS name_gradient_direction VARCHAR(20) NOT NULL DEFAULT 'left_right';
+			ALTER TABLE users ADD COLUMN IF NOT EXISTS name_gradient_direction VARCHAR(32) NOT NULL DEFAULT 'left_right';
 
 			CREATE TABLE IF NOT EXISTS membership_purchases (
 				id BIGSERIAL PRIMARY KEY,
@@ -437,6 +437,17 @@ var versionedMigrations = []migration{
 				PRIMARY KEY (post_id, tag)
 			);
 			CREATE INDEX IF NOT EXISTS idx_post_tags_tag ON post_tags(tag, post_id DESC);
+		`,
+	},
+	{
+		version: 19,
+		name:    "widen-name-gradient-direction",
+		sql: `
+			-- top_left_bottom_right (21 chars) and bottom_left_top_right (22
+			-- chars) overflowed the original VARCHAR(20) and broke the name
+			-- style update. Widen to VARCHAR(32) so the full set of gradient
+			-- orientations fits with margin for future additions.
+			ALTER TABLE users ALTER COLUMN name_gradient_direction TYPE VARCHAR(32);
 		`,
 	},
 }

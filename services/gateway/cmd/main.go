@@ -140,6 +140,18 @@ func main() {
 		{http.MethodPost, "/api/v1/auth/refresh", cfg.Services.Account, authPublic, ""},
 		{http.MethodPost, "/api/v1/auth/register", cfg.Services.Account, authRequired, ""},
 
+		// QR login handshake. The requester (no auth) creates a code and
+		// polls its status; the approver (already logged in on another device)
+		// calls /approve. The qr routes stay open for the requester even when
+		// they have no token yet.
+		{http.MethodPost, "/api/v1/auth/qr", cfg.Services.Account, authPublic, ""},
+		{http.MethodGet, "/api/v1/auth/qr/:code", cfg.Services.Account, authPublic, ""},
+		{http.MethodPost, "/api/v1/auth/qr/:code/approve", cfg.Services.Account, authRequired, ""},
+
+		// Authenticated session audit: list the user's devices and revoke any.
+		{http.MethodGet, "/api/v1/auth/sessions", cfg.Services.Account, authRequired, ""},
+		{http.MethodDelete, "/api/v1/auth/sessions/:id", cfg.Services.Account, authRequired, ""},
+
 		// ---- capabilities (public introspection) ----
 		{http.MethodGet, "/api/v1/capabilities", cfg.Services.Account, authPublic, ""},
 
@@ -155,6 +167,9 @@ func main() {
 		{http.MethodPut, "/api/v1/users/me/privacy", cfg.Services.Account, authRequired, ""},
 		{http.MethodPut, "/api/v1/users/me/name-style", cfg.Services.Account, authPermission, "account.profile.edit"},
 		{http.MethodPut, "/api/v1/users/me/storage-bucket", cfg.Services.Account, authRequired, ""},
+		{http.MethodPost, "/api/v1/users/me/heartbeat", cfg.Services.Account, authRequired, ""},
+		{http.MethodPost, "/api/v1/users/me/deletion-request", cfg.Services.Account, authRequired, ""},
+		{http.MethodDelete, "/api/v1/users/me/deletion-request", cfg.Services.Account, authRequired, ""},
 		{http.MethodGet, "/api/v1/users/storage-buckets", cfg.Services.Account, authRequired, ""},
 		{http.MethodPost, "/api/v1/users/me/pin", cfg.Services.Account, authRequired, ""},
 		{http.MethodPut, "/api/v1/users/me/pin", cfg.Services.Account, authRequired, ""},
@@ -181,6 +196,10 @@ func main() {
 		{http.MethodPut, "/api/v1/membership/auto-renew", cfg.Services.Account, authRequired, ""},
 		{http.MethodGet, "/api/v1/membership/purchases", cfg.Services.Account, authRequired, ""},
 
+		// ---- notifications inbox ----
+		{http.MethodGet, "/api/v1/notifications", cfg.Services.Account, authRequired, ""},
+		{http.MethodPost, "/api/v1/notifications/read", cfg.Services.Account, authRequired, ""},
+
 		// ---- storage ----
 		{http.MethodPost, "/api/v1/attachments", cfg.Services.Storage, authPermission, "storage.upload"},
 		{http.MethodGet, "/api/v1/attachments", cfg.Services.Storage, authPermission, "storage.list"},
@@ -188,6 +207,9 @@ func main() {
 		// browse public posts; the storage handler rejects anything that is
 		// not public for non-owners, so this stays safe.
 		{http.MethodGet, "/api/v1/attachments/:id", cfg.Services.Storage, authPublic, ""},
+		// Reuse an upload by content hash so the client can attach a file the
+		// cloud already has without re-sending it.
+		{http.MethodGet, "/api/v1/attachments/by-hash/:hash", cfg.Services.Storage, authRequired, ""},
 		{http.MethodDelete, "/api/v1/attachments/:id", cfg.Services.Storage, authPermission, "storage.delete"},
 		{http.MethodPost, "/api/v1/attachments/chunk/init", cfg.Services.Storage, authPermission, "storage.upload"},
 		{http.MethodGet, "/api/v1/attachments/chunk/:upload_id", cfg.Services.Storage, authPermission, "storage.upload"},
@@ -229,8 +251,10 @@ func main() {
 
 		// ---- tasks / experience / transfers ----
 		{http.MethodGet, "/api/v1/tasks", cfg.Services.Account, authRequired, ""},
+		{http.MethodGet, "/api/v1/tasks/daily-login/calendar", cfg.Services.Account, authRequired, ""},
 		{http.MethodPost, "/api/v1/tasks/daily-login/claim", cfg.Services.Account, authRequired, ""},
 		{http.MethodPost, "/api/v1/tasks/daily-login/makeup", cfg.Services.Account, authRequired, ""},
+		{http.MethodPost, "/api/v1/tasks/daily-login/makeup-date", cfg.Services.Account, authRequired, ""},
 		{http.MethodPost, "/api/v1/tasks/:code/claim", cfg.Services.Account, authRequired, ""},
 		{http.MethodGet, "/api/v1/exp/history", cfg.Services.Account, authRequired, ""},
 		{http.MethodGet, "/api/v1/transfers", cfg.Services.Account, authRequired, ""},
