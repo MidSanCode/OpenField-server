@@ -1,4 +1,4 @@
-﻿# Server configuration
+# Server configuration
 # Copy this file to config.local.yaml for local development
 # DO NOT commit config.local.yaml to version control
 
@@ -70,6 +70,13 @@ jwt:
 storage:
   # S3-compatible object storage (AWS S3, MinIO, RustFS, ...)
   endpoint: "localhost:9000"
+  # Optional private S3 endpoint used by the storage service for all
+  # server-side calls (upload, download, list, delete). When set, the
+  # storage service connects to S3 over this address for faster in-VPC
+  # traffic, while the public endpoint above is still used to derive
+  # default public file URLs. Leave empty to use the same endpoint for
+  # both server-side and client-side traffic.
+  internal_endpoint: ""
   access_key: "minioadmin"
   secret_key: "minioadmin"
   # Legacy single-bucket mode: when `buckets` is empty, the bucket below plus

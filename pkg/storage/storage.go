@@ -38,7 +38,7 @@ type Store struct {
 // endpoint or bucket is set, services start without object storage and all
 // upload endpoints return an error.
 func IsConfigured(cfg config.StorageConfig) bool {
-	if cfg.Endpoint == "" {
+	if cfg.Endpoint == "" && cfg.InternalEndpoint == "" {
 		return false
 	}
 	for _, b := range cfg.BucketList() {
@@ -97,8 +97,13 @@ func New(cfg config.StorageConfig) (*Manager, error) {
 		return m, nil
 	}
 
-	endpoint := normalizeEndpoint(cfg.Endpoint)
-	client, err := minio.New(endpoint, &minio.Options{
+	// Server-side S3 calls go through the internal endpoint so the storage
+	// service reaches S3 over a fast in-VPC address while the public
+	// Endpoint (used to derive default URLs) can keep pointing at a CDN or
+	// public hostname. InternalEndpoint falls back to Endpoint when unset.
+	internalEndpoint := normalizeEndpoint(cfg.ResolveInternalEndpoint())
+	publicEndpoint := cfg.Endpoint
+	client, err := minio.New(internalEndpoint, &minio.Options{
 		Creds:  credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
 		Secure: cfg.UseSSL,
 		Region: cfg.Region,
@@ -146,7 +151,18 @@ func New(cfg config.StorageConfig) (*Manager, error) {
 		}
 
 		m.stores[b.Name] = store
-		logger.Log.Info("storage initialized", "endpoint", cfg.Endpoint, "bucket", store.bucket, "logical", b.Name)
+		if cfg.InternalEndpoint != "" && cfg.InternalEndpoint != cfg.Endpoint {
+			logger.Log.Info("storage initialized",
+				"internal_endpoint", internalEndpoint,
+				"public_endpoint", publicEndpoint,
+				"bucket", store.bucket,
+				"logical", b.Name)
+		} else {
+			logger.Log.Info("storage initialized",
+				"endpoint", publicEndpoint,
+				"bucket", store.bucket,
+				"logical", b.Name)
+		}
 	}
 	return m, nil
 }

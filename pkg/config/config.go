@@ -114,7 +114,17 @@ type InternalProxyConfig struct {
 
 // StorageConfig holds S3-compatible object storage configuration.
 type StorageConfig struct {
+	// Endpoint is the S3 API endpoint exposed to clients and used to
+	// generate default public URLs when public_base_url is not set.
 	Endpoint       string               `yaml:"endpoint"`
+	// InternalEndpoint is an optional private S3 endpoint that the storage
+	// service uses for all server-side calls (upload, download, list,
+	// delete). It exists so a deployment can keep the public Endpoint
+	// pointing at a CDN / public hostname while the storage service itself
+	// reaches S3 over a fast in-VPC address (e.g. an internal load
+	// balancer or the cluster-local DNS of the S3-compatible backend).
+	// Falls back to Endpoint when empty.
+	InternalEndpoint string            `yaml:"internal_endpoint"`
 	AccessKey      string               `yaml:"access_key"`
 	SecretKey      string               `yaml:"secret_key"`
 	Bucket         string               `yaml:"bucket"`
@@ -132,6 +142,18 @@ type StorageConfig struct {
 	InternalProxy InternalProxyConfig `yaml:"internal_proxy"`
 	// Recycle controls the orphan-attachment sweeper; see RecycleConfig.
 	Recycle RecycleConfig `yaml:"recycle"`
+}
+
+// ResolveInternalEndpoint returns the S3 endpoint the storage service should
+// talk to for server-side operations. It prefers InternalEndpoint so an
+// in-VPC / private address can be used for upload acceleration, and falls
+// back to Endpoint when InternalEndpoint is unset (single-endpoint
+// deployments keep working unchanged).
+func (c StorageConfig) ResolveInternalEndpoint() string {
+	if c.InternalEndpoint != "" {
+		return c.InternalEndpoint
+	}
+	return c.Endpoint
 }
 
 // RecycleConfig configures automatic cleanup of uploaded files that were never
@@ -358,6 +380,9 @@ func (c *Config) overrideFromEnv() {
 	}
 	if v := os.Getenv("STORAGE_ENDPOINT"); v != "" {
 		c.Storage.Endpoint = v
+	}
+	if v := os.Getenv("STORAGE_INTERNAL_ENDPOINT"); v != "" {
+		c.Storage.InternalEndpoint = v
 	}
 	if v := os.Getenv("STORAGE_ACCESS_KEY"); v != "" {
 		c.Storage.AccessKey = v
