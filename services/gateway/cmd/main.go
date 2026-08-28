@@ -184,7 +184,10 @@ func main() {
 		// ---- storage ----
 		{http.MethodPost, "/api/v1/attachments", cfg.Services.Storage, authPermission, "storage.upload"},
 		{http.MethodGet, "/api/v1/attachments", cfg.Services.Storage, authPermission, "storage.list"},
-		{http.MethodGet, "/api/v1/attachments/:id", cfg.Services.Storage, authPermission, "storage.get"},
+		// Anonymous viewers still need to load attachment metadata when they
+		// browse public posts; the storage handler rejects anything that is
+		// not public for non-owners, so this stays safe.
+		{http.MethodGet, "/api/v1/attachments/:id", cfg.Services.Storage, authPublic, ""},
 		{http.MethodDelete, "/api/v1/attachments/:id", cfg.Services.Storage, authPermission, "storage.delete"},
 		{http.MethodPost, "/api/v1/attachments/chunk/init", cfg.Services.Storage, authPermission, "storage.upload"},
 		{http.MethodGet, "/api/v1/attachments/chunk/:upload_id", cfg.Services.Storage, authPermission, "storage.upload"},

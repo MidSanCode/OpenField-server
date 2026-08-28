@@ -235,13 +235,12 @@ func (h *AttachmentHandler) Upload(c *gin.Context) {
 	c.JSON(http.StatusCreated, att)
 }
 
-// Get retrieves an attachment by ID.
+// Get retrieves an attachment by ID. The route is exposed as authPublic at the
+// gateway so anonymous visitors can still load attachments that are part of a
+// public post; the visibility check below hides anything that is not marked
+// public and does not belong to the authenticated user.
 func (h *AttachmentHandler) Get(c *gin.Context) {
-	userID, ok := middleware.GetUserID(c)
-	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
-		return
-	}
+	userID, _ := middleware.GetUserID(c) // 0 for anonymous reads
 
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
@@ -259,9 +258,9 @@ func (h *AttachmentHandler) Get(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "attachment not found"})
 		return
 	}
-	// Metadata is visible to the owner, or to any authenticated user when the
-	// attachment is public (same rule as by-hash reuse). A 404 keeps foreign
-	// private attachments indistinguishable from nonexistent ones.
+	// Metadata is visible to the owner, or to anyone when the attachment is
+	// public. A 404 keeps foreign private attachments indistinguishable from
+	// nonexistent ones, including for anonymous callers.
 	if att.UserID != userID && att.Visibility != "public" {
 		c.JSON(http.StatusNotFound, gin.H{"error": "attachment not found"})
 		return
