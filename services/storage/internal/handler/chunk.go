@@ -276,6 +276,24 @@ func (h *AttachmentHandler) ChunkComplete(c *gin.Context) {
 		}
 	}
 	if len(missing) > 0 {
+		// Log which chunks did make it across alongside the missing ones, so
+		// a recurring pattern (e.g. "always the first N") is visible in the
+		// server logs without having to repro the failed upload on the
+		// client. uploadedOnly is computed as existing \ missing but really
+		// equals existing keys when the loop above is the only producer.
+		uploaded := make([]int, 0, len(existing))
+		for idx := range existing {
+			uploaded = append(uploaded, idx)
+		}
+		logger.Log.Warn(
+			"chunked upload complete rejected: missing chunks",
+			"upload_id", uploadID,
+			"user_id", userID,
+			"bucket", session.Bucket,
+			"total_chunks", req.TotalChunks,
+			"uploaded", uploaded,
+			"missing", missing,
+		)
 		c.JSON(http.StatusConflict, gin.H{"error": "missing chunks", "missing": missing})
 		return
 	}
