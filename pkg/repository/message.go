@@ -38,10 +38,15 @@ func parseMentions(data []byte) ([]int64, error) {
 // Create inserts a new message with optional attachments and returns it with sender info.
 // [mentions] is the list of explicitly mentioned user IDs, plus -1 when
 // @everyone is used; an empty/nil slice means no mentions. When [checkID] > 0
-// the message carries that check (kind = 'check').
-func (r *MessageRepository) Create(conversationID, senderID int64, content string, replyToID *int64, attachmentIDs []int64, mentions []int64, checkID int64) (*model.Message, error) {
+// the message carries that check (kind = 'check'). [burnSeconds] > 0 arms the
+// message for burn-after-read; the countdown starts on the first recipient
+// read (see MarkBurnRead).
+func (r *MessageRepository) Create(conversationID, senderID int64, content string, replyToID *int64, attachmentIDs []int64, mentions []int64, checkID int64, burnSeconds int) (*model.Message, error) {
 	if mentions == nil {
 		mentions = []int64{}
+	}
+	if burnSeconds < 0 {
+		burnSeconds = 0
 	}
 	kind := "text"
 	if checkID > 0 {
@@ -56,11 +61,11 @@ func (r *MessageRepository) Create(conversationID, senderID int64, content strin
 	}
 	msg := &model.Message{}
 	if err := database.DB.QueryRow(
-		`INSERT INTO messages (conversation_id, sender_id, kind, content, reply_to_id, mentions, check_id)
-		 VALUES ($1, $2, $3, $4, $5, $6::jsonb, NULLIF($7, 0))
-		 RETURNING id, conversation_id, sender_id, content, reply_to_id, edited_at, deleted_at, created_at`,
-		conversationID, senderID, kind, content, replyToID, string(mentionsJSON), checkID,
-	).Scan(&msg.ID, &msg.ConversationID, &msg.SenderID, &msg.Content, &msg.ReplyToID, &msg.EditedAt, &msg.DeletedAt, &msg.CreatedAt); err != nil {
+		`INSERT INTO messages (conversation_id, sender_id, kind, content, reply_to_id, mentions, check_id, burn_seconds)
+		 VALUES ($1, $2, $3, $4, $5, $6::jsonb, NULLIF($7, 0), $8)
+		 RETURNING id, conversation_id, sender_id, content, reply_to_id, edited_at, deleted_at, created_at, burn_seconds, burn_at`,
+		conversationID, senderID, kind, content, replyToID, string(mentionsJSON), checkID, burnSeconds,
+	).Scan(&msg.ID, &msg.ConversationID, &msg.SenderID, &msg.Content, &msg.ReplyToID, &msg.EditedAt, &msg.DeletedAt, &msg.CreatedAt, &msg.BurnSeconds, &msg.BurnAt); err != nil {
 		return nil, fmt.Errorf("failed to create message: %w", err)
 	}
 	msg.Mentions = append([]int64(nil), mentions...)
@@ -100,7 +105,7 @@ func (r *MessageRepository) ListByConversation(conversationID int64, beforeID in
 	if limit < 1 || limit > 100 {
 		limit = 50
 	}
-	query := `SELECT m.id, m.conversation_id, m.sender_id, m.kind, COALESCE(m.check_id, 0) AS check_id, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at, m.mentions,
+	query := `SELECT m.id, m.conversation_id, m.sender_id, m.kind, COALESCE(m.check_id, 0) AS check_id, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at, m.mentions, m.burn_seconds, m.burn_at,
 	                 COALESCE(NULLIF(u.nickname, ''), u.username) AS sender_name, u.avatar_url, u.is_verified`+authorMemberCols+`
 	          FROM messages m
 	          JOIN users u ON m.sender_id = u.id
@@ -123,7 +128,7 @@ func (r *MessageRepository) ListByConversation(conversationID int64, beforeID in
 	for rows.Next() {
 		var m model.Message
 		var mentionsData []byte
-		if err := rows.Scan(&m.ID, &m.ConversationID, &m.SenderID, &m.Kind, &m.CheckID, &m.Content, &m.ReplyToID, &m.EditedAt, &m.DeletedAt, &m.CreatedAt, &mentionsData, &m.SenderName, &m.SenderAvatar, &m.SenderVerified, &m.SenderIsBot, &m.SenderMemberLevel, &m.SenderMemberExpiresAt, &m.SenderNameColor, &m.SenderNameColorTo, &m.SenderNameDynamic, &m.SenderNameColors, &m.SenderNameGradientDirection, &m.SenderAvatarFrame); err != nil {
+		if err := rows.Scan(&m.ID, &m.ConversationID, &m.SenderID, &m.Kind, &m.CheckID, &m.Content, &m.ReplyToID, &m.EditedAt, &m.DeletedAt, &m.CreatedAt, &mentionsData, &m.BurnSeconds, &m.BurnAt, &m.SenderName, &m.SenderAvatar, &m.SenderVerified, &m.SenderIsBot, &m.SenderMemberLevel, &m.SenderMemberExpiresAt, &m.SenderNameColor, &m.SenderNameColorTo, &m.SenderNameDynamic, &m.SenderNameColors, &m.SenderNameGradientDirection, &m.SenderAvatarFrame); err != nil {
 			return nil, fmt.Errorf("failed to scan message: %w", err)
 		}
 		applyMemberStatus(&m.SenderMemberLevel, &m.SenderMemberExpiresAt, &m.SenderMemberActive)
@@ -173,7 +178,7 @@ func (r *MessageRepository) Search(conversationID int64, f MessageSearchFilter, 
 	if limit < 1 || limit > 100 {
 		limit = 50
 	}
-	query := `SELECT m.id, m.conversation_id, m.sender_id, m.kind, COALESCE(m.check_id, 0) AS check_id, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at, m.mentions,
+	query := `SELECT m.id, m.conversation_id, m.sender_id, m.kind, COALESCE(m.check_id, 0) AS check_id, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at, m.mentions, m.burn_seconds, m.burn_at,
 	                 COALESCE(NULLIF(u.nickname, ''), u.username) AS sender_name, u.avatar_url, u.is_verified`+authorMemberCols+`
 	          FROM messages m
 	          JOIN users u ON m.sender_id = u.id
@@ -216,7 +221,7 @@ func (r *MessageRepository) Search(conversationID int64, f MessageSearchFilter, 
 	for rows.Next() {
 		var m model.Message
 		var mentionsData []byte
-		if err := rows.Scan(&m.ID, &m.ConversationID, &m.SenderID, &m.Kind, &m.CheckID, &m.Content, &m.ReplyToID, &m.EditedAt, &m.DeletedAt, &m.CreatedAt, &mentionsData, &m.SenderName, &m.SenderAvatar, &m.SenderVerified, &m.SenderIsBot, &m.SenderMemberLevel, &m.SenderMemberExpiresAt, &m.SenderNameColor, &m.SenderNameColorTo, &m.SenderNameDynamic, &m.SenderNameColors, &m.SenderNameGradientDirection, &m.SenderAvatarFrame); err != nil {
+		if err := rows.Scan(&m.ID, &m.ConversationID, &m.SenderID, &m.Kind, &m.CheckID, &m.Content, &m.ReplyToID, &m.EditedAt, &m.DeletedAt, &m.CreatedAt, &mentionsData, &m.BurnSeconds, &m.BurnAt, &m.SenderName, &m.SenderAvatar, &m.SenderVerified, &m.SenderIsBot, &m.SenderMemberLevel, &m.SenderMemberExpiresAt, &m.SenderNameColor, &m.SenderNameColorTo, &m.SenderNameDynamic, &m.SenderNameColors, &m.SenderNameGradientDirection, &m.SenderAvatarFrame); err != nil {
 			return nil, fmt.Errorf("failed to scan message: %w", err)
 		}
 		applyMemberStatus(&m.SenderMemberLevel, &m.SenderMemberExpiresAt, &m.SenderMemberActive)
@@ -245,13 +250,13 @@ func (r *MessageRepository) getWithSender(id int64) (*model.Message, error) {
 	msg := &model.Message{}
 	var mentionsData []byte
 	err := database.DB.QueryRow(
-		`SELECT m.id, m.conversation_id, m.sender_id, m.kind, COALESCE(m.check_id, 0) AS check_id, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at, m.mentions,
+		`SELECT m.id, m.conversation_id, m.sender_id, m.kind, COALESCE(m.check_id, 0) AS check_id, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at, m.mentions, m.burn_seconds, m.burn_at,
 		        COALESCE(NULLIF(u.nickname, ''), u.username) AS sender_name, u.avatar_url, u.is_verified`+authorMemberCols+`
 		 FROM messages m
 		 JOIN users u ON m.sender_id = u.id
 		 WHERE m.id = $1`,
 		id,
-	).Scan(&msg.ID, &msg.ConversationID, &msg.SenderID, &msg.Kind, &msg.CheckID, &msg.Content, &msg.ReplyToID, &msg.EditedAt, &msg.DeletedAt, &msg.CreatedAt, &mentionsData, &msg.SenderName, &msg.SenderAvatar, &msg.SenderVerified, &msg.SenderIsBot, &msg.SenderMemberLevel, &msg.SenderMemberExpiresAt, &msg.SenderNameColor, &msg.SenderNameColorTo, &msg.SenderNameDynamic, &msg.SenderNameColors, &msg.SenderNameGradientDirection, &msg.SenderAvatarFrame)
+	).Scan(&msg.ID, &msg.ConversationID, &msg.SenderID, &msg.Kind, &msg.CheckID, &msg.Content, &msg.ReplyToID, &msg.EditedAt, &msg.DeletedAt, &msg.CreatedAt, &mentionsData, &msg.BurnSeconds, &msg.BurnAt, &msg.SenderName, &msg.SenderAvatar, &msg.SenderVerified, &msg.SenderIsBot, &msg.SenderMemberLevel, &msg.SenderMemberExpiresAt, &msg.SenderNameColor, &msg.SenderNameColorTo, &msg.SenderNameDynamic, &msg.SenderNameColors, &msg.SenderNameGradientDirection, &msg.SenderAvatarFrame)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get message: %w", err)
 	}
@@ -277,10 +282,10 @@ func (r *MessageRepository) getWithSender(id int64) (*model.Message, error) {
 func (r *MessageRepository) GetByID(id int64) (*model.Message, error) {
 	msg := &model.Message{}
 	err := database.DB.QueryRow(
-		`SELECT id, conversation_id, sender_id, kind, content, reply_to_id, edited_at, deleted_at, created_at
+		`SELECT id, conversation_id, sender_id, kind, content, reply_to_id, edited_at, deleted_at, created_at, burn_seconds, burn_at
 		 FROM messages WHERE id = $1`,
 		id,
-	).Scan(&msg.ID, &msg.ConversationID, &msg.SenderID, &msg.Kind, &msg.Content, &msg.ReplyToID, &msg.EditedAt, &msg.DeletedAt, &msg.CreatedAt)
+	).Scan(&msg.ID, &msg.ConversationID, &msg.SenderID, &msg.Kind, &msg.Content, &msg.ReplyToID, &msg.EditedAt, &msg.DeletedAt, &msg.CreatedAt, &msg.BurnSeconds, &msg.BurnAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -371,6 +376,78 @@ func (r *MessageRepository) Delete(id, userID int64) error {
 		return sql.ErrNoRows
 	}
 	return nil
+}
+
+// MarkBurnRead stamps burn_at the first time a reader (never the sender) opens
+// a burn-armed message and returns the message with the fresh burn_at. The
+// stamp is idempotent: once armed, later reads return the current state
+// untouched. [stamped] reports whether this call armed the countdown (used by
+// the handler to decide whether to push an updated event). A nil message
+// means the id does not exist.
+func (r *MessageRepository) MarkBurnRead(messageID, readerID int64) (msg *model.Message, stamped bool, err error) {
+	current, err := r.GetByID(messageID)
+	if err != nil {
+		return nil, false, err
+	}
+	if current == nil {
+		return nil, false, nil
+	}
+	if current.DeletedAt != nil || current.BurnSeconds <= 0 || current.BurnAt != nil || current.SenderID == readerID {
+		// Nothing to arm (or already armed). Still return the authoritative
+		// state so the reader's client can render any existing countdown.
+		full, err := r.getWithSender(messageID)
+		return full, false, err
+	}
+	var burnAt time.Time
+	err = database.DB.QueryRow(
+		`UPDATE messages SET burn_at = NOW() + (burn_seconds * INTERVAL '1 second')
+		 WHERE id = $1 AND burn_seconds > 0 AND burn_at IS NULL AND deleted_at IS NULL AND sender_id <> $2
+		 RETURNING burn_at`,
+		messageID, readerID,
+	).Scan(&burnAt)
+	if err == sql.ErrNoRows {
+		// Lost a race with another reader (or the row stopped qualifying).
+		// The conditional UPDATE is the source of truth; reflect its state.
+		full, err := r.getWithSender(messageID)
+		return full, false, err
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to stamp burn time: %w", err)
+	}
+	full, err := r.getWithSender(messageID)
+	if err != nil {
+		return nil, false, err
+	}
+	return full, true, nil
+}
+
+// SweepBurned soft-deletes every burn-armed message whose countdown has
+// expired and returns the affected rows so the caller can push deletion
+// events. deleted_at is stamped with the stored burn_at (not NOW) so clients
+// render a deletion timestamp consistent with the countdown they saw.
+func (r *MessageRepository) SweepBurned() ([]model.Message, error) {
+	rows, err := database.DB.Query(
+		`UPDATE messages SET deleted_at = burn_at
+		 WHERE burn_at IS NOT NULL AND deleted_at IS NULL AND burn_at <= NOW()
+		 RETURNING id, conversation_id, sender_id, kind, deleted_at`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to sweep burned messages: %w", err)
+	}
+	defer rows.Close()
+
+	swept := make([]model.Message, 0)
+	for rows.Next() {
+		var m model.Message
+		if err := rows.Scan(&m.ID, &m.ConversationID, &m.SenderID, &m.Kind, &m.DeletedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan swept message: %w", err)
+		}
+		swept = append(swept, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows error: %w", err)
+	}
+	return swept, nil
 }
 
 // populateReplyPreview fills ReplyToName/ReplyToContent for a single message

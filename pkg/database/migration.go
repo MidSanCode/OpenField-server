@@ -655,6 +655,16 @@ var baselineStatements = []string{
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_message_attachments_attachment ON message_attachments(attachment_id)`,
 
+	// ---- chat: burn-after-read messages ----
+	// burn_seconds > 0 arms a message for burn-after-read. burn_at is stamped
+	// the first time a recipient reads it (MarkBurnRead); the chat service
+	// sweeper soft-deletes messages once burn_at has passed. burn_at stays
+	// NULL for messages nobody has read yet, so senders keep their copy until
+	// someone actually opens the conversation.
+	`ALTER TABLE messages ADD COLUMN IF NOT EXISTS burn_seconds INT NOT NULL DEFAULT 0`,
+	`ALTER TABLE messages ADD COLUMN IF NOT EXISTS burn_at TIMESTAMPTZ`,
+	`CREATE INDEX IF NOT EXISTS idx_messages_burn_due ON messages(burn_at) WHERE burn_at IS NOT NULL AND deleted_at IS NULL`,
+
 	`CREATE TABLE IF NOT EXISTS refresh_tokens (
 		id BIGSERIAL PRIMARY KEY,
 		user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

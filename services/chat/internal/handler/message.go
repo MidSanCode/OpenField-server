@@ -186,9 +186,14 @@ func (h *MessageHandler) Send(c *gin.Context) {
 		AttachmentIDs []int64 `json:"attachment_ids"`
 		Mentions      []int64 `json:"mentions"`
 		CheckID       int64   `json:"check_id"`
+		BurnSeconds   int     `json:"burn_seconds"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+	if !burnSecondsAllowed(req.BurnSeconds) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid burn_seconds (allowed: 5, 10, 30, 60, 300)"})
 		return
 	}
 	if req.Content == "" && len(req.AttachmentIDs) == 0 && req.CheckID <= 0 {
@@ -257,7 +262,7 @@ func (h *MessageHandler) Send(c *gin.Context) {
 		return
 	}
 
-	msg, err := h.msgRepo.Create(convID, userID, req.Content, req.ReplyToID, req.AttachmentIDs, req.Mentions, req.CheckID)
+	msg, err := h.msgRepo.Create(convID, userID, req.Content, req.ReplyToID, req.AttachmentIDs, req.Mentions, req.CheckID, req.BurnSeconds)
 	if err != nil {
 		logger.Log.Error("failed to send message", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to send message"})
@@ -267,6 +272,89 @@ func (h *MessageHandler) Send(c *gin.Context) {
 	h.publishMessageEvent(c.Request.Context(), events.ChatMessageCreated, convID, msg)
 
 	c.JSON(http.StatusCreated, msg)
+}
+
+// burnSecondsAllowed reports whether a burn-after-read countdown (in seconds)
+// may be requested. 0 disables burning; the rest are the client-facing
+// presets. Keeping the set closed stops clients from arming absurd timers
+// (e.g. 1s flash-burns nobody can read, or week-long pseudo-persistence).
+func burnSecondsAllowed(v int) bool {
+	switch v {
+	case 0, 5, 10, 30, 60, 300:
+		return true
+	}
+	return false
+}
+
+// MarkBurnRead arms the burn-after-read countdown of a single message on the
+// first read by a conversation member other than the sender. Idempotent:
+// re-reads return the current state without re-arming. The freshly stamped
+// burn_at is pushed to every member so senders see the countdown start.
+func (h *MessageHandler) MarkBurnRead(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	convID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid conversation ID"})
+		return
+	}
+	msgID, err := strconv.ParseInt(c.Param("message_id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid message ID"})
+		return
+	}
+
+	isMember, err := h.convRepo.IsMember(convID, userID)
+	if err != nil {
+		logger.Log.Error("failed to check membership", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to mark message read"})
+		return
+	}
+	if !isMember {
+		c.JSON(http.StatusForbidden, gin.H{"error": "you are not a member of this conversation"})
+		return
+	}
+
+	msg, stamped, err := h.msgRepo.MarkBurnRead(msgID, userID)
+	if err != nil {
+		logger.Log.Error("failed to mark message read", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to mark message read"})
+		return
+	}
+	if msg == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "message not found"})
+		return
+	}
+	if stamped {
+		h.publishMessageEvent(c.Request.Context(), events.ChatMessageUpdated, msg.ConversationID, msg)
+	}
+
+	c.JSON(http.StatusOK, msg)
+}
+
+// StartBurnSweeper runs a background loop that soft-deletes burn-after-read
+// messages whose countdown has expired and pushes deletion events so every
+// member's client drops the bubble immediately — including the sender's,
+// which would otherwise keep a copy forever.
+func (h *MessageHandler) StartBurnSweeper(interval time.Duration) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for range ticker.C {
+			swept, err := h.msgRepo.SweepBurned()
+			if err != nil {
+				logger.Log.Error("burn sweeper failed", "error", err)
+				continue
+			}
+			for i := range swept {
+				h.publishMessageEvent(context.Background(), events.ChatMessageDeleted, swept[i].ConversationID, swept[i])
+			}
+		}
+	}()
 }
 
 // everyoneSentinel is the user id stored in [model.Message.Mentions] to mark

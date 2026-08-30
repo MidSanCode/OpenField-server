@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"os"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/openfield/server/pkg/config"
@@ -52,6 +53,10 @@ func main() {
 	r.GET("/healthz", health.Handler(nil))
 
 	handler.RegisterRoutes(r, convHandler, consentHandler, msgHandler)
+
+	// Burn-after-read sweeper: soft-deletes armed messages once their
+	// countdown expires and pushes chat.message.deleted to every member.
+	msgHandler.StartBurnSweeper(2 * time.Second)
 
 	addr := "127.0.0.1:" + cfg.ServicePort("CHAT")
 	logger.Log.Info("chat service starting", "address", addr)

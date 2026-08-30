@@ -362,6 +362,12 @@ type Message struct {
 	// Stored server-side so notification logic doesn't have to re-parse the
 	// content on every push.
 	Mentions []int64 `json:"mentions,omitempty"`
+	// Burn-after-read: BurnSeconds > 0 arms the message for self-destruction
+	// after it has been read. BurnAt is stamped the first time a recipient
+	// (never the sender) reads the message; clients render a countdown from
+	// it and the chat service sweeper soft-deletes the row once it passes.
+	BurnSeconds int        `json:"burn_seconds,omitempty"`
+	BurnAt      *time.Time `json:"burn_at,omitempty"`
 }
 
 // E2EEKeyEnvelope is a group key encrypted to a single member's public key.
