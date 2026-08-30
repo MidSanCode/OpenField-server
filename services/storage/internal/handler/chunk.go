@@ -228,9 +228,12 @@ func (h *AttachmentHandler) ChunkStatus(c *gin.Context) {
 		return
 	}
 	store := h.store.For(session.Bucket)
-	existing, err := store.ListChunks(c.Request.Context(), uploadID)
+	// Stat per expected key instead of listing the prefix: RustFS prefix
+	// listings omit freshly written objects, which made resume status lie
+	// about which chunks had landed.
+	existing, err := store.StatChunks(c.Request.Context(), uploadID, session.TotalChunks)
 	if err != nil {
-		logger.Log.Error("failed to list chunks", "error", err)
+		logger.Log.Error("failed to stat chunks", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list chunks"})
 		return
 	}
@@ -281,9 +284,15 @@ func (h *AttachmentHandler) ChunkComplete(c *gin.Context) {
 		return
 	}
 
-	existing, err := store.ListChunks(c.Request.Context(), uploadID)
+	// Verify chunk presence with per-key StatObject, not a prefix listing.
+	// RustFS (the configured backend) does not return freshly PutObject-ed
+	// objects from prefix listings, so the listing-based check reported all
+	// chunks missing while the client had a 200 for every PUT — the root
+	// cause of the recurring "100% uploaded but missing chunks" reports.
+	// req.TotalChunks was already validated to equal session.TotalChunks.
+	existing, err := store.StatChunks(c.Request.Context(), uploadID, req.TotalChunks)
 	if err != nil {
-		logger.Log.Error("failed to list chunks", "error", err)
+		logger.Log.Error("failed to stat chunks", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list chunks"})
 		return
 	}

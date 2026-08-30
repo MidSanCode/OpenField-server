@@ -313,9 +313,12 @@ func (s *Store) UploadChunk(ctx context.Context, uploadID string, index int, rea
 	return nil
 }
 
-// ListChunks returns the set of chunk indexes already uploaded for an upload.
-// The result is a list of contiguous indexes 1..N, where N is the number of
-// contiguous chunks present starting from chunk 1.
+// ListChunks returns the set of chunk indexes already uploaded for an upload
+// by listing the chunk prefix. NOTE: listing-based discovery is unreliable
+// across S3-compatible backends (RustFS has been observed to omit objects
+// under a multi-segment prefix right after they were PutObject-ed), so
+// callers that need a definitive "which chunks exist?" answer must use
+// StatChunks instead. Kept only as a best-effort debugging aid.
 func (s *Store) ListChunks(ctx context.Context, uploadID string) (map[int]int64, error) {
 	prefix := fmt.Sprintf("chunks/%s/", uploadID)
 	existing := make(map[int]int64)
@@ -329,6 +332,31 @@ func (s *Store) ListChunks(ctx context.Context, uploadID string) (map[int]int64,
 		if _, err := fmt.Sscanf(obj.Key, prefix+"%08d", &index); err == nil {
 			existing[index] = obj.Size
 		}
+	}
+	return existing, nil
+}
+
+// StatChunks returns the set of chunk indexes already present for an upload
+// by stat-ing each expected chunk key (chunks/<uploadID>/<index>) directly.
+//
+// This intentionally avoids ListObjects: S3-compatible backends disagree on
+// prefix+delimiter listing semantics, and RustFS (the current backend) omits
+// freshly written objects from prefix listings, which made ChunkComplete
+// report every chunk as missing while the client had received a 200 for each
+// PUT. The key layout is fully owned by ChunkKey, so stat-ing each known key
+// is deterministic — there is nothing to enumerate or parse.
+func (s *Store) StatChunks(ctx context.Context, uploadID string, totalChunks int) (map[int]int64, error) {
+	existing := make(map[int]int64, totalChunks)
+	for i := 1; i <= totalChunks; i++ {
+		info, err := s.client.StatObject(ctx, s.bucket, ChunkKey(uploadID, i), minio.StatObjectOptions{})
+		if err != nil {
+			resp := minio.ToErrorResponse(err)
+			if resp.Code == "NoSuchKey" || resp.Code == "NotFound" || resp.StatusCode == 404 {
+				continue
+			}
+			return nil, fmt.Errorf("failed to stat chunk %d: %w", i, err)
+		}
+		existing[i] = info.Size
 	}
 	return existing, nil
 }
