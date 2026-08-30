@@ -159,6 +159,15 @@ func (h *AttachmentHandler) ChunkUpload(c *gin.Context) {
 	}
 	index, err := strconv.Atoi(c.Param("index"))
 	if err != nil || index < 1 || index > session.TotalChunks {
+		logger.Log.Warn(
+			"chunked upload rejected: invalid chunk index",
+			"upload_id", uploadID,
+			"user_id", userID,
+			"index_param", c.Param("index"),
+			"index_parsed", index,
+			"session_total_chunks", session.TotalChunks,
+			"err", err,
+		)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid chunk index"})
 		return
 	}
@@ -167,6 +176,15 @@ func (h *AttachmentHandler) ChunkUpload(c *gin.Context) {
 
 	file, _, err := c.Request.FormFile("chunk")
 	if err != nil {
+		logger.Log.Warn(
+			"chunked upload rejected: missing chunk field",
+			"upload_id", uploadID,
+			"user_id", userID,
+			"index", index,
+			"content_length", c.Request.ContentLength,
+			"content_type", c.Request.Header.Get("Content-Type"),
+			"err", err,
+		)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "missing chunk field"})
 		return
 	}
