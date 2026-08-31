@@ -193,7 +193,7 @@ func (h *MessageHandler) Send(c *gin.Context) {
 		return
 	}
 	if !burnSecondsAllowed(req.BurnSeconds) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid burn_seconds (allowed: 5, 10, 30, 60, 300)"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid burn_seconds (allowed: 0, or 5..86400)"})
 		return
 	}
 	if req.Content == "" && len(req.AttachmentIDs) == 0 && req.CheckID <= 0 {
@@ -275,15 +275,15 @@ func (h *MessageHandler) Send(c *gin.Context) {
 }
 
 // burnSecondsAllowed reports whether a burn-after-read countdown (in seconds)
-// may be requested. 0 disables burning; the rest are the client-facing
-// presets. Keeping the set closed stops clients from arming absurd timers
-// (e.g. 1s flash-burns nobody can read, or week-long pseudo-persistence).
+// may be requested. 0 disables burning; anything else is a custom countdown.
+// The bounds stop clients from arming absurd timers (e.g. 1s flash-burns
+// nobody can read, or week-long pseudo-persistence) while still allowing the
+// picker's arbitrary custom values, not just the old fixed presets.
 func burnSecondsAllowed(v int) bool {
-	switch v {
-	case 0, 5, 10, 30, 60, 300:
+	if v == 0 {
 		return true
 	}
-	return false
+	return v >= 5 && v <= 86400
 }
 
 // MarkBurnRead arms the burn-after-read countdown of a single message on the

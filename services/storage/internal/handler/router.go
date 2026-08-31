@@ -23,6 +23,7 @@ func RegisterRoutes(r *gin.Engine, attHandler *AttachmentHandler) {
 			att.GET("", attHandler.ListByUser)
 			att.GET("/:id", attHandler.Get)
 			att.GET("/by-hash/:hash", attHandler.Reuse)
+			att.POST("/:id/burn-arm", attHandler.ArmAttachmentBurn)
 			att.DELETE("/:id", attHandler.Delete)
 
 			chunk := att.Group("/chunk")

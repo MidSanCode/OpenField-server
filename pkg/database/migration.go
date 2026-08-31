@@ -463,6 +463,18 @@ var versionedMigrations = []migration{
 			CREATE INDEX IF NOT EXISTS idx_messages_burn_due ON messages(burn_at) WHERE burn_at IS NOT NULL AND deleted_at IS NULL;
 		`,
 	},
+	{
+		version: 21,
+		name:    "attachment-burn-after-view",
+		sql: `
+			-- Burn-after-view for attachments: armed the first time a user
+			-- other than the uploader views an attachment that belongs to a
+			-- burn-armed message; the storage sweeper deletes the object and
+			-- the row once burn_at passes.
+			ALTER TABLE attachments ADD COLUMN IF NOT EXISTS burn_at TIMESTAMPTZ;
+			CREATE INDEX IF NOT EXISTS idx_attachments_burn_due ON attachments(burn_at) WHERE burn_at IS NOT NULL;
+		`,
+	},
 }
 
 // latestMigrationVersion returns the newest schema version the code knows

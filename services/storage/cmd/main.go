@@ -63,6 +63,19 @@ func main() {
 		}
 	}()
 
+	// Background sweeper: delete attachments whose burn-after-view deadline
+	// has passed (object + thumbnail + row). 15s cadence keeps the delay
+	// between an armed countdown expiring and its files disappearing short.
+	go func() {
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			attHandler.SweepBurnedAttachments(ctx)
+			cancel()
+		}
+	}()
+
 	r := gin.New()
 	r.Use(middleware.Recovery())
 	r.Use(logger.GinLogger())

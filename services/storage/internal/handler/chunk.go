@@ -174,26 +174,43 @@ func (h *AttachmentHandler) ChunkUpload(c *gin.Context) {
 
 	store := h.store.For(session.Bucket)
 
-	file, _, err := c.Request.FormFile("chunk")
-	if err != nil {
-		logger.Log.Warn(
-			"chunked upload rejected: missing chunk field",
-			"upload_id", uploadID,
-			"user_id", userID,
-			"index", index,
-			"content_length", c.Request.ContentLength,
-			"content_type", c.Request.Header.Get("Content-Type"),
-			"err", err,
-		)
-		c.JSON(http.StatusBadRequest, gin.H{"error": "missing chunk field"})
-		return
-	}
-	defer file.Close()
-
-	data, err := io.ReadAll(io.LimitReader(file, maxChunkBytes+1))
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read chunk"})
-		return
+	var data []byte
+	file, _, ferr := c.Request.FormFile("chunk")
+	if ferr == nil {
+		defer file.Close()
+		var rerr error
+		data, rerr = io.ReadAll(io.LimitReader(file, maxChunkBytes+1))
+		if rerr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read chunk"})
+			return
+		}
+	} else {
+		// Dart's http package sends MultipartFile.fromBytes() parts WITHOUT a
+		// filename= attribute. Go's multipart parser files such parts under
+		// MultipartForm.Value instead of MultipartForm.File, so FormFile()
+		// returns ErrMissingFile even though the payload arrived — which made
+		// every Dart-native chunk upload fail with 400 while curl (which
+		// always sends filename=) succeeded. Accept the value slot too.
+		var raw string
+		if mf := c.Request.MultipartForm; mf != nil {
+			if vals := mf.Value["chunk"]; len(vals) > 0 {
+				raw = vals[0]
+			}
+		}
+		if raw == "" {
+			logger.Log.Warn(
+				"chunked upload rejected: missing chunk field",
+				"upload_id", uploadID,
+				"user_id", userID,
+				"index", index,
+				"content_length", c.Request.ContentLength,
+				"content_type", c.Request.Header.Get("Content-Type"),
+				"err", ferr,
+			)
+			c.JSON(http.StatusBadRequest, gin.H{"error": "missing chunk field"})
+			return
+		}
+		data = []byte(raw)
 	}
 	if int64(len(data)) > maxChunkBytes {
 		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "chunk too large"})

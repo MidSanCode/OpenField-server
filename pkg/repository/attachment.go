@@ -3,6 +3,7 @@ package repository
 import (
 	"database/sql"
 	"fmt"
+	"time"
 
 	"github.com/lib/pq"
 	"github.com/openfield/server/pkg/database"
@@ -321,4 +322,68 @@ func (r *AttachmentRepository) ListRecyclableAttachments(buckets []string, minAg
 func (r *AttachmentRepository) DeleteByID(id int64) error {
 	_, err := database.DB.Exec("DELETE FROM attachments WHERE id = $1", id)
 	return err
+}
+
+// ArmBurn stamps the burn-after-view deadline of an attachment the first time
+// someone OTHER than the uploader views it. The conditional UPDATE makes the
+// arm idempotent and race-safe: concurrent viewers collapse into one stamp.
+// Returns the (possibly pre-existing) burn_at. When the attachment does not
+// exist, or belongs to the caller (the uploader never triggers the burn), the
+// returned found flag is false.
+func (r *AttachmentRepository) ArmBurn(id, viewerID int64, burnSeconds int) (burnAt *time.Time, found bool, err error) {
+	res, err := database.DB.Exec(
+		`UPDATE attachments
+		    SET burn_at = NOW() + ($2 * INTERVAL '1 second')
+		  WHERE id = $1 AND user_id <> $3 AND burn_at IS NULL`,
+		id, burnSeconds, viewerID,
+	)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to arm attachment burn: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		var t time.Time
+		if err := database.DB.QueryRow(`SELECT burn_at FROM attachments WHERE id = $1`, id).Scan(&t); err != nil {
+			return nil, false, fmt.Errorf("failed to load armed burn_at: %w", err)
+		}
+		return &t, true, nil
+	}
+	// No row updated: either someone else armed it first, or it does not
+	// exist / belongs to the caller. Report the existing state, if any.
+	var existing *time.Time
+	err = database.DB.QueryRow(`SELECT burn_at FROM attachments WHERE id = $1 AND user_id <> $2`, id, viewerID).Scan(&existing)
+	if err == sql.ErrNoRows {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to load attachment burn state: %w", err)
+	}
+	return existing, true, nil
+}
+
+// SweepDueBurnedAttachments returns the attachments whose burn_after-view
+// deadline has passed. The caller deletes each object from the store and then
+// the row via DeleteByID. burnedAt is stamped with the stored burn_at (not
+// now()) so callers can reason about timing from the returned value.
+func (r *AttachmentRepository) SweepDueBurnedAttachments(limit int) ([]model.Attachment, error) {
+	rows, err := database.DB.Query(
+		`SELECT id, user_id, object_key, bucket, url, COALESCE(thumb_url, ''), burn_at
+		   FROM attachments
+		  WHERE burn_at IS NOT NULL AND burn_at <= NOW()
+		  ORDER BY burn_at ASC
+		  LIMIT $1`, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query burned attachments: %w", err)
+	}
+	defer rows.Close()
+
+	due := make([]model.Attachment, 0)
+	for rows.Next() {
+		var a model.Attachment
+		if err := rows.Scan(&a.ID, &a.UserID, &a.ObjectKey, &a.Bucket, &a.URL, &a.ThumbURL, &a.BurnAt); err != nil {
+			return nil, fmt.Errorf("failed to scan burned attachment: %w", err)
+		}
+		due = append(due, a)
+	}
+	return due, rows.Err()
 }

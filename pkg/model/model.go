@@ -235,8 +235,14 @@ type Attachment struct {
 	Bucket string `json:"bucket,omitempty"`
 	// SHA256 is the content hash of the stored bytes, used to deduplicate
 	// uploads. It is never exposed to clients.
-	SHA256    string    `json:"-"`
-	CreatedAt time.Time `json:"created_at"`
+	SHA256 string `json:"-"`
+	// BurnAt is the burn-after-view deadline: set the first time a user other
+	// than the uploader views the attachment; the storage sweeper deletes the
+	// object and row once it passes. NULL = not armed (never viewed / not on a
+	// burn message). Clients compare it against now() to show a countdown or a
+	// "burned" placeholder.
+	BurnAt    *time.Time `json:"burn_at,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
 }
 
 // Conversation represents a private or group chat conversation.

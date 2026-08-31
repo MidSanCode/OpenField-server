@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -342,6 +343,85 @@ func (h *AttachmentHandler) Delete(c *gin.Context) {
 	}
 
 	c.Status(http.StatusNoContent)
+}
+
+// burnArmRequest carries the countdown the viewer wants armed on an
+// attachment. It must match the owning message's burn_seconds, which the
+// client passes through; the range check mirrors the chat service's.
+type burnArmRequest struct {
+	BurnSeconds int `json:"burn_seconds" binding:"required,gt=0,lte=86400"`
+}
+
+// ArmAttachmentBurn arms the burn-after-view countdown of an attachment on
+// the FIRST view by someone other than the uploader. Idempotent: later views
+// (and the uploader's own) return the current state unchanged. Once armed,
+// the storage sweeper deletes the object and the row when the deadline
+// passes, so every client's copy becomes unavailable together.
+func (h *AttachmentHandler) ArmAttachmentBurn(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid attachment ID"})
+		return
+	}
+	var req burnArmRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+		return
+	}
+
+	burnAt, found, err := h.attRepo.ArmBurn(id, userID, req.BurnSeconds)
+	if err != nil {
+		logger.Log.Error("failed to arm attachment burn", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to arm attachment burn"})
+		return
+	}
+	if !found {
+		// Not found, or the caller is the uploader: the uploader must never
+		// be able to trigger the burn by viewing their own file.
+		c.JSON(http.StatusNotFound, gin.H{"error": "attachment not found"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"id": id, "burn_at": burnAt})
+}
+
+// SweepBurnedAttachments deletes the objects of every attachment whose
+// burn-after-view deadline has passed, then removes the rows. Called from the
+// storage service's background sweeper; errors are logged per attachment so
+// one bad row cannot stall the sweep.
+func (h *AttachmentHandler) SweepBurnedAttachments(ctx context.Context) {
+	due, err := h.attRepo.SweepDueBurnedAttachments(200)
+	if err != nil {
+		logger.Log.Error("failed to sweep burned attachments", "error", err)
+		return
+	}
+	for _, att := range due {
+		bucket := att.Bucket
+		if bucket == "" {
+			bucket = "default"
+		}
+		store := h.store.For(bucket)
+		if err := store.Delete(ctx, att.ObjectKey); err != nil {
+			logger.Log.Error("failed to delete burned attachment object",
+				"attachment_id", att.ID, "error", err)
+			continue
+		}
+		if err := store.DeleteThumb(ctx, att.ObjectKey); err != nil {
+			logger.Log.Error("failed to delete burned attachment thumbnail",
+				"attachment_id", att.ID, "error", err)
+		}
+		if err := h.attRepo.DeleteByID(att.ID); err != nil {
+			logger.Log.Error("failed to delete burned attachment row",
+				"attachment_id", att.ID, "error", err)
+		} else {
+			logger.Log.Info("burned attachment deleted",
+				"attachment_id", att.ID, "burn_at", att.BurnAt)
+		}
+	}
 }
 
 // ListByUser lists the current user's attachments.

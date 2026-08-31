@@ -210,6 +210,7 @@ func main() {
 		// Reuse an upload by content hash so the client can attach a file the
 		// cloud already has without re-sending it.
 		{http.MethodGet, "/api/v1/attachments/by-hash/:hash", cfg.Services.Storage, authRequired, ""},
+		{http.MethodPost, "/api/v1/attachments/:id/burn-arm", cfg.Services.Storage, authRequired, ""},
 		{http.MethodDelete, "/api/v1/attachments/:id", cfg.Services.Storage, authPermission, "storage.delete"},
 		{http.MethodPost, "/api/v1/attachments/chunk/init", cfg.Services.Storage, authPermission, "storage.upload"},
 		{http.MethodGet, "/api/v1/attachments/chunk/:upload_id", cfg.Services.Storage, authPermission, "storage.upload"},
