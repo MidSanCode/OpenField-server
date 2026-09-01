@@ -106,7 +106,7 @@ func (r *MessageRepository) ListByConversation(conversationID int64, beforeID in
 		limit = 50
 	}
 	query := `SELECT m.id, m.conversation_id, m.sender_id, m.kind, COALESCE(m.check_id, 0) AS check_id, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at, m.mentions, m.burn_seconds, m.burn_at,
-	                 COALESCE(NULLIF(u.nickname, ''), u.username) AS sender_name, u.avatar_url, u.is_verified`+authorMemberCols+`
+	                 COALESCE(NULLIF(u.nickname, ''), u.username) AS sender_name, u.avatar_url, u.is_verified` + authorMemberCols + `
 	          FROM messages m
 	          JOIN users u ON m.sender_id = u.id
 	          WHERE m.conversation_id = $1 AND m.deleted_at IS NULL`
@@ -179,7 +179,7 @@ func (r *MessageRepository) Search(conversationID int64, f MessageSearchFilter, 
 		limit = 50
 	}
 	query := `SELECT m.id, m.conversation_id, m.sender_id, m.kind, COALESCE(m.check_id, 0) AS check_id, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at, m.mentions, m.burn_seconds, m.burn_at,
-	                 COALESCE(NULLIF(u.nickname, ''), u.username) AS sender_name, u.avatar_url, u.is_verified`+authorMemberCols+`
+	                 COALESCE(NULLIF(u.nickname, ''), u.username) AS sender_name, u.avatar_url, u.is_verified` + authorMemberCols + `
 	          FROM messages m
 	          JOIN users u ON m.sender_id = u.id
 	          WHERE m.conversation_id = $1 AND m.deleted_at IS NULL AND m.kind = 'text'`

@@ -14,9 +14,9 @@ import (
 
 // PunishmentHandler handles moderation actions (警告/记过/剥夺权限/封禁/解封).
 type PunishmentHandler struct {
-	userRepo       *repository.UserRepository
-	punishRepo     *repository.PunishmentRepository
-	permRepo       *repository.PermissionRepository
+	userRepo   *repository.UserRepository
+	punishRepo *repository.PunishmentRepository
+	permRepo   *repository.PermissionRepository
 }
 
 // NewPunishmentHandler creates a new PunishmentHandler.

@@ -25,6 +25,19 @@ on:
 
 env:
   GO_VERSION: '1.25.0'
+  # Every service shipped in release archives. Keep in sync with go.work.
+  SERVICES: account plugin storage chat posts push gateway
+  # All module go.sum files, so setup-go's build cache keys on all of them.
+  GO_SUMS: |
+    go.sum
+    pkg/go.sum
+    services/account/go.sum
+    services/plugin/go.sum
+    services/storage/go.sum
+    services/chat/go.sum
+    services/posts/go.sum
+    services/push/go.sum
+    services/gateway/go.sum
 
 jobs:
   # One job per release target, each gated by its workflow_dispatch input, the
@@ -42,13 +55,14 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+          cache-dependency-path: ${{ env.GO_SUMS }}
 
       - name: Build services
         shell: bash
         run: |
           set -e
           mkdir -p dist/bin
-          for svc in account storage chat posts push gateway; do
+          for svc in $SERVICES; do
             CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags="-s -w" \
               -o "dist/bin/openfield-$svc.exe" "./services/$svc/cmd"
           done
@@ -75,13 +89,14 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+          cache-dependency-path: ${{ env.GO_SUMS }}
 
       - name: Build services
         shell: bash
         run: |
           set -e
           mkdir -p dist/bin
-          for svc in account storage chat posts push gateway; do
+          for svc in $SERVICES; do
             CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" \
               -o "dist/bin/openfield-$svc" "./services/$svc/cmd"
           done
@@ -108,13 +123,14 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+          cache-dependency-path: ${{ env.GO_SUMS }}
 
       - name: Build services
         shell: bash
         run: |
           set -e
           mkdir -p dist/bin
-          for svc in account storage chat posts push gateway; do
+          for svc in $SERVICES; do
             CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" \
               -o "dist/bin/openfield-$svc" "./services/$svc/cmd"
           done
@@ -141,13 +157,14 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+          cache-dependency-path: ${{ env.GO_SUMS }}
 
       - name: Build services
         shell: bash
         run: |
           set -e
           mkdir -p dist/bin
-          for svc in account storage chat posts push gateway; do
+          for svc in $SERVICES; do
             CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags="-s -w" \
               -o "dist/bin/openfield-$svc" "./services/$svc/cmd"
           done
@@ -172,8 +189,30 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+          cache-dependency-path: ${{ env.GO_SUMS }}
+
+      # This is a multi-module repo (a workspace root plus pkg/ and one module
+      # per service). `go vet ./...` at the root matches no packages in
+      # workspace mode — it must run once per module. Modules that contain no
+      # packages (the workspace root only orchestrates go.work) are skipped.
       - name: Vet
-        run: go vet ./...
+        shell: bash
+        run: |
+          fail=0
+          for mod in . pkg services/*; do
+            [ -f "$mod/go.mod" ] || continue
+            # `go list ./...` exits 0 even when nothing matched (warning only),
+            # so probe by output: an empty list means the module has no
+            # packages (the workspace root just orchestrates go.work).
+            pkgs=$(cd "$mod" && go list ./... 2>/dev/null)
+            if [ -z "$pkgs" ]; then
+              echo "skipping $mod (no packages)"
+              continue
+            fi
+            echo "vetting $mod"
+            (cd "$mod" && go vet ./...) || fail=1
+          done
+          exit $fail
 
       - name: Check formatting
         run: |

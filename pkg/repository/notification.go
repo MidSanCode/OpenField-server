@@ -18,13 +18,13 @@ import (
 
 // Notification is one entry in a user's notification inbox.
 type Notification struct {
-	ID        int64              `json:"id"`
-	Type      string             `json:"type"`
-	Title     string             `json:"title"`
-	Body      string             `json:"body"`
-	Data      json.RawMessage    `json:"data,omitempty"`
-	ReadAt    *time.Time         `json:"read_at,omitempty"`
-	CreatedAt time.Time          `json:"created_at"`
+	ID        int64           `json:"id"`
+	Type      string          `json:"type"`
+	Title     string          `json:"title"`
+	Body      string          `json:"body"`
+	Data      json.RawMessage `json:"data,omitempty"`
+	ReadAt    *time.Time      `json:"read_at,omitempty"`
+	CreatedAt time.Time       `json:"created_at"`
 }
 
 const notificationColumns = "id, type, title, body, COALESCE(data::text, '{}'), read_at, created_at"

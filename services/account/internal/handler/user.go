@@ -811,12 +811,12 @@ func (h *UserHandler) UpdateNameStyle(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"name_color":             updated.NameColor,
-		"name_color_to":          updated.NameColorTo,
-		"name_dynamic":           updated.NameDynamic,
-		"name_colors":            updated.NameColors,
+		"name_color":              updated.NameColor,
+		"name_color_to":           updated.NameColorTo,
+		"name_dynamic":            updated.NameDynamic,
+		"name_colors":             updated.NameColors,
 		"name_gradient_direction": updated.NameGradientDirection,
-		"avatar_frame":           updated.AvatarFrame,
+		"avatar_frame":            updated.AvatarFrame,
 	})
 }
 

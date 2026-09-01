@@ -4,30 +4,30 @@ import "time"
 
 // User represents a user in the system.
 type User struct {
-	ID                int64     `json:"id"`
-	Username          string    `json:"username"`
-	Nickname          string    `json:"nickname"`
-	Email             string    `json:"email"`
-	AvatarURL         string    `json:"avatar_url"`
-	BannerURL         string    `json:"banner_url"`
-	Role              string    `json:"role"`
-	NeedsRegistration bool      `json:"needs_registration"`
-	Bio               string    `json:"bio"`
-	IsVerified        bool      `json:"is_verified"`
-	StorageQuota      int64     `json:"storage_quota"`
-	StorageUsed       int64     `json:"storage_used"`
+	ID                int64  `json:"id"`
+	Username          string `json:"username"`
+	Nickname          string `json:"nickname"`
+	Email             string `json:"email"`
+	AvatarURL         string `json:"avatar_url"`
+	BannerURL         string `json:"banner_url"`
+	Role              string `json:"role"`
+	NeedsRegistration bool   `json:"needs_registration"`
+	Bio               string `json:"bio"`
+	IsVerified        bool   `json:"is_verified"`
+	StorageQuota      int64  `json:"storage_quota"`
+	StorageUsed       int64  `json:"storage_used"`
 	// StorageBucket is the logical storage bucket the user's files live in
 	// (empty means the default bucket). Files uploaded to one bucket stay
 	// there; switching buckets moves only the quota, not existing objects.
-	StorageBucket string `json:"storage_bucket,omitempty"`
-	PasswordHash      string    `json:"-"`
-	OAuth2Provider    string    `json:"oauth2_provider"`
-	OAuth2ID          string    `json:"oauth2_id"`
-	OAuth2Username    string    `json:"oauth2_username"`
-	VerifiedNote      string    `json:"verified_note"`
-	VerifiedBy        string    `json:"verified_by"`
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	StorageBucket  string    `json:"storage_bucket,omitempty"`
+	PasswordHash   string    `json:"-"`
+	OAuth2Provider string    `json:"oauth2_provider"`
+	OAuth2ID       string    `json:"oauth2_id"`
+	OAuth2Username string    `json:"oauth2_username"`
+	VerifiedNote   string    `json:"verified_note"`
+	VerifiedBy     string    `json:"verified_by"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 	// Exp is the user's lifetime accumulated experience points. The display
 	// level is derived from exp on the client; the server only stores the
 	// raw total so a level formula change doesn't need a migration.
@@ -155,17 +155,17 @@ type Post struct {
 	// Favorited reports whether the authenticated viewer favorited this post.
 	Favorited bool `json:"favorited,omitempty"`
 	// FavoriteCount is the total number of users who favorited this post.
-	FavoriteCount int64        `json:"favorite_count,omitempty"`
+	FavoriteCount int64 `json:"favorite_count,omitempty"`
 	// Tags are the free-form labels the author attached to the post. They
 	// drive feed filtering and the hashtag picker on the post card.
-	Tags         []string      `json:"tags,omitempty"`
-	Username      string       `json:"username,omitempty"`
-	Nickname      string       `json:"nickname,omitempty"`
-	AvatarURL     string       `json:"avatar_url,omitempty"`
-	IsVerified    bool         `json:"is_verified,omitempty"`
+	Tags       []string `json:"tags,omitempty"`
+	Username   string   `json:"username,omitempty"`
+	Nickname   string   `json:"nickname,omitempty"`
+	AvatarURL  string   `json:"avatar_url,omitempty"`
+	IsVerified bool     `json:"is_verified,omitempty"`
 	// IsBot mirrors the author's bot flag so clients render the robot badge
 	// next to the name without an extra lookup.
-	IsBot        bool         `json:"is_bot,omitempty"`
+	IsBot bool `json:"is_bot,omitempty"`
 	// MemberLevel/MemberActive are the author's current membership tier (0 =
 	// none) and whether it is still active. Driver-end denormalization so
 	// clients can render the member tier badge next to the author name.
@@ -174,41 +174,41 @@ type Post struct {
 	MemberExpiresAt *time.Time `json:"member_expires_at,omitempty"`
 	// NameColor/NameColorTo/NameDynamic mirror the author's custom display-name
 	// styling so names render identically in feeds and profiles.
-	NameColor   string `json:"name_color,omitempty"`
-	NameColorTo string `json:"name_color_to,omitempty"`
-	NameDynamic bool   `json:"name_dynamic,omitempty"`
-	NameColors  NameColorList `json:"name_colors,omitempty"`
-	NameGradientDirection string `json:"name_gradient_direction,omitempty"`
-	AvatarFrame string `json:"avatar_frame,omitempty"`
-	Attachments   []Attachment `json:"attachments,omitempty"`
+	NameColor             string        `json:"name_color,omitempty"`
+	NameColorTo           string        `json:"name_color_to,omitempty"`
+	NameDynamic           bool          `json:"name_dynamic,omitempty"`
+	NameColors            NameColorList `json:"name_colors,omitempty"`
+	NameGradientDirection string        `json:"name_gradient_direction,omitempty"`
+	AvatarFrame           string        `json:"avatar_frame,omitempty"`
+	Attachments           []Attachment  `json:"attachments,omitempty"`
 	// Check is the red-packet style check attached to this post, when present.
 	Check *Check `json:"check,omitempty"`
 }
 
 // PostReply represents a reply to a post.
 type PostReply struct {
-	ID         int64      `json:"id"`
-	PostID     int64      `json:"post_id"`
-	UserID     int64      `json:"user_id"`
-	Content    string     `json:"content"`
-	ParentID   *int64     `json:"parent_id,omitempty"`
-	CreatedAt  time.Time  `json:"created_at"`
-	UpdatedAt  time.Time  `json:"updated_at"`
-	DeletedAt  *time.Time `json:"deleted_at,omitempty"`
-	Username   string     `json:"username,omitempty"`
-	Nickname   string     `json:"nickname,omitempty"`
-	AvatarURL  string     `json:"avatar_url,omitempty"`
-	IsVerified bool       `json:"is_verified,omitempty"`
-	IsBot      bool       `json:"is_bot,omitempty"`
-	MemberLevel int64     `json:"member_level,omitempty"`
-	MemberActive bool     `json:"member_active,omitempty"`
-	MemberExpiresAt *time.Time `json:"member_expires_at,omitempty"`
-	NameColor   string    `json:"name_color,omitempty"`
-	NameColorTo string    `json:"name_color_to,omitempty"`
-	NameDynamic bool      `json:"name_dynamic,omitempty"`
-	NameColors  NameColorList `json:"name_colors,omitempty"`
-	NameGradientDirection string `json:"name_gradient_direction,omitempty"`
-	AvatarFrame string    `json:"avatar_frame,omitempty"`
+	ID                    int64         `json:"id"`
+	PostID                int64         `json:"post_id"`
+	UserID                int64         `json:"user_id"`
+	Content               string        `json:"content"`
+	ParentID              *int64        `json:"parent_id,omitempty"`
+	CreatedAt             time.Time     `json:"created_at"`
+	UpdatedAt             time.Time     `json:"updated_at"`
+	DeletedAt             *time.Time    `json:"deleted_at,omitempty"`
+	Username              string        `json:"username,omitempty"`
+	Nickname              string        `json:"nickname,omitempty"`
+	AvatarURL             string        `json:"avatar_url,omitempty"`
+	IsVerified            bool          `json:"is_verified,omitempty"`
+	IsBot                 bool          `json:"is_bot,omitempty"`
+	MemberLevel           int64         `json:"member_level,omitempty"`
+	MemberActive          bool          `json:"member_active,omitempty"`
+	MemberExpiresAt       *time.Time    `json:"member_expires_at,omitempty"`
+	NameColor             string        `json:"name_color,omitempty"`
+	NameColorTo           string        `json:"name_color_to,omitempty"`
+	NameDynamic           bool          `json:"name_dynamic,omitempty"`
+	NameColors            NameColorList `json:"name_colors,omitempty"`
+	NameGradientDirection string        `json:"name_gradient_direction,omitempty"`
+	AvatarFrame           string        `json:"avatar_frame,omitempty"`
 	// ParentContent is a preview of the parent reply's content (for nested threads).
 	ParentContent string `json:"parent_content,omitempty"`
 	// ParentName is the parent reply author's display name.
@@ -222,15 +222,15 @@ type PostReply struct {
 
 // Attachment represents a file stored in RustFS.
 type Attachment struct {
-	ID           int64     `json:"id"`
-	UserID       int64     `json:"user_id"`
-	ObjectKey    string    `json:"-"`
-	OriginalName string    `json:"original_name"`
-	MimeType     string    `json:"mime_type"`
-	SizeBytes    int64     `json:"size_bytes"`
-	URL          string    `json:"url"`
-	ThumbURL     string    `json:"thumb_url,omitempty"`
-	Visibility   string    `json:"visibility"`
+	ID           int64  `json:"id"`
+	UserID       int64  `json:"user_id"`
+	ObjectKey    string `json:"-"`
+	OriginalName string `json:"original_name"`
+	MimeType     string `json:"mime_type"`
+	SizeBytes    int64  `json:"size_bytes"`
+	URL          string `json:"url"`
+	ThumbURL     string `json:"thumb_url,omitempty"`
+	Visibility   string `json:"visibility"`
 	// Bucket is the logical storage bucket the object was uploaded to.
 	Bucket string `json:"bucket,omitempty"`
 	// SHA256 is the content hash of the stored bytes, used to deduplicate
@@ -295,15 +295,15 @@ type ConversationMember struct {
 	IsBot      bool       `json:"is_bot,omitempty"`
 	// MemberLevel/MemberActive/name styling mirror the member's user record so
 	// chat listings render the tier badge and colored name without extra joins.
-	MemberLevel     int64      `json:"member_level,omitempty"`
-	MemberActive    bool       `json:"member_active,omitempty"`
-	MemberExpiresAt *time.Time `json:"member_expires_at,omitempty"`
-	NameColor   string `json:"name_color,omitempty"`
-	NameColorTo string `json:"name_color_to,omitempty"`
-	NameDynamic bool   `json:"name_dynamic,omitempty"`
-	NameColors  NameColorList `json:"name_colors,omitempty"`
-	NameGradientDirection string `json:"name_gradient_direction,omitempty"`
-	AvatarFrame string `json:"avatar_frame,omitempty"`
+	MemberLevel           int64         `json:"member_level,omitempty"`
+	MemberActive          bool          `json:"member_active,omitempty"`
+	MemberExpiresAt       *time.Time    `json:"member_expires_at,omitempty"`
+	NameColor             string        `json:"name_color,omitempty"`
+	NameColorTo           string        `json:"name_color_to,omitempty"`
+	NameDynamic           bool          `json:"name_dynamic,omitempty"`
+	NameColors            NameColorList `json:"name_colors,omitempty"`
+	NameGradientDirection string        `json:"name_gradient_direction,omitempty"`
+	AvatarFrame           string        `json:"avatar_frame,omitempty"`
 	// E2EEPublicKey is the member's published X25519 public key for encrypted
 	// group-key envelopes (empty when the member has no key published).
 	E2EEPublicKey string `json:"e2ee_public_key,omitempty"`
@@ -335,29 +335,29 @@ type ConsentRequest struct {
 
 // Message represents a chat message within a conversation.
 type Message struct {
-	ID             int64      `json:"id"`
-	ConversationID int64      `json:"conversation_id"`
-	SenderID       int64      `json:"sender_id"`
-	Kind           string     `json:"kind"` // text | check | system.join | system.leave | system.mute | system.unmute | system.mute.all | system.unmute.all
-	Content        string     `json:"content"`
-	CheckID        int64      `json:"check_id,omitempty"`
-	ReplyToID      *int64     `json:"reply_to_id,omitempty"`
-	EditedAt       *time.Time `json:"edited_at,omitempty"`
-	DeletedAt      *time.Time `json:"deleted_at,omitempty"`
-	CreatedAt      time.Time  `json:"created_at"`
-	SenderName     string     `json:"sender_name,omitempty"`
-	SenderAvatar   string     `json:"sender_avatar,omitempty"`
-	SenderVerified bool       `json:"sender_verified,omitempty"`
-	SenderIsBot    bool       `json:"sender_is_bot,omitempty"`
-	SenderMemberLevel int64   `json:"sender_member_level,omitempty"`
-	SenderMemberActive bool   `json:"sender_member_active,omitempty"`
-	SenderMemberExpiresAt *time.Time `json:"sender_member_expires_at,omitempty"`
-	SenderNameColor   string  `json:"sender_name_color,omitempty"`
-	SenderNameColorTo string  `json:"sender_name_color_to,omitempty"`
-	SenderNameDynamic bool    `json:"sender_name_dynamic,omitempty"`
-	SenderNameColors  NameColorList `json:"sender_name_colors,omitempty"`
-	SenderNameGradientDirection string `json:"sender_name_gradient_direction,omitempty"`
-	SenderAvatarFrame string  `json:"sender_avatar_frame,omitempty"`
+	ID                          int64         `json:"id"`
+	ConversationID              int64         `json:"conversation_id"`
+	SenderID                    int64         `json:"sender_id"`
+	Kind                        string        `json:"kind"` // text | check | system.join | system.leave | system.mute | system.unmute | system.mute.all | system.unmute.all
+	Content                     string        `json:"content"`
+	CheckID                     int64         `json:"check_id,omitempty"`
+	ReplyToID                   *int64        `json:"reply_to_id,omitempty"`
+	EditedAt                    *time.Time    `json:"edited_at,omitempty"`
+	DeletedAt                   *time.Time    `json:"deleted_at,omitempty"`
+	CreatedAt                   time.Time     `json:"created_at"`
+	SenderName                  string        `json:"sender_name,omitempty"`
+	SenderAvatar                string        `json:"sender_avatar,omitempty"`
+	SenderVerified              bool          `json:"sender_verified,omitempty"`
+	SenderIsBot                 bool          `json:"sender_is_bot,omitempty"`
+	SenderMemberLevel           int64         `json:"sender_member_level,omitempty"`
+	SenderMemberActive          bool          `json:"sender_member_active,omitempty"`
+	SenderMemberExpiresAt       *time.Time    `json:"sender_member_expires_at,omitempty"`
+	SenderNameColor             string        `json:"sender_name_color,omitempty"`
+	SenderNameColorTo           string        `json:"sender_name_color_to,omitempty"`
+	SenderNameDynamic           bool          `json:"sender_name_dynamic,omitempty"`
+	SenderNameColors            NameColorList `json:"sender_name_colors,omitempty"`
+	SenderNameGradientDirection string        `json:"sender_name_gradient_direction,omitempty"`
+	SenderAvatarFrame           string        `json:"sender_avatar_frame,omitempty"`
 	// ReplyToName/ReplyToContent are previews of the replied-to message so
 	// clients can render a quote without loading the full thread.
 	ReplyToName    string       `json:"reply_to_name,omitempty"`
@@ -428,13 +428,13 @@ type PunishmentType string
 
 // Supported punishment types.
 const (
-	PunishWarning  PunishmentType = "warning"  // 警告：仅提醒，无限制
-	PunishDemerit  PunishmentType = "demerit"  // 记过：累积分，配套模板记录
-	PunishRevoke   PunishmentType = "revoke"   // 剥夺权限：revoke 指定的 permission_key
-	PunishTempBan  PunishmentType = "temp_ban" // 暂时封禁：expires_at 前禁止登录
-	PunishBan      PunishmentType = "ban"      // 永久封禁：禁止登录
-	PunishUnban    PunishmentType = "unban"    // 解除封禁：恢复登录（历史保留）
-	PunishRestore  PunishmentType = "restore"  // 恢复权限：移除指定的 permission_key 封禁
+	PunishWarning PunishmentType = "warning"  // 警告：仅提醒，无限制
+	PunishDemerit PunishmentType = "demerit"  // 记过：累积分，配套模板记录
+	PunishRevoke  PunishmentType = "revoke"   // 剥夺权限：revoke 指定的 permission_key
+	PunishTempBan PunishmentType = "temp_ban" // 暂时封禁：expires_at 前禁止登录
+	PunishBan     PunishmentType = "ban"      // 永久封禁：禁止登录
+	PunishUnban   PunishmentType = "unban"    // 解除封禁：恢复登录（历史保留）
+	PunishRestore PunishmentType = "restore"  // 恢复权限：移除指定的 permission_key 封禁
 )
 
 // Punishment is one recorded moderation action on a user.

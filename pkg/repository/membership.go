@@ -126,10 +126,10 @@ func (r *MembershipRepository) Purchase(userID, level int64, now time.Time) (*Pu
 	active := currentLevel > 0 && expiresAt.Valid && now.Before(expiresAt.Time)
 
 	var (
-		newLevel   int64
-		newExpiry  time.Time
-		charge     int64
-		kind       string
+		newLevel  int64
+		newExpiry time.Time
+		charge    int64
+		kind      string
 	)
 	if !active {
 		// Fresh purchase: full price, 30 days from today.

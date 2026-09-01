@@ -51,11 +51,11 @@ type RedisConfig struct {
 
 // OIDCConfig holds OIDC configuration.
 type OIDCConfig struct {
-	IssuerURL      string   `yaml:"issuer_url"`
-	ClientID       string   `yaml:"client_id"`
-	ClientSecret   string   `yaml:"client_secret"`
-	RedirectURL    string   `yaml:"redirect_url"`
-	AppRedirectURL string   `yaml:"app_redirect_url"`
+	IssuerURL      string `yaml:"issuer_url"`
+	ClientID       string `yaml:"client_id"`
+	ClientSecret   string `yaml:"client_secret"`
+	RedirectURL    string `yaml:"redirect_url"`
+	AppRedirectURL string `yaml:"app_redirect_url"`
 	// WebRedirectURL is where the OAuth callback sends the browser when the
 	// login started from the web client (flow=web). Tokens travel in the
 	// fragment-free query string of this URL; it must point at the frontend's
@@ -116,7 +116,7 @@ type InternalProxyConfig struct {
 type StorageConfig struct {
 	// Endpoint is the S3 API endpoint exposed to clients and used to
 	// generate default public URLs when public_base_url is not set.
-	Endpoint       string               `yaml:"endpoint"`
+	Endpoint string `yaml:"endpoint"`
 	// InternalEndpoint is an optional private S3 endpoint that the storage
 	// service uses for all server-side calls (upload, download, list,
 	// delete). It exists so a deployment can keep the public Endpoint
@@ -124,15 +124,15 @@ type StorageConfig struct {
 	// reaches S3 over a fast in-VPC address (e.g. an internal load
 	// balancer or the cluster-local DNS of the S3-compatible backend).
 	// Falls back to Endpoint when empty.
-	InternalEndpoint string            `yaml:"internal_endpoint"`
-	AccessKey      string               `yaml:"access_key"`
-	SecretKey      string               `yaml:"secret_key"`
-	Bucket         string               `yaml:"bucket"`
-	Region         string               `yaml:"region"`
-	UseSSL         bool                 `yaml:"use_ssl"`
-	PublicBaseURL  string               `yaml:"public_base_url"`
-	MaxUploadBytes int64                `yaml:"max_upload_bytes"`
-	MaxAttachments int                  `yaml:"max_attachments_per_post"`
+	InternalEndpoint string `yaml:"internal_endpoint"`
+	AccessKey        string `yaml:"access_key"`
+	SecretKey        string `yaml:"secret_key"`
+	Bucket           string `yaml:"bucket"`
+	Region           string `yaml:"region"`
+	UseSSL           bool   `yaml:"use_ssl"`
+	PublicBaseURL    string `yaml:"public_base_url"`
+	MaxUploadBytes   int64  `yaml:"max_upload_bytes"`
+	MaxAttachments   int    `yaml:"max_attachments_per_post"`
 	// Buckets lists every logical storage bucket. When empty, a single default
 	// bucket is synthesized from the legacy Bucket/PublicBaseURL fields so
 	// single-bucket configs keep working unchanged.
@@ -301,11 +301,11 @@ func Load(configPath string) (*Config, error) {
 // weakJWTSecrets lists well-known default / placeholder secrets that must
 // never authenticate real traffic.
 var weakJWTSecrets = map[string]bool{
-	"": true,
-	"test":                                      true,
-	"secret":                                    true,
-	"changeme":                                  true,
-	"change-this-in-production":                 true,
+	"":                          true,
+	"test":                      true,
+	"secret":                    true,
+	"changeme":                  true,
+	"change-this-in-production": true,
 	"your-secret-key-change-this-in-production": true,
 }
 
@@ -319,8 +319,8 @@ func (c *Config) validateSecrets() error {
 	key := strings.TrimSpace(c.JWT.SecretKey)
 	if weakJWTSecrets[key] || len(key) < 32 {
 		return fmt.Errorf(
-			"refusing to start: jwt.secret_key is empty, shorter than 32 characters, or a known default value. "+
-				"Generate a strong key (e.g. `openssl rand -base64 48`) and set it via config or JWT_SECRET_KEY. "+
+			"refusing to start: jwt.secret_key is empty, shorter than 32 characters, or a known default value. " +
+				"Generate a strong key (e.g. `openssl rand -base64 48`) and set it via config or JWT_SECRET_KEY. " +
 				"For throwaway local testing set OPENFIELD_ALLOW_WEAK_SECRETS=true")
 	}
 	return nil

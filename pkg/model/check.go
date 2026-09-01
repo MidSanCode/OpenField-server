@@ -26,14 +26,14 @@ const (
 
 // CheckClaim is one user's payout from a check.
 type CheckClaim struct {
-	ID       int64     `json:"id"`
-	CheckID  int64     `json:"check_id"`
-	UserID   int64     `json:"user_id"`
-	Amount   Cents     `json:"amount"`
+	ID        int64     `json:"id"`
+	CheckID   int64     `json:"check_id"`
+	UserID    int64     `json:"user_id"`
+	Amount    Cents     `json:"amount"`
 	CreatedAt time.Time `json:"created_at"`
 	// Denormalized for display.
-	UserName    string `json:"user_name,omitempty"`
-	UserAvatar  string `json:"user_avatar,omitempty"`
+	UserName   string `json:"user_name,omitempty"`
+	UserAvatar string `json:"user_avatar,omitempty"`
 }
 
 // Check is a divisible amount of money (like a red packet) escrowed from the
@@ -41,8 +41,8 @@ type CheckClaim struct {
 // be attached to a post or sent as a chat message; unclaimed shares are
 // refunded to the creator when [ExpiresAt] passes.
 type Check struct {
-	ID        int64      `json:"id"`
-	CreatorID int64      `json:"creator_id"`
+	ID        int64 `json:"id"`
+	CreatorID int64 `json:"creator_id"`
 	// Total is the escrowed amount in cents.
 	Total Cents `json:"total"`
 	// Shares is how many users may claim a portion.
@@ -50,15 +50,15 @@ type Check struct {
 	Mode   string `json:"mode"` // random | average
 	Status string `json:"status"`
 	// PostID is set when the check is attached to a post.
-	PostID *int64 `json:"post_id,omitempty"`
+	PostID     *int64     `json:"post_id,omitempty"`
 	ExpiresAt  time.Time  `json:"expires_at"`
 	RefundedAt *time.Time `json:"refunded_at,omitempty"`
 	CreatedAt  time.Time  `json:"created_at"`
 
 	// Populated on reads:
-	CreatorName   string        `json:"creator_name,omitempty"`
-	CreatorAvatar string        `json:"creator_avatar,omitempty"`
-	Claims        []CheckClaim  `json:"claims,omitempty"`
+	CreatorName   string       `json:"creator_name,omitempty"`
+	CreatorAvatar string       `json:"creator_avatar,omitempty"`
+	Claims        []CheckClaim `json:"claims,omitempty"`
 	// ClaimedTotal is the sum of claimed amounts in cents.
 	ClaimedTotal int64 `json:"claimed_total,omitempty"`
 	// ClaimedByMe / MyAmount describe the viewer's own claim, when present.

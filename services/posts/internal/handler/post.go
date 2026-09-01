@@ -108,10 +108,10 @@ func (h *PostHandler) CreatePost(c *gin.Context) {
 	}
 
 	var req struct {
-		Content       string  `json:"content" binding:"required"`
-		Visibility    string  `json:"visibility"`
-		AttachmentIDs []int64 `json:"attachment_ids"`
-		CheckID       int64   `json:"check_id"`
+		Content       string   `json:"content" binding:"required"`
+		Visibility    string   `json:"visibility"`
+		AttachmentIDs []int64  `json:"attachment_ids"`
+		CheckID       int64    `json:"check_id"`
 		Tags          []string `json:"tags"`
 	}
 
@@ -871,8 +871,8 @@ func (h *PostHandler) notifyReplyCreated(ctx context.Context, reply interface{},
 			continue
 		}
 		data, _ := json.Marshal(map[string]any{
-			"post_id":  r.PostID,
-			"reply_id": r.ID,
+			"post_id":   r.PostID,
+			"reply_id":  r.ID,
 			"author_id": r.UserID,
 		})
 		title := "新回复"

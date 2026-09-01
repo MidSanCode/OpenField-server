@@ -102,7 +102,7 @@ func parsePerms(raw string) []string {
 // List GET /api/v1/plugins — published plugins only.
 func (h *PluginHandler) List(c *gin.Context) {
 	rows, err := db().Query(
-		`SELECT `+pluginColumns+` FROM plugins WHERE published = TRUE ORDER BY updated_at DESC`)
+		`SELECT ` + pluginColumns + ` FROM plugins WHERE published = TRUE ORDER BY updated_at DESC`)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list plugins"})
 		return

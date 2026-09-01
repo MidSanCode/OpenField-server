@@ -60,7 +60,7 @@ func (h *AuthHandler) bannedResponse(c *gin.Context, user *model.User) bool {
 			c.JSON(http.StatusForbidden, gin.H{"error": "account is permanently banned"})
 		} else {
 			c.JSON(http.StatusForbidden, gin.H{
-				"error":       "account is temporarily banned",
+				"error":        "account is temporarily banned",
 				"banned_until": *until,
 			})
 		}
