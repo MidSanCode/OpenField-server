@@ -121,10 +121,25 @@ func (r *PostRepository) Create(userID int64, content, visibility string, attach
 	if err := populateChecks([]model.Post{*post}, []int64{post.ID}, userID); err != nil {
 		return nil, err
 	}
-	if err := populateQuotedPosts([]model.Post{*post}, userID); err != nil {
+	if err := populateQuotedPost(post, userID); err != nil {
 		return nil, err
 	}
 	return post, nil
+}
+
+// populateQuotedPost resolves the quoted-post reference on a single post and
+// writes the result back into [post] (the slice variant mutates a copy, so
+// single-post callers must go through this wrapper).
+func populateQuotedPost(post *model.Post, viewerID int64) error {
+	if post == nil || post.QuotedPostID <= 0 {
+		return nil
+	}
+	batch := []model.Post{*post}
+	if err := populateQuotedPosts(batch, viewerID); err != nil {
+		return err
+	}
+	*post = batch[0]
+	return nil
 }
 
 // GetByID retrieves a post by ID with author info and attachments.
@@ -175,7 +190,7 @@ func (r *PostRepository) GetByIDWithViewer(id, viewerID int64) (*model.Post, err
 	// anonymous viewer, so a quote of a friends-only post would have been
 	// masked for an entitled viewer.
 	if post.QuotedPostID > 0 {
-		if err := populateQuotedPosts([]model.Post{*post}, viewerID); err != nil {
+		if err := populateQuotedPost(post, viewerID); err != nil {
 			return nil, err
 		}
 	}
