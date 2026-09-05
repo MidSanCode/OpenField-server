@@ -567,6 +567,12 @@ func (r *MessageRepository) populateAttachments(msgs []model.Message, msgIDs []i
 	return nil
 }
 
+// AttachmentsForMessage exposes the per-message attachment join to handlers
+// that need the raw attachment list of one message (e.g. forwarding).
+func (r *MessageRepository) AttachmentsForMessage(msgID int64) ([]model.Attachment, error) {
+	return r.attachmentsForMessage(msgID)
+}
+
 func (r *MessageRepository) attachmentsForMessage(msgID int64) ([]model.Attachment, error) {
 	rows, err := database.DB.Query(
 		`SELECT a.id, a.user_id, a.original_name, a.mime_type, a.size_bytes, a.url, a.thumb_url, a.burn_at, a.created_at

@@ -274,6 +274,140 @@ func (h *MessageHandler) Send(c *gin.Context) {
 	c.JSON(http.StatusCreated, msg)
 }
 
+// Forward copies messages from one conversation into one or more other
+// conversations the sender belongs to. The copies are new messages authored
+// by the forwarding user: content and attachments are re-linked as-is, while
+// replies, checks, burn timers and mentions are stripped. E2EE-encrypted
+// conversations never reach this endpoint because their clients do not
+// expose the entry point (the ciphertext is bound to the conversation key).
+func (h *MessageHandler) Forward(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	sourceID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid conversation ID"})
+		return
+	}
+
+	var req struct {
+		MessageIDs            []int64 `json:"message_ids"`
+		TargetConversationIDs []int64 `json:"target_conversation_ids"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+	if len(req.MessageIDs) == 0 || len(req.MessageIDs) > 20 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "forward between 1 and 20 messages"})
+		return
+	}
+	if len(req.TargetConversationIDs) == 0 || len(req.TargetConversationIDs) > 10 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "forward to between 1 and 10 conversations"})
+		return
+	}
+
+	// The sender must be able to read the source conversation.
+	isMember, err := h.convRepo.IsMember(sourceID, userID)
+	if err != nil {
+		logger.Log.Error("failed to check source membership", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to forward messages"})
+		return
+	}
+	if !isMember {
+		conv, convErr := h.convRepo.GetByID(sourceID)
+		if convErr != nil || conv == nil || conv.Type != "group" || !conv.IsPublic {
+			c.JSON(http.StatusForbidden, gin.H{"error": "you cannot read this conversation"})
+			return
+		}
+	}
+
+	// Validate every source message up front so the loop below either
+	// forwards a clean batch or fails before creating anything.
+	type forwardItem struct {
+		content       string
+		attachmentIDs []int64
+	}
+	items := make([]forwardItem, 0, len(req.MessageIDs))
+	for _, msgID := range req.MessageIDs {
+		msg, err := h.msgRepo.GetByID(msgID)
+		if err != nil {
+			logger.Log.Error("failed to load message for forward", "error", err, "message_id", msgID)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to forward messages"})
+			return
+		}
+		if msg == nil || msg.ConversationID != sourceID || msg.DeletedAt != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "message not found in this conversation"})
+			return
+		}
+		if msg.Kind != "text" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "only text messages can be forwarded"})
+			return
+		}
+		if msg.BurnSeconds > 0 || msg.BurnAt != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "burn-after-read messages cannot be forwarded"})
+			return
+		}
+		if msg.CheckID > 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "check messages cannot be forwarded"})
+			return
+		}
+		atts, err := h.msgRepo.AttachmentsForMessage(msgID)
+		if err != nil {
+			logger.Log.Error("failed to load message attachments for forward", "error", err, "message_id", msgID)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to forward messages"})
+			return
+		}
+		attIDs := make([]int64, 0, len(atts))
+		for _, a := range atts {
+			attIDs = append(attIDs, a.ID)
+		}
+		items = append(items, forwardItem{content: msg.Content, attachmentIDs: attIDs})
+	}
+
+	forwarded := 0
+	for _, targetID := range req.TargetConversationIDs {
+		isMember, err := h.convRepo.IsMember(targetID, userID)
+		if err != nil {
+			logger.Log.Error("failed to check target membership", "error", err, "conversation_id", targetID)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to forward messages"})
+			return
+		}
+		if !isMember {
+			c.JSON(http.StatusForbidden, gin.H{"error": "you are not a member of a target conversation"})
+			return
+		}
+		muted, err := h.convRepo.IsUserMuted(targetID, userID)
+		if err != nil {
+			logger.Log.Error("failed to check target mute status", "error", err, "conversation_id", targetID)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to forward messages"})
+			return
+		}
+		if muted {
+			c.JSON(http.StatusForbidden, gin.H{"error": "you are muted in a target conversation"})
+			return
+		}
+		for _, item := range items {
+			// Mentions do not survive a forward: the @-ed users belong to the
+			// source conversation, and re-resolving them in the target would
+			// surprise-notify strangers.
+			msg, err := h.msgRepo.Create(targetID, userID, item.content, nil, item.attachmentIDs, nil, 0, 0)
+			if err != nil {
+				logger.Log.Error("failed to create forwarded message", "error", err, "conversation_id", targetID)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to forward messages"})
+				return
+			}
+			h.publishMessageEvent(c.Request.Context(), events.ChatMessageCreated, targetID, msg)
+			forwarded++
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"forwarded": forwarded})
+}
+
 // burnSecondsAllowed reports whether a burn-after-read countdown (in seconds)
 // may be requested. 0 disables burning; anything else is a custom countdown.
 // The bounds stop clients from arming absurd timers (e.g. 1s flash-burns
