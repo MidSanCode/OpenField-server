@@ -301,6 +301,7 @@ func main() {
 		{http.MethodGet, "/api/v1/conversations/:id/messages", cfg.Services.Chat, authPermission, "chat.view"},
 		{http.MethodGet, "/api/v1/conversations/:id/messages/search", cfg.Services.Chat, authPermission, "chat.view"},
 		{http.MethodPost, "/api/v1/conversations/:id/messages", cfg.Services.Chat, authPermission, "chat.send"},
+		{http.MethodPost, "/api/v1/conversations/:id/messages/forward", cfg.Services.Chat, authPermission, "chat.send"},
 		{http.MethodPost, "/api/v1/conversations/:id/messages/:message_id/read", cfg.Services.Chat, authPermission, "chat.view"},
 		{http.MethodPut, "/api/v1/conversations/:id/messages/:message_id", cfg.Services.Chat, authPermission, "chat.edit"},
 		{http.MethodDelete, "/api/v1/conversations/:id/messages/:message_id", cfg.Services.Chat, authPermission, "chat.delete"},
