@@ -108,11 +108,12 @@ func (h *PostHandler) CreatePost(c *gin.Context) {
 	}
 
 	var req struct {
-		Content       string   `json:"content" binding:"required"`
+		Content       string   `json:"content"`
 		Visibility    string   `json:"visibility"`
 		AttachmentIDs []int64  `json:"attachment_ids"`
 		CheckID       int64    `json:"check_id"`
 		Tags          []string `json:"tags"`
+		QuotedPostID  int64    `json:"quoted_post_id"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -120,7 +121,7 @@ func (h *PostHandler) CreatePost(c *gin.Context) {
 		return
 	}
 
-	if req.Content == "" {
+	if req.Content == "" && req.QuotedPostID <= 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "content cannot be empty"})
 		return
 	}
@@ -138,6 +139,22 @@ func (h *PostHandler) CreatePost(c *gin.Context) {
 	if !allowedVisibilities[req.Visibility] {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "unknown visibility"})
 		return
+	}
+
+	// Quote/repost: the referenced post must exist and be visible to the
+	// author. Self-quotes are allowed; the referenced post's own visibility
+	// is re-checked per viewer at read time.
+	if req.QuotedPostID > 0 {
+		quoted, err := h.postRepo.GetByID(req.QuotedPostID)
+		if err != nil {
+			logger.Log.Error("failed to load quoted post", "error", err, "post_id", req.QuotedPostID)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to verify quoted post"})
+			return
+		}
+		if quoted == nil || !canViewPost(quoted, userID) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "quoted post not found"})
+			return
+		}
 	}
 
 	// Posts cannot carry encrypted attachments: E2EE messages flow through
@@ -169,7 +186,7 @@ func (h *PostHandler) CreatePost(c *gin.Context) {
 		}
 	}
 
-	post, err := h.postRepo.Create(userID, req.Content, req.Visibility, req.AttachmentIDs, req.CheckID)
+	post, err := h.postRepo.Create(userID, req.Content, req.Visibility, req.AttachmentIDs, req.CheckID, req.QuotedPostID)
 	if err != nil {
 		logger.Log.Error("failed to create post", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create post"})

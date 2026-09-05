@@ -46,7 +46,7 @@ func scanPosts(rows *sql.Rows) ([]model.Post, []int64, error) {
 	postIDs := make([]int64, 0)
 	for rows.Next() {
 		var post model.Post
-		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.IsBot, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.NameColors, &post.NameGradientDirection, &post.AvatarFrame, &post.ReplyCount, &post.FavoriteCount, &post.TipTotal); err != nil {
+		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.QuotedPostID, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.IsBot, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.NameColors, &post.NameGradientDirection, &post.AvatarFrame, &post.ReplyCount, &post.FavoriteCount, &post.TipTotal); err != nil {
 			return nil, nil, fmt.Errorf("failed to scan post: %w", err)
 		}
 		applyMemberStatus(&post.MemberLevel, &post.MemberExpiresAt, &post.MemberActive)
@@ -80,15 +80,16 @@ func visibilityCondition(viewerID int64, prefix, viewerParam string) string {
 		)))`, prefix, viewerParam)
 }
 
-// Create creates a new post with optional attachments and an optional
+// Create creates a new post with optional attachments, an optional
 // attached check ([checkID] > 0 binds an active unattached check owned by the
-// same user).
-func (r *PostRepository) Create(userID int64, content, visibility string, attachmentIDs []int64, checkID int64) (*model.Post, error) {
+// same user) and an optional quoted post ([quotedPostID] > 0 makes the post a
+// quote/repost; an empty content with only the reference is a pure repost).
+func (r *PostRepository) Create(userID int64, content, visibility string, attachmentIDs []int64, checkID int64, quotedPostID int64) (*model.Post, error) {
 	post := &model.Post{}
 	err := database.DB.QueryRow(
-		"INSERT INTO posts (user_id, content, visibility) VALUES ($1, $2, $3) RETURNING id, user_id, content, visibility, created_at, updated_at",
-		userID, content, visibility,
-	).Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt)
+		"INSERT INTO posts (user_id, content, visibility, quoted_post_id) VALUES ($1, $2, $3, NULLIF($4, 0)) RETURNING id, user_id, content, visibility, quoted_post_id, created_at, updated_at",
+		userID, content, visibility, quotedPostID,
+	).Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.QuotedPostID, &post.CreatedAt, &post.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create post: %w", err)
 	}
@@ -120,6 +121,9 @@ func (r *PostRepository) Create(userID int64, content, visibility string, attach
 	if err := populateChecks([]model.Post{*post}, []int64{post.ID}, userID); err != nil {
 		return nil, err
 	}
+	if err := populateQuotedPosts([]model.Post{*post}, userID); err != nil {
+		return nil, err
+	}
 	return post, nil
 }
 
@@ -127,14 +131,14 @@ func (r *PostRepository) Create(userID int64, content, visibility string, attach
 func (r *PostRepository) GetByID(id int64) (*model.Post, error) {
 	post := &model.Post{}
 	err := database.DB.QueryRow(
-		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url, u.is_verified`+authorMemberCols+`,
+		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, p.quoted_post_id, u.username, u.nickname, u.avatar_url, u.is_verified`+authorMemberCols+`,
 		        (SELECT COUNT(*) FROM post_favorites pf WHERE pf.post_id = p.id) AS favorite_count,
 		        `+tipTotalExpr+`
 		 FROM posts p
 		 JOIN users u ON p.user_id = u.id
 		 WHERE p.id = $1`,
 		id,
-	).Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.IsBot, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.NameColors, &post.NameGradientDirection, &post.AvatarFrame, &post.FavoriteCount, &post.TipTotal)
+	).Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.QuotedPostID, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.IsBot, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.NameColors, &post.NameGradientDirection, &post.AvatarFrame, &post.FavoriteCount, &post.TipTotal)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -166,6 +170,14 @@ func (r *PostRepository) GetByIDWithViewer(id, viewerID int64) (*model.Post, err
 	post, err := r.GetByID(id)
 	if err != nil || post == nil {
 		return post, err
+	}
+	// Re-resolve the quoted post against this viewer: GetByID ran with an
+	// anonymous viewer, so a quote of a friends-only post would have been
+	// masked for an entitled viewer.
+	if post.QuotedPostID > 0 {
+		if err := populateQuotedPosts([]model.Post{*post}, viewerID); err != nil {
+			return nil, err
+		}
 	}
 	if viewerID > 0 {
 		post.MyReaction, err = r.GetMyReaction(post.ID, viewerID)
@@ -336,7 +348,7 @@ func (r *PostRepository) List(page, limit int, viewerID int64) ([]model.Post, er
 	offset := (page - 1) * limit
 
 	rows, err := database.DB.Query(
-		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url, u.is_verified`+authorMemberCols+`,
+		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, p.quoted_post_id, u.username, u.nickname, u.avatar_url, u.is_verified`+authorMemberCols+`,
 		        (SELECT COUNT(*) FROM post_replies pr WHERE pr.post_id = p.id AND pr.deleted_at IS NULL) AS reply_count,
 		        (SELECT COUNT(*) FROM post_favorites pf WHERE pf.post_id = p.id) AS favorite_count,
 		        `+tipTotalExpr+`
@@ -356,7 +368,7 @@ func (r *PostRepository) List(page, limit int, viewerID int64) ([]model.Post, er
 	var postIDs []int64
 	for rows.Next() {
 		var post model.Post
-		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.IsBot, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.NameColors, &post.NameGradientDirection, &post.AvatarFrame, &post.ReplyCount, &post.FavoriteCount, &post.TipTotal); err != nil {
+		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.QuotedPostID, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.IsBot, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.NameColors, &post.NameGradientDirection, &post.AvatarFrame, &post.ReplyCount, &post.FavoriteCount, &post.TipTotal); err != nil {
 			return nil, fmt.Errorf("failed to scan post: %w", err)
 		}
 		applyMemberStatus(&post.MemberLevel, &post.MemberExpiresAt, &post.MemberActive)
@@ -377,6 +389,9 @@ func (r *PostRepository) List(page, limit int, viewerID int64) ([]model.Post, er
 		return nil, err
 	}
 	if err := populateChecks(posts, postIDs, viewerID); err != nil {
+		return nil, err
+	}
+	if err := populateQuotedPosts(posts, viewerID); err != nil {
 		return nil, err
 	}
 	return posts, nil
@@ -440,7 +455,7 @@ func (r *PostRepository) Search(f PostSearchFilter, page, limit int, viewerID in
 	args = append([]interface{}{viewerID}, args...)
 	visibility := visibilityCondition(viewerID, "p.", "$1")
 
-	query := `SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url, u.is_verified` + authorMemberCols + `,
+	query := `SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, p.quoted_post_id, u.username, u.nickname, u.avatar_url, u.is_verified` + authorMemberCols + `,
 	        (SELECT COUNT(*) FROM post_replies pr WHERE pr.post_id = p.id AND pr.deleted_at IS NULL) AS reply_count,
 	        (SELECT COUNT(*) FROM post_favorites pf WHERE pf.post_id = p.id) AS favorite_count,
 	        ` + tipTotalExpr + `
@@ -473,6 +488,9 @@ func (r *PostRepository) Search(f PostSearchFilter, page, limit int, viewerID in
 	if err := populateChecks(posts, postIDs, viewerID); err != nil {
 		return nil, err
 	}
+	if err := populateQuotedPosts(posts, viewerID); err != nil {
+		return nil, err
+	}
 	return posts, nil
 }
 
@@ -488,7 +506,7 @@ func (r *PostRepository) ListByUser(userID int64, page, limit int, viewerID int6
 	offset := (page - 1) * limit
 
 	rows, err := database.DB.Query(
-		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url, u.is_verified`+authorMemberCols+`,
+		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, p.quoted_post_id, u.username, u.nickname, u.avatar_url, u.is_verified`+authorMemberCols+`,
 		        (SELECT COUNT(*) FROM post_replies pr WHERE pr.post_id = p.id AND pr.deleted_at IS NULL) AS reply_count,
 		        (SELECT COUNT(*) FROM post_favorites pf WHERE pf.post_id = p.id) AS favorite_count,
 		        `+tipTotalExpr+`
@@ -508,7 +526,7 @@ func (r *PostRepository) ListByUser(userID int64, page, limit int, viewerID int6
 	var postIDs []int64
 	for rows.Next() {
 		var post model.Post
-		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.IsBot, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.NameColors, &post.NameGradientDirection, &post.AvatarFrame, &post.ReplyCount, &post.FavoriteCount, &post.TipTotal); err != nil {
+		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.QuotedPostID, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.IsBot, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.NameColors, &post.NameGradientDirection, &post.AvatarFrame, &post.ReplyCount, &post.FavoriteCount, &post.TipTotal); err != nil {
 			return nil, fmt.Errorf("failed to scan post: %w", err)
 		}
 		applyMemberStatus(&post.MemberLevel, &post.MemberExpiresAt, &post.MemberActive)
@@ -531,6 +549,9 @@ func (r *PostRepository) ListByUser(userID int64, page, limit int, viewerID int6
 	if err := populateChecks(posts, postIDs, viewerID); err != nil {
 		return nil, err
 	}
+	if err := populateQuotedPosts(posts, viewerID); err != nil {
+		return nil, err
+	}
 	return posts, nil
 }
 
@@ -546,7 +567,7 @@ func (r *PostRepository) ListFavoritePosts(userID int64, page, limit int) ([]mod
 	offset := (page - 1) * limit
 
 	rows, err := database.DB.Query(
-		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, u.username, u.nickname, u.avatar_url, u.is_verified`+authorMemberCols+`,
+		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, p.quoted_post_id, u.username, u.nickname, u.avatar_url, u.is_verified`+authorMemberCols+`,
 		        (SELECT COUNT(*) FROM post_replies pr WHERE pr.post_id = p.id AND pr.deleted_at IS NULL) AS reply_count,
 		        (SELECT COUNT(*) FROM post_favorites pf WHERE pf.post_id = p.id) AS favorite_count,
 		        `+tipTotalExpr+`
@@ -567,7 +588,7 @@ func (r *PostRepository) ListFavoritePosts(userID int64, page, limit int) ([]mod
 	var postIDs []int64
 	for rows.Next() {
 		var post model.Post
-		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.IsBot, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.NameColors, &post.NameGradientDirection, &post.AvatarFrame, &post.ReplyCount, &post.FavoriteCount, &post.TipTotal); err != nil {
+		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.QuotedPostID, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.IsBot, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.NameColors, &post.NameGradientDirection, &post.AvatarFrame, &post.ReplyCount, &post.FavoriteCount, &post.TipTotal); err != nil {
 			return nil, fmt.Errorf("failed to scan post: %w", err)
 		}
 		applyMemberStatus(&post.MemberLevel, &post.MemberExpiresAt, &post.MemberActive)
@@ -684,6 +705,114 @@ func (r *PostRepository) populateAttachments(posts []model.Post, postIDs []int64
 	}
 	for i := range posts {
 		posts[i].Attachments = attachments[posts[i].ID]
+	}
+	return nil
+}
+
+// Post visibility values (mirrors the handler-level constants).
+const (
+	visibilityPrivate = "private"
+	visibilityFriends = "friends"
+	visibilityLogin   = "login"
+)
+
+// canViewPost mirrors the handler-level visibility rule: public for everyone,
+// login for any authenticated user, friends for mutual follows, private for
+// the author only. It lives here so quoted-post resolution can mask quotes of
+// restricted posts without a handler->repository import cycle.
+func canViewPost(post *model.Post, viewerID int64) bool {
+	switch post.Visibility {
+	case visibilityPrivate:
+		return viewerID > 0 && viewerID == post.UserID
+	case visibilityFriends:
+		if viewerID <= 0 {
+			return false
+		}
+		if viewerID == post.UserID {
+			return true
+		}
+		mutual, err := NewFollowRepository().AreMutual(viewerID, post.UserID)
+		return err == nil && mutual
+	case visibilityLogin:
+		return viewerID > 0
+	default:
+		return true
+	}
+}
+
+// populateQuotedPosts resolves the quoted_post reference on every post in
+// [posts] one level deep, batched into a single query. Posts whose quoted
+// post no longer exists keep the dangling QuotedPostID (clients show a
+// "deleted" placeholder); quoted posts the viewer may not see are masked the
+// same way so restricted content never leaks through a quote.
+func populateQuotedPosts(posts []model.Post, viewerID int64) error {
+	if len(posts) == 0 {
+		return nil
+	}
+	ids := make([]int64, 0, len(posts))
+	for i := range posts {
+		if posts[i].QuotedPostID > 0 {
+			ids = append(ids, posts[i].QuotedPostID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+
+	rows, err := database.DB.Query(
+		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, p.quoted_post_id, u.username, u.nickname, u.avatar_url, u.is_verified`+authorMemberCols+`
+		 FROM posts p
+		 JOIN users u ON p.user_id = u.id
+		 WHERE p.id = ANY($1)`,
+		pq.Array(ids),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to load quoted posts: %w", err)
+	}
+	defer rows.Close()
+
+	byID := make(map[int64]*model.Post, len(ids))
+	for rows.Next() {
+		var q model.Post
+		if err := rows.Scan(&q.ID, &q.UserID, &q.Content, &q.Visibility, &q.CreatedAt, &q.UpdatedAt, &q.QuotedPostID, &q.Username, &q.Nickname, &q.AvatarURL, &q.IsVerified, &q.IsBot, &q.MemberLevel, &q.MemberExpiresAt, &q.NameColor, &q.NameColorTo, &q.NameDynamic, &q.NameColors, &q.NameGradientDirection, &q.AvatarFrame); err != nil {
+			return fmt.Errorf("failed to scan quoted post: %w", err)
+		}
+		applyMemberStatus(&q.MemberLevel, &q.MemberExpiresAt, &q.MemberActive)
+		byID[q.ID] = &q
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("rows error: %w", err)
+	}
+
+	// Hydrate attachments for the quoted posts (best effort — a quoted post
+	// without its media still reads fine).
+	quotedIDs := make([]int64, 0, len(byID))
+	for id := range byID {
+		quotedIDs = append(quotedIDs, id)
+	}
+	attachments, err := NewAttachmentRepository().AttachmentsForPosts(quotedIDs)
+	if err != nil {
+		return err
+	}
+	for id, q := range byID {
+		q.Attachments = attachments[id]
+	}
+
+	for i := range posts {
+		qid := posts[i].QuotedPostID
+		if qid <= 0 {
+			continue
+		}
+		if q, ok := byID[qid]; ok && canViewPost(q, viewerID) {
+			// One level deep: strip the quoted post's own reference so the
+			// payload cannot grow recursively.
+			shallow := *q
+			shallow.QuotedPostID = 0
+			shallow.QuotedPost = nil
+			posts[i].QuotedPost = &shallow
+		} else {
+			posts[i].QuotedPost = nil
+		}
 	}
 	return nil
 }

@@ -183,6 +183,15 @@ type Post struct {
 	Attachments           []Attachment  `json:"attachments,omitempty"`
 	// Check is the red-packet style check attached to this post, when present.
 	Check *Check `json:"check,omitempty"`
+	// QuotedPostID references the post this post quotes or reposts (0 when
+	// the post is not a quote/repost). The column is ON DELETE SET NULL, so
+	// a non-zero id whose [QuotedPost] is nil means the quoted post was
+	// deleted — clients render a placeholder.
+	QuotedPostID int64 `json:"quoted_post_id,omitempty"`
+	// QuotedPost is the nested quoted post, resolved one level deep (the
+	// quoted post never carries its own quoted_post). Nil when the id is 0,
+	// the quoted post is gone, or the viewer may not see it.
+	QuotedPost *Post `json:"quoted_post,omitempty"`
 }
 
 // PostReply represents a reply to a post.

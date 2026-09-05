@@ -475,6 +475,19 @@ var versionedMigrations = []migration{
 			CREATE INDEX IF NOT EXISTS idx_attachments_burn_due ON attachments(burn_at) WHERE burn_at IS NOT NULL;
 		`,
 	},
+	{
+		version: 22,
+		name:    "post-quote-repost",
+		sql: `
+			-- Quote posts / reposts: a post may reference exactly one other
+			-- post. content empty + quoted_post_id set = a pure repost; both
+			-- set = a quote with commentary. ON DELETE SET NULL keeps the
+			-- quoting post when the quoted one is deleted; clients render a
+			-- "deleted post" placeholder for the dangling reference.
+			ALTER TABLE posts ADD COLUMN IF NOT EXISTS quoted_post_id BIGINT REFERENCES posts(id) ON DELETE SET NULL;
+			CREATE INDEX IF NOT EXISTS idx_posts_quoted ON posts(quoted_post_id) WHERE quoted_post_id IS NOT NULL;
+		`,
+	},
 }
 
 // latestMigrationVersion returns the newest schema version the code knows
