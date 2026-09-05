@@ -87,7 +87,7 @@ func visibilityCondition(viewerID int64, prefix, viewerParam string) string {
 func (r *PostRepository) Create(userID int64, content, visibility string, attachmentIDs []int64, checkID int64, quotedPostID int64) (*model.Post, error) {
 	post := &model.Post{}
 	err := database.DB.QueryRow(
-		"INSERT INTO posts (user_id, content, visibility, quoted_post_id) VALUES ($1, $2, $3, NULLIF($4, 0)) RETURNING id, user_id, content, visibility, quoted_post_id, created_at, updated_at",
+		"INSERT INTO posts (user_id, content, visibility, quoted_post_id) VALUES ($1, $2, $3, NULLIF($4, 0)) RETURNING id, user_id, content, visibility, COALESCE(quoted_post_id, 0), created_at, updated_at",
 		userID, content, visibility, quotedPostID,
 	).Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.QuotedPostID, &post.CreatedAt, &post.UpdatedAt)
 	if err != nil {
@@ -131,7 +131,7 @@ func (r *PostRepository) Create(userID int64, content, visibility string, attach
 func (r *PostRepository) GetByID(id int64) (*model.Post, error) {
 	post := &model.Post{}
 	err := database.DB.QueryRow(
-		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, p.quoted_post_id, u.username, u.nickname, u.avatar_url, u.is_verified`+authorMemberCols+`,
+		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, COALESCE(p.quoted_post_id, 0), u.username, u.nickname, u.avatar_url, u.is_verified`+authorMemberCols+`,
 		        (SELECT COUNT(*) FROM post_favorites pf WHERE pf.post_id = p.id) AS favorite_count,
 		        `+tipTotalExpr+`
 		 FROM posts p
@@ -348,7 +348,7 @@ func (r *PostRepository) List(page, limit int, viewerID int64) ([]model.Post, er
 	offset := (page - 1) * limit
 
 	rows, err := database.DB.Query(
-		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, p.quoted_post_id, u.username, u.nickname, u.avatar_url, u.is_verified`+authorMemberCols+`,
+		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, COALESCE(p.quoted_post_id, 0), u.username, u.nickname, u.avatar_url, u.is_verified`+authorMemberCols+`,
 		        (SELECT COUNT(*) FROM post_replies pr WHERE pr.post_id = p.id AND pr.deleted_at IS NULL) AS reply_count,
 		        (SELECT COUNT(*) FROM post_favorites pf WHERE pf.post_id = p.id) AS favorite_count,
 		        `+tipTotalExpr+`
@@ -455,7 +455,7 @@ func (r *PostRepository) Search(f PostSearchFilter, page, limit int, viewerID in
 	args = append([]interface{}{viewerID}, args...)
 	visibility := visibilityCondition(viewerID, "p.", "$1")
 
-	query := `SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, p.quoted_post_id, u.username, u.nickname, u.avatar_url, u.is_verified` + authorMemberCols + `,
+	query := `SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, COALESCE(p.quoted_post_id, 0), u.username, u.nickname, u.avatar_url, u.is_verified` + authorMemberCols + `,
 	        (SELECT COUNT(*) FROM post_replies pr WHERE pr.post_id = p.id AND pr.deleted_at IS NULL) AS reply_count,
 	        (SELECT COUNT(*) FROM post_favorites pf WHERE pf.post_id = p.id) AS favorite_count,
 	        ` + tipTotalExpr + `
@@ -506,7 +506,7 @@ func (r *PostRepository) ListByUser(userID int64, page, limit int, viewerID int6
 	offset := (page - 1) * limit
 
 	rows, err := database.DB.Query(
-		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, p.quoted_post_id, u.username, u.nickname, u.avatar_url, u.is_verified`+authorMemberCols+`,
+		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, COALESCE(p.quoted_post_id, 0), u.username, u.nickname, u.avatar_url, u.is_verified`+authorMemberCols+`,
 		        (SELECT COUNT(*) FROM post_replies pr WHERE pr.post_id = p.id AND pr.deleted_at IS NULL) AS reply_count,
 		        (SELECT COUNT(*) FROM post_favorites pf WHERE pf.post_id = p.id) AS favorite_count,
 		        `+tipTotalExpr+`
@@ -567,7 +567,7 @@ func (r *PostRepository) ListFavoritePosts(userID int64, page, limit int) ([]mod
 	offset := (page - 1) * limit
 
 	rows, err := database.DB.Query(
-		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, p.quoted_post_id, u.username, u.nickname, u.avatar_url, u.is_verified`+authorMemberCols+`,
+		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, COALESCE(p.quoted_post_id, 0), u.username, u.nickname, u.avatar_url, u.is_verified`+authorMemberCols+`,
 		        (SELECT COUNT(*) FROM post_replies pr WHERE pr.post_id = p.id AND pr.deleted_at IS NULL) AS reply_count,
 		        (SELECT COUNT(*) FROM post_favorites pf WHERE pf.post_id = p.id) AS favorite_count,
 		        `+tipTotalExpr+`
@@ -760,7 +760,7 @@ func populateQuotedPosts(posts []model.Post, viewerID int64) error {
 	}
 
 	rows, err := database.DB.Query(
-		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, p.quoted_post_id, u.username, u.nickname, u.avatar_url, u.is_verified`+authorMemberCols+`
+		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, COALESCE(p.quoted_post_id, 0), u.username, u.nickname, u.avatar_url, u.is_verified`+authorMemberCols+`
 		 FROM posts p
 		 JOIN users u ON p.user_id = u.id
 		 WHERE p.id = ANY($1)`,
