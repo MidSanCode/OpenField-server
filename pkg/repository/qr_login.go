@@ -14,7 +14,11 @@ import (
 // (phone) scans it and approves; the requesting device polls until tokens show
 // up. Codes are single-use, expire quickly, and never contain secrets.
 
-const qrLoginTTL = 2 * time.Minute
+// qrLoginTTL is how long a handshake code stays approvable. The requesting
+// device renders the code as a QR on its own login screen and polls; five
+// minutes leaves comfortable time to open the camera on another device
+// without letting stale codes linger.
+const qrLoginTTL = 5 * time.Minute
 
 // ErrConflict marks an optimistic-concurrency failure (e.g. a handshake that
 // was already consumed by someone else).

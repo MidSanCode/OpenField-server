@@ -397,7 +397,7 @@ func (r *PostReplyRepository) populateDetails(replies []*model.PostReply) error 
 	}
 
 	attRows, err := database.DB.Query(
-		`SELECT ra.reply_id, a.id, a.user_id, a.original_name, a.mime_type, a.size_bytes, a.url, a.thumb_url, a.created_at
+		`SELECT ra.reply_id, a.id, a.user_id, a.original_name, a.mime_type, a.size_bytes, a.url, a.thumb_url, a.preview_url, a.created_at
 		 FROM reply_attachments ra
 		 JOIN attachments a ON ra.attachment_id = a.id
 		 WHERE ra.reply_id = ANY($1)
@@ -413,7 +413,7 @@ func (r *PostReplyRepository) populateDetails(replies []*model.PostReply) error 
 	for attRows.Next() {
 		var replyID int64
 		var a model.Attachment
-		if err := attRows.Scan(&replyID, &a.ID, &a.UserID, &a.OriginalName, &a.MimeType, &a.SizeBytes, &a.URL, &a.ThumbURL, &a.CreatedAt); err != nil {
+		if err := attRows.Scan(&replyID, &a.ID, &a.UserID, &a.OriginalName, &a.MimeType, &a.SizeBytes, &a.URL, &a.ThumbURL, &a.PreviewURL, &a.CreatedAt); err != nil {
 			return fmt.Errorf("failed to scan reply attachment: %w", err)
 		}
 		attachments[replyID] = append(attachments[replyID], a)

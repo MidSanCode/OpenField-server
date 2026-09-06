@@ -420,7 +420,7 @@ func (h *UserHandler) uploadImage(c *gin.Context, kind string) {
 		return
 	}
 
-	if _, err := h.attRepo.Create(userID, objectKey, header.Filename, contentType, int64(len(data)), url, "", "public", user.StorageBucket, sha256Hex(data)); err != nil {
+	if _, err := h.attRepo.Create(userID, objectKey, header.Filename, contentType, int64(len(data)), url, "", "", "public", user.StorageBucket, sha256Hex(data)); err != nil {
 		logger.Log.Error("failed to save image attachment", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save image"})
 		return

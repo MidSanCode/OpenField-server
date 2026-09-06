@@ -239,7 +239,11 @@ type Attachment struct {
 	SizeBytes    int64  `json:"size_bytes"`
 	URL          string `json:"url"`
 	ThumbURL     string `json:"thumb_url,omitempty"`
-	Visibility   string `json:"visibility"`
+	// PreviewURL is a mid-size compressed rendition (longest edge 1440px)
+	// generated alongside the thumbnail on upload. Clients show it for
+	// quick viewing and fetch the original only on explicit request.
+	PreviewURL string `json:"preview_url,omitempty"`
+	Visibility string `json:"visibility"`
 	// Bucket is the logical storage bucket the object was uploaded to.
 	Bucket string `json:"bucket,omitempty"`
 	// SHA256 is the content hash of the stored bytes, used to deduplicate

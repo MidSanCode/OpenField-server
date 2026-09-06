@@ -537,7 +537,7 @@ func (r *MessageRepository) populateAttachments(msgs []model.Message, msgIDs []i
 		return nil
 	}
 	rows, err := database.DB.Query(
-		`SELECT ma.message_id, a.id, a.user_id, a.original_name, a.mime_type, a.size_bytes, a.url, a.thumb_url, a.burn_at, a.created_at
+		`SELECT ma.message_id, a.id, a.user_id, a.original_name, a.mime_type, a.size_bytes, a.url, a.thumb_url, a.preview_url, a.burn_at, a.created_at
 		 FROM message_attachments ma
 		 JOIN attachments a ON ma.attachment_id = a.id
 		 WHERE ma.message_id = ANY($1)
@@ -553,7 +553,7 @@ func (r *MessageRepository) populateAttachments(msgs []model.Message, msgIDs []i
 	for rows.Next() {
 		var msgID int64
 		var a model.Attachment
-		if err := rows.Scan(&msgID, &a.ID, &a.UserID, &a.OriginalName, &a.MimeType, &a.SizeBytes, &a.URL, &a.ThumbURL, &a.BurnAt, &a.CreatedAt); err != nil {
+		if err := rows.Scan(&msgID, &a.ID, &a.UserID, &a.OriginalName, &a.MimeType, &a.SizeBytes, &a.URL, &a.ThumbURL, &a.PreviewURL, &a.BurnAt, &a.CreatedAt); err != nil {
 			return fmt.Errorf("failed to scan message attachment: %w", err)
 		}
 		attachments[msgID] = append(attachments[msgID], a)
@@ -575,7 +575,7 @@ func (r *MessageRepository) AttachmentsForMessage(msgID int64) ([]model.Attachme
 
 func (r *MessageRepository) attachmentsForMessage(msgID int64) ([]model.Attachment, error) {
 	rows, err := database.DB.Query(
-		`SELECT a.id, a.user_id, a.original_name, a.mime_type, a.size_bytes, a.url, a.thumb_url, a.burn_at, a.created_at
+		`SELECT a.id, a.user_id, a.original_name, a.mime_type, a.size_bytes, a.url, a.thumb_url, a.preview_url, a.burn_at, a.created_at
 		 FROM message_attachments ma
 		 JOIN attachments a ON ma.attachment_id = a.id
 		 WHERE ma.message_id = $1
@@ -590,7 +590,7 @@ func (r *MessageRepository) attachmentsForMessage(msgID int64) ([]model.Attachme
 	atts := make([]model.Attachment, 0)
 	for rows.Next() {
 		var a model.Attachment
-		if err := rows.Scan(&a.ID, &a.UserID, &a.OriginalName, &a.MimeType, &a.SizeBytes, &a.URL, &a.ThumbURL, &a.BurnAt, &a.CreatedAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.UserID, &a.OriginalName, &a.MimeType, &a.SizeBytes, &a.URL, &a.ThumbURL, &a.PreviewURL, &a.BurnAt, &a.CreatedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan attachment: %w", err)
 		}
 		atts = append(atts, a)

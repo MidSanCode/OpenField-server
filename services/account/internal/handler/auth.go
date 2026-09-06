@@ -742,7 +742,9 @@ func (h *AuthHandler) CreateQrLogin(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create code"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"code": code, "expires_in": 120})
+	// Mirrors repository.qrLoginTTL (5 minutes); the client renders a
+	// countdown and a refresh action from this value.
+	c.JSON(http.StatusOK, gin.H{"code": code, "expires_in": 300})
 }
 
 // PollQrLogin returns the current state of a handshake. Once a phone approves

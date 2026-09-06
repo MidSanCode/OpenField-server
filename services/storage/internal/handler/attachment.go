@@ -212,10 +212,12 @@ func (h *AttachmentHandler) Upload(c *gin.Context) {
 		return
 	}
 
-	// Generate a compressed thumbnail for images so feeds never download the full
-	// original. Failures are non-fatal: the attachment still works without one.
+	// Generate a compressed thumbnail and a mid-size preview for images so
+	// feeds never download the full original and quick viewing stays cheap.
+	// Failures are non-fatal: the attachment still works without them.
 	thumbURL := ""
-	if isImageMime(contentType) && len(data) <= maxThumbReadBytes {
+	previewURL := ""
+	if isImageMime(contentType) {
 		if thumb, terr := generateThumbnail(data, contentType); terr == nil && len(thumb) > 0 {
 			thumbURL, err = store.UploadThumb(c.Request.Context(), objectKey, bytes.NewReader(thumb), int64(len(thumb)))
 			if err != nil {
@@ -224,9 +226,17 @@ func (h *AttachmentHandler) Upload(c *gin.Context) {
 		} else if terr != nil {
 			logger.Log.Debug("skipped thumbnail generation", "error", terr)
 		}
+		if preview, perr := generatePreview(data, contentType); perr == nil && len(preview) > 0 {
+			previewURL, err = store.UploadPreview(c.Request.Context(), objectKey, bytes.NewReader(preview), int64(len(preview)))
+			if err != nil {
+				logger.Log.Warn("failed to upload preview", "error", err)
+			}
+		} else if perr != nil {
+			logger.Log.Debug("skipped preview generation", "error", perr)
+		}
 	}
 
-	att, err := h.attRepo.Create(userID, objectKey, header.Filename, contentType, int64(len(data)), url, thumbURL, visibility, user.StorageBucket, hash)
+	att, err := h.attRepo.Create(userID, objectKey, header.Filename, contentType, int64(len(data)), url, thumbURL, previewURL, visibility, user.StorageBucket, hash)
 	if err != nil {
 		logger.Log.Error("failed to save attachment", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save attachment"})
@@ -336,6 +346,9 @@ func (h *AttachmentHandler) Delete(c *gin.Context) {
 	if err := store.DeleteThumb(c.Request.Context(), att.ObjectKey); err != nil {
 		logger.Log.Error("failed to delete storage thumbnail", "error", err)
 	}
+	if err := store.DeletePreview(c.Request.Context(), att.ObjectKey); err != nil {
+		logger.Log.Error("failed to delete storage preview", "error", err)
+	}
 	if err := h.attRepo.Delete(id); err != nil {
 		logger.Log.Error("failed to delete attachment record", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete attachment"})
@@ -412,6 +425,10 @@ func (h *AttachmentHandler) SweepBurnedAttachments(ctx context.Context) {
 		}
 		if err := store.DeleteThumb(ctx, att.ObjectKey); err != nil {
 			logger.Log.Error("failed to delete burned attachment thumbnail",
+				"attachment_id", att.ID, "error", err)
+		}
+		if err := store.DeletePreview(ctx, att.ObjectKey); err != nil {
+			logger.Log.Error("failed to delete burned attachment preview",
 				"attachment_id", att.ID, "error", err)
 		}
 		if err := h.attRepo.DeleteByID(att.ID); err != nil {

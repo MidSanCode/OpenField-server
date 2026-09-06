@@ -404,9 +404,10 @@ func (h *AttachmentHandler) ChunkComplete(c *gin.Context) {
 		return
 	} else if existing != nil {
 		// The assembled bytes duplicate an existing blob: discard the fresh
-		// object/thumbnail and reuse the existing link.
+		// object/thumbnail/preview and reuse the existing link.
 		_ = store.Delete(c.Request.Context(), objectKey)
 		_ = store.DeleteThumb(c.Request.Context(), objectKey)
+		_ = store.DeletePreview(c.Request.Context(), objectKey)
 		_ = store.DeleteChunks(c.Request.Context(), uploadID)
 		_ = repository.DeleteUploadSession(uploadID)
 		logger.Log.Info("reused existing attachment by content hash", "hash", finalHash, "attachment_id", existing.ID)
@@ -415,6 +416,7 @@ func (h *AttachmentHandler) ChunkComplete(c *gin.Context) {
 	}
 
 	thumbURL := ""
+	previewURL := ""
 	if len(cleanData) > 0 && len(cleanData) <= maxThumbReadBytes {
 		if thumb, terr := generateThumbnail(cleanData, contentType); terr == nil && len(thumb) > 0 {
 			thumbURL, err = store.UploadThumb(c.Request.Context(), objectKey, bytes.NewReader(thumb), int64(len(thumb)))
@@ -424,6 +426,14 @@ func (h *AttachmentHandler) ChunkComplete(c *gin.Context) {
 		} else if terr != nil {
 			logger.Log.Debug("skipped thumbnail generation", "error", terr)
 		}
+		if preview, perr := generatePreview(cleanData, contentType); perr == nil && len(preview) > 0 {
+			previewURL, err = store.UploadPreview(c.Request.Context(), objectKey, bytes.NewReader(preview), int64(len(preview)))
+			if err != nil {
+				logger.Log.Warn("failed to upload preview", "error", err)
+			}
+		} else if perr != nil {
+			logger.Log.Debug("skipped preview generation", "error", perr)
+		}
 	}
 
 	attSize := req.Size
@@ -431,7 +441,7 @@ func (h *AttachmentHandler) ChunkComplete(c *gin.Context) {
 		attSize = int64(len(cleanData))
 	}
 
-	att, err := h.attRepo.Create(userID, objectKey, req.Filename, contentType, attSize, url, thumbURL, visibility, session.Bucket, finalHash)
+	att, err := h.attRepo.Create(userID, objectKey, req.Filename, contentType, attSize, url, thumbURL, previewURL, visibility, session.Bucket, finalHash)
 	if err != nil {
 		logger.Log.Error("failed to save attachment", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save attachment"})

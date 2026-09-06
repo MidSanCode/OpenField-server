@@ -97,3 +97,51 @@ func makeThumbnailReader(data []byte, mimeType string) (*bytes.Reader, error) {
 	}
 	return bytes.NewReader(thumb), nil
 }
+
+// maxPreviewDim is the longest edge of a generated image preview. Larger than
+// the thumbnail so quick viewing stays sharp on phones, far smaller than a
+// typical photo so the grid -> viewer flow does not pull the original.
+const maxPreviewDim = 1440
+
+// generatePreview downscales an image to at most maxPreviewDim on its longest
+// edge and encodes it as JPEG at a slightly higher quality than the
+// thumbnail. Images already within the bound are re-encoded anyway: the goal
+// is a uniformly light rendition, and JPEG quality 82 alone typically halves
+// a camera original. Returns nil if the input cannot be decoded.
+func generatePreview(data []byte, mimeType string) ([]byte, error) {
+	img, err := decodeImage(bytes.NewReader(data), mimeType)
+	if err != nil {
+		return nil, err
+	}
+	bounds := img.Bounds()
+	w, h := bounds.Dx(), bounds.Dy()
+	if w <= 0 || h <= 0 {
+		return nil, image.ErrFormat
+	}
+
+	var tw, th int
+	if w <= maxPreviewDim && h <= maxPreviewDim {
+		tw, th = w, h
+	} else if w >= h {
+		tw = maxPreviewDim
+		th = int(float64(h) * float64(maxPreviewDim) / float64(w))
+	} else {
+		th = maxPreviewDim
+		tw = int(float64(w) * float64(maxPreviewDim) / float64(h))
+	}
+	if th < 1 {
+		th = 1
+	}
+	if tw < 1 {
+		tw = 1
+	}
+
+	dst := image.NewRGBA(image.Rect(0, 0, tw, th))
+	draw.CatmullRom.Scale(dst, dst.Bounds(), img, bounds, draw.Over, nil)
+
+	var out bytes.Buffer
+	if err := jpeg.Encode(&out, dst, &jpeg.Options{Quality: 82}); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
+}

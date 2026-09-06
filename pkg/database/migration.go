@@ -488,6 +488,17 @@ var versionedMigrations = []migration{
 			CREATE INDEX IF NOT EXISTS idx_posts_quoted ON posts(quoted_post_id) WHERE quoted_post_id IS NOT NULL;
 		`,
 	},
+	{
+		version: 23,
+		name:    "attachment-preview-url",
+		sql: `
+			-- Preview images: a mid-size compressed rendition (longest edge
+			-- 1440px, quality 82) generated alongside the 512px thumbnail on
+			-- upload. Clients show the preview for quick viewing and only
+			-- fetch the original through the viewer's "original" button.
+			ALTER TABLE attachments ADD COLUMN IF NOT EXISTS preview_url TEXT NOT NULL DEFAULT '';
+		`,
+	},
 }
 
 // latestMigrationVersion returns the newest schema version the code knows

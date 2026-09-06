@@ -19,12 +19,12 @@ func NewAttachmentRepository() *AttachmentRepository {
 }
 
 // Create inserts an attachment record.
-func (r *AttachmentRepository) Create(userID int64, objectKey, originalName, mimeType string, sizeBytes int64, url, thumbURL, visibility, bucket, sha256 string) (*model.Attachment, error) {
+func (r *AttachmentRepository) Create(userID int64, objectKey, originalName, mimeType string, sizeBytes int64, url, thumbURL, previewURL, visibility, bucket, sha256 string) (*model.Attachment, error) {
 	att := &model.Attachment{}
 	err := database.DB.QueryRow(
-		"INSERT INTO attachments (user_id, object_key, original_name, mime_type, size_bytes, url, thumb_url, visibility, bucket, sha256) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id, user_id, object_key, original_name, mime_type, size_bytes, url, thumb_url, visibility, bucket, sha256, created_at",
-		userID, objectKey, originalName, mimeType, sizeBytes, url, thumbURL, visibility, bucket, sha256,
-	).Scan(&att.ID, &att.UserID, &att.ObjectKey, &att.OriginalName, &att.MimeType, &att.SizeBytes, &att.URL, &att.ThumbURL, &att.Visibility, &att.Bucket, &att.SHA256, &att.CreatedAt)
+		"INSERT INTO attachments (user_id, object_key, original_name, mime_type, size_bytes, url, thumb_url, preview_url, visibility, bucket, sha256) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id, user_id, object_key, original_name, mime_type, size_bytes, url, thumb_url, preview_url, visibility, bucket, sha256, created_at",
+		userID, objectKey, originalName, mimeType, sizeBytes, url, thumbURL, previewURL, visibility, bucket, sha256,
+	).Scan(&att.ID, &att.UserID, &att.ObjectKey, &att.OriginalName, &att.MimeType, &att.SizeBytes, &att.URL, &att.ThumbURL, &att.PreviewURL, &att.Visibility, &att.Bucket, &att.SHA256, &att.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create attachment: %w", err)
 	}
@@ -42,7 +42,7 @@ func (r *AttachmentRepository) GetByHash(hash string, userID int64) (*model.Atta
 	err := database.DB.QueryRow(
 		"SELECT id, user_id, object_key, original_name, mime_type, size_bytes, url, thumb_url, visibility, bucket, sha256, created_at FROM attachments WHERE sha256 = $1 AND (visibility = 'public' OR user_id = $2) ORDER BY id DESC LIMIT 1",
 		hash, userID,
-	).Scan(&att.ID, &att.UserID, &att.ObjectKey, &att.OriginalName, &att.MimeType, &att.SizeBytes, &att.URL, &att.ThumbURL, &att.Visibility, &att.Bucket, &att.SHA256, &att.CreatedAt)
+	).Scan(&att.ID, &att.UserID, &att.ObjectKey, &att.OriginalName, &att.MimeType, &att.SizeBytes, &att.URL, &att.ThumbURL, &att.PreviewURL, &att.Visibility, &att.Bucket, &att.SHA256, &att.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -56,9 +56,9 @@ func (r *AttachmentRepository) GetByHash(hash string, userID int64) (*model.Atta
 func (r *AttachmentRepository) GetByID(id int64) (*model.Attachment, error) {
 	att := &model.Attachment{}
 	err := database.DB.QueryRow(
-		"SELECT id, user_id, object_key, original_name, mime_type, size_bytes, url, thumb_url, visibility, bucket, created_at FROM attachments WHERE id = $1",
+		"SELECT id, user_id, object_key, original_name, mime_type, size_bytes, url, thumb_url, preview_url, visibility, bucket, created_at FROM attachments WHERE id = $1",
 		id,
-	).Scan(&att.ID, &att.UserID, &att.ObjectKey, &att.OriginalName, &att.MimeType, &att.SizeBytes, &att.URL, &att.ThumbURL, &att.Visibility, &att.Bucket, &att.CreatedAt)
+	).Scan(&att.ID, &att.UserID, &att.ObjectKey, &att.OriginalName, &att.MimeType, &att.SizeBytes, &att.URL, &att.ThumbURL, &att.PreviewURL, &att.Visibility, &att.Bucket, &att.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -76,7 +76,7 @@ func (r *AttachmentRepository) GetByIDsOwnedBy(userID int64, ids []int64) ([]mod
 		return nil, nil
 	}
 	rows, err := database.DB.Query(
-		"SELECT id, user_id, object_key, original_name, mime_type, size_bytes, url, thumb_url, visibility, bucket, created_at FROM attachments WHERE user_id = $1 AND id = ANY($2)",
+		"SELECT id, user_id, object_key, original_name, mime_type, size_bytes, url, thumb_url, preview_url, visibility, bucket, created_at FROM attachments WHERE user_id = $1 AND id = ANY($2)",
 		userID, pq.Array(ids),
 	)
 	if err != nil {
@@ -86,7 +86,7 @@ func (r *AttachmentRepository) GetByIDsOwnedBy(userID int64, ids []int64) ([]mod
 	atts := make([]model.Attachment, 0)
 	for rows.Next() {
 		var att model.Attachment
-		if err := rows.Scan(&att.ID, &att.UserID, &att.ObjectKey, &att.OriginalName, &att.MimeType, &att.SizeBytes, &att.URL, &att.ThumbURL, &att.Visibility, &att.Bucket, &att.CreatedAt); err != nil {
+		if err := rows.Scan(&att.ID, &att.UserID, &att.ObjectKey, &att.OriginalName, &att.MimeType, &att.SizeBytes, &att.URL, &att.ThumbURL, &att.PreviewURL, &att.Visibility, &att.Bucket, &att.CreatedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan attachment: %w", err)
 		}
 		atts = append(atts, att)
@@ -98,9 +98,9 @@ func (r *AttachmentRepository) GetByIDsOwnedBy(userID int64, ids []int64) ([]mod
 func (r *AttachmentRepository) GetByObjectKey(objectKey string) (*model.Attachment, error) {
 	att := &model.Attachment{}
 	err := database.DB.QueryRow(
-		"SELECT id, user_id, object_key, original_name, mime_type, size_bytes, url, thumb_url, visibility, bucket, created_at FROM attachments WHERE object_key = $1",
+		"SELECT id, user_id, object_key, original_name, mime_type, size_bytes, url, thumb_url, preview_url, visibility, bucket, created_at FROM attachments WHERE object_key = $1",
 		objectKey,
-	).Scan(&att.ID, &att.UserID, &att.ObjectKey, &att.OriginalName, &att.MimeType, &att.SizeBytes, &att.URL, &att.ThumbURL, &att.Visibility, &att.Bucket, &att.CreatedAt)
+	).Scan(&att.ID, &att.UserID, &att.ObjectKey, &att.OriginalName, &att.MimeType, &att.SizeBytes, &att.URL, &att.ThumbURL, &att.PreviewURL, &att.Visibility, &att.Bucket, &att.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -135,7 +135,7 @@ func (r *AttachmentRepository) AttachToPost(postID int64, attachmentIDs []int64)
 // GetByPostID retrieves attachments for a post, ordered by creation.
 func (r *AttachmentRepository) GetByPostID(postID int64) ([]model.Attachment, error) {
 	rows, err := database.DB.Query(
-		`SELECT a.id, a.user_id, a.object_key, a.original_name, a.mime_type, a.size_bytes, a.url, a.thumb_url, a.bucket, a.created_at
+		`SELECT a.id, a.user_id, a.object_key, a.original_name, a.mime_type, a.size_bytes, a.url, a.thumb_url, a.preview_url, a.bucket, a.created_at
 		 FROM attachments a
 		 JOIN post_attachments pa ON pa.attachment_id = a.id
 		 WHERE pa.post_id = $1
@@ -169,7 +169,7 @@ func (r *AttachmentRepository) AttachmentsForPosts(postIDs []int64) (map[int64][
 	}
 
 	rows, err := database.DB.Query(
-		`SELECT pa.post_id, a.id, a.user_id, a.object_key, a.original_name, a.mime_type, a.size_bytes, a.url, a.thumb_url, a.visibility, a.bucket, a.created_at
+		`SELECT pa.post_id, a.id, a.user_id, a.object_key, a.original_name, a.mime_type, a.size_bytes, a.url, a.thumb_url, a.preview_url, a.visibility, a.bucket, a.created_at
 		 FROM post_attachments pa
 		 JOIN attachments a ON pa.attachment_id = a.id
 		 WHERE pa.post_id = ANY($1)
@@ -184,7 +184,7 @@ func (r *AttachmentRepository) AttachmentsForPosts(postIDs []int64) (map[int64][
 	for rows.Next() {
 		var postID int64
 		var att model.Attachment
-		if err := rows.Scan(&postID, &att.ID, &att.UserID, &att.ObjectKey, &att.OriginalName, &att.MimeType, &att.SizeBytes, &att.URL, &att.ThumbURL, &att.Visibility, &att.Bucket, &att.CreatedAt); err != nil {
+		if err := rows.Scan(&postID, &att.ID, &att.UserID, &att.ObjectKey, &att.OriginalName, &att.MimeType, &att.SizeBytes, &att.URL, &att.ThumbURL, &att.PreviewURL, &att.Visibility, &att.Bucket, &att.CreatedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan attachment: %w", err)
 		}
 		result[postID] = append(result[postID], att)
@@ -253,7 +253,7 @@ func (r *AttachmentRepository) ListByUser(userID int64, limit int) ([]model.Atta
 		limit = 50
 	}
 	rows, err := database.DB.Query(
-		"SELECT id, user_id, object_key, original_name, mime_type, size_bytes, url, thumb_url, visibility, bucket, created_at FROM attachments WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2",
+		"SELECT id, user_id, object_key, original_name, mime_type, size_bytes, url, thumb_url, preview_url, visibility, bucket, created_at FROM attachments WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2",
 		userID, limit,
 	)
 	if err != nil {
@@ -264,7 +264,7 @@ func (r *AttachmentRepository) ListByUser(userID int64, limit int) ([]model.Atta
 	atts := make([]model.Attachment, 0)
 	for rows.Next() {
 		var att model.Attachment
-		if err := rows.Scan(&att.ID, &att.UserID, &att.ObjectKey, &att.OriginalName, &att.MimeType, &att.SizeBytes, &att.URL, &att.ThumbURL, &att.Visibility, &att.Bucket, &att.CreatedAt); err != nil {
+		if err := rows.Scan(&att.ID, &att.UserID, &att.ObjectKey, &att.OriginalName, &att.MimeType, &att.SizeBytes, &att.URL, &att.ThumbURL, &att.PreviewURL, &att.Visibility, &att.Bucket, &att.CreatedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan attachment: %w", err)
 		}
 		atts = append(atts, att)

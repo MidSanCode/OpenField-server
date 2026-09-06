@@ -297,6 +297,24 @@ func (s *Store) DeleteThumb(ctx context.Context, parentObjectKey string) error {
 	return s.Delete(ctx, parentObjectKey+".thumb.jpg")
 }
 
+// UploadPreview stores the mid-size preview rendition derived from a parent
+// object key and returns its public URL.
+func (s *Store) UploadPreview(ctx context.Context, parentObjectKey string, reader io.Reader, size int64) (string, error) {
+	previewKey := parentObjectKey + ".preview.jpg"
+	_, err := s.client.PutObject(ctx, s.bucket, previewKey, reader, size, minio.PutObjectOptions{
+		ContentType: "image/jpeg",
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to upload preview: %w", err)
+	}
+	return s.publicURL(previewKey), nil
+}
+
+// DeletePreview removes the preview derived from a parent object key.
+func (s *Store) DeletePreview(ctx context.Context, parentObjectKey string) error {
+	return s.Delete(ctx, parentObjectKey+".preview.jpg")
+}
+
 // ChunkKey returns the object key for a chunk of an in-progress upload.
 func ChunkKey(uploadID string, index int) string {
 	return fmt.Sprintf("chunks/%s/%08d", uploadID, index)
