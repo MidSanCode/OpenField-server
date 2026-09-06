@@ -223,6 +223,7 @@ func main() {
 		{http.MethodGet, "/api/v1/posts", cfg.Services.Posts, authPublic, ""},
 		{http.MethodGet, "/api/v1/posts/:id", cfg.Services.Posts, authPublic, ""},
 		{http.MethodPut, "/api/v1/posts/:id", cfg.Services.Posts, authPermission, "posts.edit"},
+		{http.MethodPut, "/api/v1/posts/:id/pin", cfg.Services.Posts, authRequired, ""},
 		{http.MethodDelete, "/api/v1/posts/:id", cfg.Services.Posts, authPermission, "posts.delete"},
 		{http.MethodGet, "/api/v1/posts/:id/replies", cfg.Services.Posts, authPublic, ""},
 		{http.MethodPost, "/api/v1/posts/:id/replies", cfg.Services.Posts, authPermission, "posts.reply.create"},
@@ -238,6 +239,31 @@ func main() {
 		{http.MethodDelete, "/api/v1/posts/:id/replies/:reply_id/favorite", cfg.Services.Posts, authPermission, "posts.favorite"},
 		{http.MethodGet, "/api/v1/users/:user_id/favorites/posts", cfg.Services.Posts, authRequired, ""},
 		{http.MethodGet, "/api/v1/users/:user_id/favorites/replies", cfg.Services.Posts, authRequired, ""},
+
+		// ---- camps (贴吧-style communities; posts service) ----
+		{http.MethodGet, "/api/v1/camps", cfg.Services.Posts, authPublic, ""},
+		{http.MethodPost, "/api/v1/camps", cfg.Services.Posts, authRequired, ""},
+		{http.MethodGet, "/api/v1/camps/:id", cfg.Services.Posts, authPublic, ""},
+		{http.MethodPut, "/api/v1/camps/:id", cfg.Services.Posts, authRequired, ""},
+		{http.MethodDelete, "/api/v1/camps/:id", cfg.Services.Posts, authRequired, ""},
+		{http.MethodGet, "/api/v1/camps/:id/posts", cfg.Services.Posts, authPublic, ""},
+		{http.MethodPost, "/api/v1/camps/:id/join", cfg.Services.Posts, authRequired, ""},
+		{http.MethodDelete, "/api/v1/camps/:id/members/me", cfg.Services.Posts, authRequired, ""},
+
+		// ---- group announcements / todos / files (chat service) ----
+		{http.MethodGet, "/api/v1/conversations/:id/announcements", cfg.Services.Chat, authPermission, "chat.view"},
+		{http.MethodPost, "/api/v1/conversations/:id/announcements", cfg.Services.Chat, authPermission, "chat.group.manage"},
+		{http.MethodDelete, "/api/v1/conversations/:id/announcements/:announcement_id", cfg.Services.Chat, authPermission, "chat.group.manage"},
+		{http.MethodGet, "/api/v1/conversations/:id/todos", cfg.Services.Chat, authPermission, "chat.view"},
+		{http.MethodPost, "/api/v1/conversations/:id/todos", cfg.Services.Chat, authPermission, "chat.view"},
+		{http.MethodPut, "/api/v1/conversations/:id/todos/:todo_id", cfg.Services.Chat, authPermission, "chat.view"},
+		{http.MethodDelete, "/api/v1/conversations/:id/todos/:todo_id", cfg.Services.Chat, authPermission, "chat.view"},
+		{http.MethodGet, "/api/v1/conversations/:id/files", cfg.Services.Chat, authPermission, "chat.view"},
+
+		// ---- app announcements (account service) ----
+		{http.MethodGet, "/api/v1/announcements", cfg.Services.Account, authPublic, ""},
+		{http.MethodPost, "/api/v1/announcements", cfg.Services.Account, authPermission, "app.announcements.manage"},
+		{http.MethodPut, "/api/v1/announcements/:id", cfg.Services.Account, authPermission, "app.announcements.manage"},
 
 		// ---- follows ----
 		{http.MethodPost, "/api/v1/users/:user_id/follow", cfg.Services.Account, authPermission, "account.follow"},
@@ -332,9 +358,20 @@ func main() {
 			if err != nil {
 				log.Fatalf("invalid service URL %q: %v", r.serviceURL, err)
 			}
+			p := httputil.NewSingleHostReverseProxy(u)
+			// A failed backend call (connection refused, timeout, DNS) is a
+			// temporarily unavailable service: answer 503 instead of the
+			// proxy's default empty 502, which clients misread as a bad
+			// route.
+			p.ErrorHandler = func(w http.ResponseWriter, req *http.Request, err error) {
+				logger.Log.Error("gateway proxy error", "error", err, "service", r.serviceURL, "path", req.URL.Path)
+				w.Header().Set("Content-Type", "application/json; charset=utf-8")
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_, _ = w.Write([]byte(`{"error":"service temporarily unavailable"}`))
+			}
 			proxies[r.serviceURL] = &serviceTarget{
 				base:  u,
-				proxy: httputil.NewSingleHostReverseProxy(u),
+				proxy: p,
 			}
 		}
 	}
@@ -343,6 +380,10 @@ func main() {
 	r.Use(middleware.Recovery())
 	r.Use(logger.GinLogger())
 	r.Use(middleware.CORS(cfg))
+	// Coarse per-IP rate limiting over every proxied route (not /healthz):
+	// blunts abusive clients and runaway loops before they reach backends.
+	rateLimiter := newRateLimiter()
+	r.Use(rateLimiter.middleware())
 
 	// Aggregate service health (public): fans out to every backend's
 	// /healthz. Registered explicitly so it never falls into the proxy.

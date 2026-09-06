@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -99,6 +100,38 @@ func NewPostHandler() *PostHandler {
 	}
 }
 
+// PinPost toggles the pinned flag of the caller's own post. Pinned posts
+// float to the top of the author's profile and carry a badge in the feed.
+func (h *PostHandler) PinPost(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	postID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid post ID"})
+		return
+	}
+	var req struct {
+		Pinned *bool `json:"pinned"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.Pinned == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body (pinned boolean required)"})
+		return
+	}
+	if err := h.postRepo.SetPinned(postID, userID, *req.Pinned); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "post not found or you are not the author"})
+			return
+		}
+		logger.Log.Error("failed to pin post", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to pin post"})
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
 // CreatePost creates a new post.
 func (h *PostHandler) CreatePost(c *gin.Context) {
 	userID, ok := middleware.GetUserID(c)
@@ -114,6 +147,7 @@ func (h *PostHandler) CreatePost(c *gin.Context) {
 		CheckID       int64    `json:"check_id"`
 		Tags          []string `json:"tags"`
 		QuotedPostID  int64    `json:"quoted_post_id"`
+		CampID        int64    `json:"camp_id"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -186,7 +220,23 @@ func (h *PostHandler) CreatePost(c *gin.Context) {
 		}
 	}
 
-	post, err := h.postRepo.Create(userID, req.Content, req.Visibility, req.AttachmentIDs, req.CheckID, req.QuotedPostID)
+	// Camp scoping: posting into a camp requires membership (the creator is
+	// always a member). Global posts leave camp_id at 0.
+	if req.CampID > 0 {
+		campRepo := repository.NewCampRepository()
+		isMember, err := campRepo.IsMember(req.CampID, userID)
+		if err != nil {
+			logger.Log.Error("failed to check camp membership", "error", err, "camp_id", req.CampID)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to verify camp"})
+			return
+		}
+		if !isMember {
+			c.JSON(http.StatusForbidden, gin.H{"error": "join the camp before posting into it"})
+			return
+		}
+	}
+
+	post, err := h.postRepo.Create(userID, req.Content, req.Visibility, req.AttachmentIDs, req.CheckID, req.QuotedPostID, req.CampID)
 	if err != nil {
 		logger.Log.Error("failed to create post", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create post"})

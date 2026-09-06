@@ -192,6 +192,63 @@ type Post struct {
 	// quoted post never carries its own quoted_post). Nil when the id is 0,
 	// the quoted post is gone, or the viewer may not see it.
 	QuotedPost *Post `json:"quoted_post,omitempty"`
+	// Pinned marks a post the author pinned to the top of their profile.
+	Pinned bool `json:"pinned"`
+	// CampID scopes the post to a camp (贴吧-style community); 0 = global.
+	CampID int64 `json:"camp_id,omitempty"`
+}
+
+// Camp is a 贴吧-style community: a named space whose posts live in the camp
+// rather than the global feed. Visibility hides it from the public list;
+// direct join controls whether anyone may enter or only the creator.
+type Camp struct {
+	ID          int64     `json:"id"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	CreatorID   int64     `json:"creator_id"`
+	CreatorName string    `json:"creator_name,omitempty"`
+	IsVisible   bool      `json:"is_visible"`
+	DirectJoin  bool      `json:"direct_join"`
+	MemberCount int64     `json:"member_count"`
+	PostCount   int64     `json:"post_count"`
+	IsMember    bool      `json:"is_member"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// GroupAnnouncement is a manage-scoped notice shown to conversation members.
+type GroupAnnouncement struct {
+	ID             int64     `json:"id"`
+	ConversationID int64     `json:"conversation_id"`
+	CreatorID      int64     `json:"creator_id"`
+	CreatorName    string    `json:"creator_name,omitempty"`
+	Title          string    `json:"title"`
+	Content        string    `json:"content"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+// GroupTodo is one entry of a conversation's shared checklist.
+type GroupTodo struct {
+	ID             int64      `json:"id"`
+	ConversationID int64      `json:"conversation_id"`
+	CreatorID      int64      `json:"creator_id"`
+	CreatorName    string     `json:"creator_name,omitempty"`
+	Title          string     `json:"title"`
+	Done           bool       `json:"done"`
+	DoneBy         int64      `json:"done_by,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	CompletedAt    *time.Time `json:"completed_at,omitempty"`
+}
+
+// AppAnnouncement is a server-wide notice surfaced by clients on startup.
+type AppAnnouncement struct {
+	ID        int64     `json:"id"`
+	Title     string    `json:"title"`
+	Content   string    `json:"content"`
+	CreatorID int64     `json:"creator_id,omitempty"`
+	Active    bool      `json:"active"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // PostReply represents a reply to a post.

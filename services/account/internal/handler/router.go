@@ -168,5 +168,17 @@ func RegisterRoutes(r *gin.Engine, authHandler *AuthHandler, userHandler *UserHa
 			bots.POST("/:id/regenerate", botHandler.Regenerate)
 			bots.DELETE("/:id", botHandler.Delete)
 		}
+
+		// App announcements: reading is public (startup banner + history);
+		// publishing/retiring requires the app.announcements.manage
+		// permission, enforced by the gateway route table.
+		annHandler := NewAppAnnouncementHandler()
+		api.GET("/announcements", annHandler.List)
+		annAdmin := api.Group("/announcements")
+		annAdmin.Use(middleware.GatewayAuthMiddleware())
+		{
+			annAdmin.POST("", annHandler.Create)
+			annAdmin.PUT("/:id", annHandler.Update)
+		}
 	}
 }

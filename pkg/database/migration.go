@@ -499,6 +499,76 @@ var versionedMigrations = []migration{
 			ALTER TABLE attachments ADD COLUMN IF NOT EXISTS preview_url TEXT NOT NULL DEFAULT '';
 		`,
 	},
+	{
+		version: 24,
+		name:    "pins-announcements-todos-camps",
+		sql: `
+			-- Pinned posts: an author may pin one of their own posts; pinned
+			-- posts float to the top of their profile and the feed carries a
+			-- badge. camp_id scopes a post to a camp (NULL = global feed).
+			ALTER TABLE posts ADD COLUMN IF NOT EXISTS pinned BOOLEAN NOT NULL DEFAULT FALSE;
+			ALTER TABLE posts ADD COLUMN IF NOT EXISTS camp_id BIGINT REFERENCES camps(id) ON DELETE SET NULL;
+			CREATE INDEX IF NOT EXISTS idx_posts_camp ON posts(camp_id) WHERE camp_id IS NOT NULL;
+
+			-- Camps (贴吧-style communities): visibility hides them from the
+			-- public list, direct_join controls whether joining is open or
+			-- creator-only. Posts live inside camps via posts.camp_id.
+			CREATE TABLE IF NOT EXISTS camps (
+				id BIGSERIAL PRIMARY KEY,
+				name TEXT NOT NULL UNIQUE,
+				description TEXT NOT NULL DEFAULT '',
+				creator_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+				is_visible BOOLEAN NOT NULL DEFAULT TRUE,
+				direct_join BOOLEAN NOT NULL DEFAULT TRUE,
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+				updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			);
+			CREATE TABLE IF NOT EXISTS camp_members (
+				camp_id BIGINT NOT NULL REFERENCES camps(id) ON DELETE CASCADE,
+				user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+				role TEXT NOT NULL DEFAULT 'member',
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+				PRIMARY KEY (camp_id, user_id)
+			);
+			CREATE INDEX IF NOT EXISTS idx_camp_members_user ON camp_members(user_id);
+
+			-- Group announcements: manage-scoped writes, member-visible reads.
+			CREATE TABLE IF NOT EXISTS group_announcements (
+				id BIGSERIAL PRIMARY KEY,
+				conversation_id BIGINT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+				creator_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+				title TEXT NOT NULL DEFAULT '',
+				content TEXT NOT NULL,
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+				updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			);
+			CREATE INDEX IF NOT EXISTS idx_group_announcements_conv ON group_announcements(conversation_id, created_at DESC);
+
+			-- Group todos: lightweight shared checklist per conversation.
+			CREATE TABLE IF NOT EXISTS group_todos (
+				id BIGSERIAL PRIMARY KEY,
+				conversation_id BIGINT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+				creator_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+				title TEXT NOT NULL,
+				done BOOLEAN NOT NULL DEFAULT FALSE,
+				done_by BIGINT,
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+				completed_at TIMESTAMPTZ
+			);
+			CREATE INDEX IF NOT EXISTS idx_group_todos_conv ON group_todos(conversation_id, done, created_at);
+
+			-- App announcements: server-wide notices shown on startup; admins
+			-- publish and retire them, clients remember dismissed ids.
+			CREATE TABLE IF NOT EXISTS app_announcements (
+				id BIGSERIAL PRIMARY KEY,
+				title TEXT NOT NULL,
+				content TEXT NOT NULL,
+				creator_id BIGINT,
+				active BOOLEAN NOT NULL DEFAULT TRUE,
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			);
+		`,
+	},
 }
 
 // latestMigrationVersion returns the newest schema version the code knows

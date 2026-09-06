@@ -6,7 +6,7 @@ import (
 )
 
 // RegisterRoutes registers all chat service routes.
-func RegisterRoutes(r *gin.Engine, convHandler *ConversationHandler, consentHandler *ConsentHandler, msgHandler *MessageHandler) {
+func RegisterRoutes(r *gin.Engine, convHandler *ConversationHandler, consentHandler *ConsentHandler, msgHandler *MessageHandler, extrasHandler *GroupExtrasHandler) {
 	api := r.Group("/api/v1")
 	api.Use(middleware.GatewayAuthMiddleware())
 	{
@@ -45,6 +45,20 @@ func RegisterRoutes(r *gin.Engine, convHandler *ConversationHandler, consentHand
 			convs.PUT("/:id/members/:user_id/title", convHandler.SetMemberTitle)
 			convs.POST("/:id/members/:user_id/mute", convHandler.MuteMember)
 			convs.DELETE("/:id/members/:user_id/mute", convHandler.UnmuteMember)
+
+			// Group announcements: member reads, manager writes.
+			convs.GET("/:id/announcements", extrasHandler.ListAnnouncements)
+			convs.POST("/:id/announcements", extrasHandler.CreateAnnouncement)
+			convs.DELETE("/:id/announcements/:announcement_id", extrasHandler.DeleteAnnouncement)
+
+			// Group todos: member-shared checklist.
+			convs.GET("/:id/todos", extrasHandler.ListTodos)
+			convs.POST("/:id/todos", extrasHandler.CreateTodo)
+			convs.PUT("/:id/todos/:todo_id", extrasHandler.UpdateTodo)
+			convs.DELETE("/:id/todos/:todo_id", extrasHandler.DeleteTodo)
+
+			// Group files: attachments shared into the conversation.
+			convs.GET("/:id/files", extrasHandler.ListFiles)
 		}
 
 		msgs := api.Group("/conversations/:id/messages")

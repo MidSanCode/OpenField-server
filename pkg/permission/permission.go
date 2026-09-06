@@ -49,6 +49,9 @@ const (
 
 	// Plugins
 	PluginManage = "plugin.manage"
+
+	// App announcements (server-wide notices)
+	AppAnnouncementsManage = "app.announcements.manage"
 )
 
 // All returns every known permission key.
@@ -61,6 +64,7 @@ func All() []string {
 		PostsView, PostsCreate, PostsEdit, PostsDelete, PostsReplyCreate, PostsReplyEdit, PostsReplyDelete, PostsReact, PostsFavorite,
 		WalletView, WalletManage,
 		PluginManage,
+		AppAnnouncementsManage,
 	}
 }
 

@@ -40,6 +40,7 @@ func main() {
 	}
 
 	postHandler := handler.NewPostHandler()
+	campHandler := handler.NewCampHandler()
 
 	r := gin.New()
 	r.Use(middleware.Recovery())
@@ -49,7 +50,7 @@ func main() {
 
 	r.GET("/healthz", health.Handler(nil))
 
-	handler.RegisterRoutes(r, postHandler)
+	handler.RegisterRoutes(r, postHandler, campHandler)
 
 	addr := "127.0.0.1:" + cfg.ServicePort("POSTS")
 	logger.Log.Info("posts service starting", "address", addr)

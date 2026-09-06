@@ -6,7 +6,7 @@ import (
 )
 
 // RegisterRoutes registers all posts service routes.
-func RegisterRoutes(r *gin.Engine, postHandler *PostHandler) {
+func RegisterRoutes(r *gin.Engine, postHandler *PostHandler, campHandler *CampHandler) {
 	api := r.Group("/api/v1")
 	{
 		// Public reads: posts and replies are viewable without authentication.
@@ -15,12 +15,20 @@ func RegisterRoutes(r *gin.Engine, postHandler *PostHandler) {
 		api.GET("/posts/:id/replies", postHandler.ListReplies)
 		api.GET("/users/:user_id/posts", postHandler.ListPostsByUser)
 
+		// Camps (贴吧-style communities). Listing visible camps and reading a
+		// visible camp is public; hidden camps reveal themselves to members
+		// inside the handlers.
+		api.GET("/camps", campHandler.List)
+		api.GET("/camps/:id", campHandler.Get)
+		api.GET("/camps/:id/posts", campHandler.ListPosts)
+
 		auth := api.Group("")
 		auth.Use(middleware.GatewayAuthMiddleware())
 		{
 			auth.POST("/posts", postHandler.CreatePost)
 			auth.PUT("/posts/:id", postHandler.UpdatePost)
 			auth.DELETE("/posts/:id", postHandler.DeletePost)
+			auth.PUT("/posts/:id/pin", postHandler.PinPost)
 			auth.POST("/posts/:id/replies", postHandler.CreateReply)
 			auth.PUT("/posts/:id/replies/:reply_id", postHandler.UpdateReply)
 			auth.DELETE("/posts/:id/replies/:reply_id", postHandler.DeleteReply)
@@ -33,6 +41,12 @@ func RegisterRoutes(r *gin.Engine, postHandler *PostHandler) {
 			auth.DELETE("/posts/:id/replies/:reply_id/favorite", postHandler.UnfavoriteReply)
 			auth.GET("/users/:user_id/favorites/posts", postHandler.ListFavoritePosts)
 			auth.GET("/users/:user_id/favorites/replies", postHandler.ListFavoriteReplies)
+
+			auth.POST("/camps", campHandler.Create)
+			auth.PUT("/camps/:id", campHandler.Update)
+			auth.DELETE("/camps/:id", campHandler.Delete)
+			auth.POST("/camps/:id/join", campHandler.Join)
+			auth.DELETE("/camps/:id/members/me", campHandler.Leave)
 		}
 	}
 }

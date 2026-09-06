@@ -141,6 +141,30 @@ func (h *ConversationHandler) CreateGroup(c *gin.Context) {
 		return
 	}
 
+	// Creation quota: only groups the user CREATED count (joined groups do
+	// not); active membership adds 25% per level on top of the 1000 base.
+	userRepo := repository.NewUserRepository()
+	user, err := userRepo.GetByID(userID)
+	if err != nil || user == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	owned, err := repository.CountOwnedGroups(userID)
+	if err != nil {
+		logger.Log.Error("failed to count owned groups", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create group"})
+		return
+	}
+	quota := repository.GroupCreateQuotaFor(user.MemberLevel, user.MemberExpiresAt)
+	if owned >= quota {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error":   "group quota exceeded",
+			"limit":   quota,
+			"created": owned,
+		})
+		return
+	}
+
 	conv, err := h.convRepo.CreateGroup(userID, req.Title)
 	if err != nil {
 		logger.Log.Error("failed to create group", "error", err)

@@ -41,6 +41,7 @@ func main() {
 	}
 
 	convHandler := handler.NewConversationHandler()
+	extrasHandler := handler.NewGroupExtrasHandler()
 	consentHandler := handler.NewConsentHandler()
 	msgHandler := handler.NewMessageHandler()
 
@@ -52,7 +53,7 @@ func main() {
 
 	r.GET("/healthz", health.Handler(nil))
 
-	handler.RegisterRoutes(r, convHandler, consentHandler, msgHandler)
+	handler.RegisterRoutes(r, convHandler, consentHandler, msgHandler, extrasHandler)
 
 	// Burn-after-read sweeper: soft-deletes armed messages once their
 	// countdown expires and pushes chat.message.deleted to every member.
