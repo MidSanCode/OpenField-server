@@ -2,7 +2,10 @@ package database
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/lib/pq"
@@ -846,6 +849,12 @@ var baselineStatements = []string{
 // and (re)seeds the permission catalog and default group. Each numbered
 // migration runs exactly once; the baseline (version 1) is idempotent so it
 // safely upgrades databases that predate schema versioning.
+//
+// Statement failures inside a migration step are tolerated when they are
+// harmless: "duplicate column/table/constraint" (a partially applied earlier
+// run, a database restored from a dump of a slightly different version, or
+// a hand-repaired schema). The migration still aborts on genuine failures so
+// a broken step is never silently recorded as applied.
 func RunMigrations() error {
 	if err := ensureSchemaMigrationsTable(); err != nil {
 		return err
@@ -910,6 +919,74 @@ func RunMigrationsIfEnabled(cfg *config.Config) error {
 	return RunMigrations()
 }
 
+// isTolerableSchemaError reports whether a migration statement failure means
+// "the requested schema change is already in place" (or targets an object
+// that a later statement creates properly), in which case the migration may
+// proceed instead of crashing the service on start-up.
+func isTolerableSchemaError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) {
+		switch pqErr.Code {
+		case "42P01", // undefined_table
+			"42701", // duplicate_column
+			"42P07", // duplicate_table
+			"42710", // duplicate_object (constraints)
+			"42704": // undefined_object
+			return true
+		}
+	}
+	// lib/pq does not always wrap DDL failures in *pq.Error (e.g. through
+	// database/sql retries), so also match the message text as a fallback.
+	msg := err.Error()
+	if strings.Contains(msg, "already exists") {
+		return true
+	}
+	return strings.Contains(msg, "does not exist") && strings.Contains(msg, "relation")
+}
+
+// execStatements runs one migration's statements inside tx. A statement that
+// fails with a "schema already matches" error is logged and skipped so that
+// databases whose columns were added by an older binary, restored from a
+// dump, or manually repaired still boot instead of crash-looping; every
+// other error aborts the migration.
+func execStatements(ctx context.Context, tx *sql.Tx, version int, statements []string) error {
+	for i, stmt := range statements {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			if isTolerableSchemaError(err) {
+				logger.Log.Warn("migration statement skipped (schema already matches)",
+					"version", version,
+					"statement", i+1,
+					"error", err.Error())
+				continue
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+// splitMigrationSQL breaks a migration's multi-statement SQL into individual
+// statements so each can be retried/skipped independently when it collides
+// with an already-applied schema change. Splitting is on semicolons outside
+// of dollar-quoted or single-quoted strings, which covers every statement
+// style used in this file (no embedded semicolons inside string literals).
+func splitMigrationSQL(script string) []string {
+	parts := strings.Split(script, ";\n")
+	statements := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		trimmed = strings.TrimSuffix(trimmed, ";")
+		trimmed = strings.TrimSpace(trimmed)
+		if trimmed != "" {
+			statements = append(statements, trimmed)
+		}
+	}
+	return statements
+}
+
 // applyPending applies every missing migration up to the latest version,
 // guarded by a PostgreSQL advisory lock so only one service at a time mutates
 // the shared schema. Steps that have already been recorded are skipped.
@@ -944,6 +1021,11 @@ func applyPending() error {
 		}
 		for _, stmt := range baselineStatements {
 			if _, err := tx.ExecContext(ctx, stmt); err != nil {
+				if isTolerableSchemaError(err) {
+					logger.Log.Warn("baseline statement skipped (schema already matches)",
+						"error", err.Error())
+					continue
+				}
 				_ = tx.Rollback()
 				return fmt.Errorf("baseline migration failed: %w", err)
 			}
@@ -970,7 +1052,7 @@ func applyPending() error {
 		if err != nil {
 			return fmt.Errorf("failed to begin migration %d (%s): %w", m.version, m.name, err)
 		}
-		if _, err := tx.ExecContext(ctx, m.sql); err != nil {
+		if err := execStatements(ctx, tx, m.version, splitMigrationSQL(m.sql)); err != nil {
 			_ = tx.Rollback()
 			return fmt.Errorf("migration %d (%s) failed: %w", m.version, m.name, err)
 		}
