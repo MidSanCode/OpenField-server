@@ -10,19 +10,24 @@ for the service layout and [wallet.md](wallet.md) for the wallet in detail.
 | Feature                    | Location                                                     | Notes |
 |----------------------------|--------------------------------------------------------------|-------|
 | Authentication & OIDC      | `services/account/internal/handler/auth.go`                  | OIDC + password login |
+| QR login                   | `services/account/internal/handler/auth.go`                  | 5-minute handshake, scanner approves |
 | Profile & users            | `services/account/internal/handler/user.go`                  | edit, avatar/banner, locale |
 | Permissions (groups)       | gateway auth + `pkg/repository/permission.go`                | route-level checks |
 | Wallet & transfers          | `services/account/internal/handler/wallet.go`, `transfer.go` | cents storage |
 | Payment PIN                | `services/account/internal/handler/pin.go`                   | authorizes payments |
 | Tasks & experience         | `services/account/internal/handler/task.go`                  | daily login, one-time codes |
 | Exp history                | `services/account/internal/handler/task.go`                  | level derivation |
-| Membership                 | `services/account/internal/handler/membership.go`            | tiers, multiplier, storage |
+| Membership                 | `services/account/internal/handler/membership.go`            | tiers, multiplier, storage, quotas |
 | Name styling               | `services/account/internal/handler/user.go`                  | color / gradient / animation |
 | Follow & friends           | `services/account/internal/handler/user.go`                  | mutual follows |
-| Posts & replies            | `services/posts`                                             | reactions, favorites, views |
-| Attachments / storage      | `services/storage`                                           | RustFS, quota |
+| Posts & replies            | `services/posts`                                             | reactions, favorites, views, pins |
+| Camps                      | `services/posts/internal/handler/camp.go`                    | 贴吧-style communities, quotas |
+| App announcements          | `services/account/internal/handler/app_announcement.go`      | startup notices, admin-published |
+| Attachments / storage      | `services/storage`                                           | RustFS, quota, previews |
 | Chat & consent             | `services/chat`                                              | E2E, groups, mentions |
+| Group extras               | `services/chat/internal/handler/group_features.go`           | announcements, todos, files |
 | Realtime push              | `services/push`                                              | WebSocket gateway |
+| API gateway                | `services/gateway/cmd/main.go`                               | routing, auth, rate limiting |
 | Admin panel                | `admin/app.py`                                               | users, groups, grants |
 
 ## Authentication
@@ -73,6 +78,7 @@ request ever reaches an internal service.
 | chat     | `chat.view`, `chat.send`, `chat.edit`, `chat.delete`, `chat.request.send`, `chat.request.approve`, `chat.group.create`, `chat.group.invite`, `chat.group.manage`, `chat.group.nickname`, `chat.note.edit` |
 | wallet   | `wallet.view`, `wallet.manage` |
 | admin    | `user.adjust_exp`, `user.membership.grant` |
+| app      | `app.announcements.manage` |
 
 Keys are seeded by `seedPermissions()` in `pkg/database/migration.go`. Today
 the default `everyone` group holds the full set; tightening group grants is a
@@ -149,6 +155,11 @@ lives in `pkg/model/membership.go`.
   When membership expires above the base quota, further uploads are rejected
   until usage drops back under the base (see `checkQuota` in the storage
   service and `uploadImage` in the account service).
+- **Creation quotas**: the same +25%-per-level bonus scales the number of
+  groups a user may own (base 1000, joined groups don't count) and the number
+  of camps a user may create (base 100). Quotas are enforced at creation time
+  in `pkg/repository/quotas.go`; exceeding them returns a 403 with the
+  computed limit.
 
 ## Name Styling
 
@@ -189,6 +200,9 @@ friends), reactions, favorites and read-tracking.
 
 - **CRUD**: `GET|POST /posts`, `PUT|DELETE /posts/:id` (owner only), plus
   per-user listing `GET /users/:user_id/posts`.
+- **Pinning**: `PUT /posts/:id/pin` (`{"pinned": true|false}`, author only)
+  toggles the pinned flag; pinned posts float to the top of the author's
+  profile and the global feed and carry a `pinned` field in payloads.
 - **Replies**: `GET|POST /posts/:id/replies`, edit/delete per reply, and
   per-reply favorites (`POST .../replies/:reply_id/favorite`).
 - **Reactions**: `PUT/DELETE /posts/:id/reactions` with a reaction key;
@@ -198,6 +212,40 @@ friends), reactions, favorites and read-tracking.
 - **Reading**: post payloads include `reply_count`, `favorite_count`, reaction
   map and the author's denormalized membership/name-style fields. Anonymous
   viewers only see public posts (`visibilityCondition`).
+
+## Camps
+
+Camps are 贴吧-style communities: a named space whose posts live in the camp
+rather than the global feed. Code: `services/posts/internal/handler/camp.go`
++ `pkg/repository/camp.go`.
+
+- **Create**: `POST /camps` with `name`, optional `description`,
+  `is_visible` (hidden camps are only listed to members) and `direct_join`
+  (when false, self-joining is rejected). The creator is added as owner and
+  counts against their creation quota.
+- **Browse**: `GET /camps` lists visible camps (search via `?q=`, the
+  caller's camps via `?mine=1`, which includes hidden ones);
+  `GET /camps/:id` hides invisible camps from non-members.
+- **Membership**: `POST /camps/:id/join` (requires `direct_join`),
+  `DELETE /camps/:id/members/me` (the creator cannot leave).
+- **Camp feed**: `GET /camps/:id/posts` (member or visible-camp viewers).
+  Posting into a camp happens through the normal `POST /posts` with
+  `camp_id` set; the author must be a member. Camp posts are excluded from
+  the global feed and the camp listing keeps plain date order.
+
+## App Announcements
+
+Server-wide notices shown by clients on startup. Code:
+`services/account/internal/handler/app_announcement.go` +
+`pkg/repository/app_announcement.go`.
+
+- `GET /announcements` is public and returns active announcements (newest
+  first); `?all=1` includes retired entries for management views.
+- `POST /announcements` publishes (permission
+  `app.announcements.manage`); `PUT /announcements/:id` with
+  `{"active": false}` retires a notice without deleting the history entry.
+- Clients remember dismissed announcement ids locally, so a notice shows
+  once per device until a new one is published.
 
 ## Attachments & Storage
 
@@ -209,6 +257,12 @@ upload/delete/URL building.
   `uploadImage` in the account service both enforce the *effective* quota
   (base + active member bonus). Exceeding it returns `413 storage quota
   exceeded`; avatar/banner uploads count toward the same quota.
+- **Previews**: image uploads generate a 1440px JPEG (quality 82) preview
+  alongside the 512px thumbnail, stored as `<key>.preview.jpg` and exposed as
+  `attachments.preview_url` (migration v23). Clients render the preview for
+  quick viewing and fetch the original only on demand. Previews are deleted
+  together with the attachment (manual delete, chunk-assembly dedupe discard,
+  burn-after-view sweeper).
 - **Chunked uploads**: large files go through `POST /attachments/chunk/init`,
   per-chunk `POST .../chunk/:upload_id/:index`, and
   `POST .../chunk/:upload_id/complete`.
@@ -230,8 +284,21 @@ a group creates a request the target must accept or decline.
   `POST/DELETE .../mute-all`.
 - **Messages**: `GET|POST /conversations/:id/messages` (backward pagination via
   `before`), edit (`PUT`), soft-delete (`DELETE`), quote-replies
-  (`reply_to_id`), `@mentions` (including `@everyone`), and read-state
-  (`POST .../read`).
+  (`reply_to_id`), `@mentions` (including `@everyone`), message forwarding
+  (`POST .../messages/forward`) and read-state (`POST .../read`).
+- **Group extras** (`services/chat/internal/handler/group_features.go`):
+  - **Announcements**: `GET|POST /conversations/:id/announcements`,
+    `DELETE .../announcements/:announcement_id` — member reads, manager
+    writes.
+  - **Todos**: `GET|POST /conversations/:id/todos`, `PUT .../todos/:todo_id`
+    (`{"done": bool}`, any member checks items off), `DELETE .../todos/:todo_id`.
+  - **Files**: `GET /conversations/:id/files` surfaces the attachments
+    already shared into the conversation (joined from message_attachments),
+    newest first — no duplicate storage.
+- **QR login**: the signing-in device (anonymous) creates a five-minute
+  handshake via `POST /auth/qr`, polls `GET /auth/qr/:code` until it returns
+  `confirmed` with tokens; an already-signed-in device approves through
+  `POST /auth/qr/:code/approve`. Signed-in devices never display a login QR.
 - **E2E encryption**: conversations may be `encrypted`; group keys are
   distributed as per-member envelopes (`GET|POST /conversations/:id/e2ee-keys`).
   Uncrypted system messages carry kinds like `system.join` / `system.leave`
@@ -245,6 +312,22 @@ The push service (`services/push`) holds WebSocket connections (authed via
 `GET /api/v1/ws`) and fans out chat events, typing indicators and notification
 messages to connected clients. It is the single bidirectional channel; all
 other traffic is plain REST.
+
+## API Gateway
+
+The gateway (`services/gateway/cmd/main.go`) is the only public entry point.
+Every internal route must be registered in its explicit route table with an
+auth level (`authPublic` / `authRequired` / `authPermission` + permission key).
+
+- **Rate limiting**: a per-IP token bucket (120 req/min, burst 240) runs
+  ahead of auth and covers every proxied route; sustained flooding is
+  rejected with `429`. `/api/v1/health` is exempt.
+- **503 on dead backends**: when a proxied backend is unreachable
+  (connection refused, timeout, DNS), the proxy's `ErrorHandler` answers
+  `503 {"error":"service temporarily unavailable"}` and logs the failure —
+  a down service no longer masquerades as a missing route (404).
+- **Unmatched routes** still return a real `404`, so client routing bugs and
+  backend outages are distinguishable at a glance.
 
 ## Admin Panel
 
@@ -280,3 +363,5 @@ port (default `5001`).
   exactly what happened with the payment-PIN routes, fixed in `3f03453`).
 - Internal services bind to `127.0.0.1` and trust `X-User-ID`; they must not
   be exposed publicly.
+- Camp/group creation quotas and the app-announcements admin permission are
+  seeded by migration v24 + `seedPermissions()`; grants are managed per group.
