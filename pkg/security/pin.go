@@ -1,3 +1,5 @@
+// Package security provides credential helpers, currently payment-PIN
+// validation and bcrypt hashing.
 package security
 
 import (

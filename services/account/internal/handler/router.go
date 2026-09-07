@@ -1,3 +1,5 @@
+// Package handler implements the account service's HTTP endpoints: profiles,
+// auth flows, wallet, tasks, transfers, membership and moderation.
 package handler
 
 import (

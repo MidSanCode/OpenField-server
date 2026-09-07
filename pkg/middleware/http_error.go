@@ -1,3 +1,6 @@
+// Package middleware provides shared Gin middleware (auth, CORS, permission
+// checks, JSON error responses) and the JWT token helpers used across the
+// gateway and internal services.
 package middleware
 
 import (

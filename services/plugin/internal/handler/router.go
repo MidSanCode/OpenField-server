@@ -1,3 +1,5 @@
+// Package handler implements the plugin service's HTTP endpoints: catalog
+// browsing, downloads and admin management.
 package handler
 
 import (

@@ -1,3 +1,5 @@
+// Command posts runs the posts service: posts, replies, camps, reactions,
+// favorites and tipping endpoints.
 package main
 
 import (

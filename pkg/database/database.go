@@ -1,3 +1,5 @@
+// Package database owns the shared PostgreSQL connection and the versioned
+// schema migration machinery used by every service.
 package database
 
 import (

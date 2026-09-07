@@ -29,14 +29,19 @@ type BaseProvider struct {
 	config *oauth2.Config
 }
 
+// Name returns the provider's identifier (e.g. "oidc").
 func (p *BaseProvider) Name() string {
 	return p.name
 }
 
+// Config returns the OAuth2 configuration used for authorization redirects
+// and token exchange.
 func (p *BaseProvider) Config() *oauth2.Config {
 	return p.config
 }
 
+// ExchangeToken swaps an OAuth2 authorization code for an access token,
+// wrapping transport failures with the exchange context.
 func (p *BaseProvider) ExchangeToken(ctx context.Context, code string) (*oauth2.Token, error) {
 	token, err := p.config.Exchange(ctx, code)
 	if err != nil {

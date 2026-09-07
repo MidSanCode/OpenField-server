@@ -1,3 +1,5 @@
+// Package config loads the YAML service configuration and derives computed
+// values from it (database DSN, storage buckets, ...).
 package config
 
 import (

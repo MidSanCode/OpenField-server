@@ -1,3 +1,5 @@
+// Command plugin runs the plugin service: the public plugin catalog and
+// admin upload/publish/delete endpoints.
 package main
 
 import (

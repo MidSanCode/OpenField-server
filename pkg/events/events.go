@@ -1,3 +1,5 @@
+// Package events defines the realtime event envelope and type constants shared
+// by backend publishers and the push service, relayed over Postgres NOTIFY.
 package events
 
 import (

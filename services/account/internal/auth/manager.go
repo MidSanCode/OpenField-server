@@ -1,3 +1,6 @@
+// Package auth implements the account service's authentication: the OIDC
+// provider abstraction, callback handling and user provisioning for OAuth2
+// sign-ups.
 package auth
 
 import (

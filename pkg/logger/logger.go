@@ -1,3 +1,5 @@
+// Package logger provides the shared structured (JSON) logger and a Gin
+// request-logging middleware used by every service.
 package logger
 
 import (
@@ -8,6 +10,8 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// Log is the process-wide structured logger created by Init or InitWithLevel.
+// Every package logs through it, so it must be initialized before first use.
 var Log *slog.Logger
 
 // Init initializes the logger with default settings.

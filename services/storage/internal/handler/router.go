@@ -1,3 +1,5 @@
+// Package handler implements the storage service's HTTP endpoints:
+// attachments, chunked uploads and the file proxy.
 package handler
 
 import (

@@ -1,3 +1,5 @@
+// Command push runs the realtime push service: a WebSocket hub fed by
+// Postgres NOTIFY events plus one-time connection tickets for browsers.
 package main
 
 import (

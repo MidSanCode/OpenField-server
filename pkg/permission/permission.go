@@ -1,3 +1,5 @@
+// Package permission enumerates the permission keys used for role-based
+// authorization across the gateway and services.
 package permission
 
 // Permission keys — one per feature.

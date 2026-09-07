@@ -1,3 +1,5 @@
+// Command chat runs the chat service: conversations, consent requests,
+// messages and group-management endpoints.
 package main
 
 import (

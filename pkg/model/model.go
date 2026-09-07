@@ -1,3 +1,5 @@
+// Package model defines the domain structs shared by services and
+// repositories, including their JSON wire format and database adapters.
 package model
 
 import "time"

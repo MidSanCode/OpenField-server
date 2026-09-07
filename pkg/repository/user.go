@@ -1,3 +1,6 @@
+// Package repository is the SQL data-access layer shared by the services: one
+// repository per aggregate (users, posts, chat, wallet, moderation) plus
+// refresh-token storage and sentinel errors.
 package repository
 
 import (

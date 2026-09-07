@@ -1,3 +1,6 @@
+// Command account runs the account service: authentication (password and
+// OIDC), user profiles, wallet, tasks/check-in, transfers, membership and
+// moderation endpoints.
 package main
 
 import (

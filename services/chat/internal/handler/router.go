@@ -1,3 +1,5 @@
+// Package handler implements the chat service's HTTP endpoints: private and
+// group conversations, consent requests, messages and group extras.
 package handler
 
 import (

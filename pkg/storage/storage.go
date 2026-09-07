@@ -1,3 +1,6 @@
+// Package storage wraps the S3-compatible object store (MinIO, AWS S3,
+// RustFS, ...): bucket management, uploads, MIME handling and presigned or
+// gateway-proxied object URLs.
 package storage
 
 import (

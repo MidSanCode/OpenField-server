@@ -1,3 +1,5 @@
+// Package handler implements the posts service's HTTP endpoints: posts,
+// replies, camps, reactions, favorites and tips.
 package handler
 
 import (

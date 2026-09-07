@@ -1,3 +1,5 @@
+// Package imaging sanitizes uploaded images: it removes location metadata
+// from JPEG, PNG and WebP bytes while preserving all other EXIF tags.
 package imaging
 
 import (

@@ -112,6 +112,9 @@ func zeroed(b []byte, from, to int) bool {
 	return true
 }
 
+// TestStripExifGPSZeroesGPSButKeepsOthers verifies that stripping a TIFF
+// zeroes every GPS tag while Make, DateTime, Orientation and the Exif IFD
+// stay byte-identical.
 func TestStripExifGPSZeroesGPSButKeepsOthers(t *testing.T) {
 	tiff := buildTiffLE()
 	out := stripExifGPS(tiff)
@@ -145,6 +148,8 @@ func TestStripExifGPSZeroesGPSButKeepsOthers(t *testing.T) {
 	}
 }
 
+// TestStripExifGPSNoGPSReturnsSameBytes verifies that a TIFF without a valid
+// GPS IFD is returned byte-for-byte unchanged.
 func TestStripExifGPSNoGPSReturnsSameBytes(t *testing.T) {
 	tiff := buildTiffLE()
 	// Point the GPS IFD pointer away from a valid IFD so no GPS is found.
@@ -155,6 +160,9 @@ func TestStripExifGPSNoGPSReturnsSameBytes(t *testing.T) {
 	}
 }
 
+// TestStripJPEGLocation verifies that GPS data inside a JPEG's EXIF APP1
+// segment is zeroed while the SOI/EOI markers, the segment framing and all
+// other EXIF metadata survive.
 func TestStripJPEGLocation(t *testing.T) {
 	tiff := buildTiffLE()
 	var jpeg bytes.Buffer
@@ -192,6 +200,9 @@ func TestStripJPEGLocation(t *testing.T) {
 	}
 }
 
+// TestStripJPEGOctetStreamDetectedByMagic verifies that a JPEG served with a
+// wrong MIME type (application/octet-stream) is still located and stripped
+// via magic-byte detection.
 func TestStripJPEGOctetStreamDetectedByMagic(t *testing.T) {
 	var jpeg bytes.Buffer
 	jpeg.Write([]byte{0xFF, 0xD8})
@@ -224,6 +235,8 @@ func pngChunk(typ string, data []byte) []byte {
 	return out.Bytes()
 }
 
+// TestStripPNGLocation verifies that GPS data in a PNG's eXIf chunk is zeroed
+// while the IHDR chunk and remaining chunks pass through untouched.
 func TestStripPNGLocation(t *testing.T) {
 	var png bytes.Buffer
 	png.Write([]byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A})
@@ -272,6 +285,8 @@ func webpChunk(typ string, data []byte) []byte {
 	return out.Bytes()
 }
 
+// TestStripWebPLocation verifies that GPS data in a WebP's EXIF chunk is
+// zeroed while the RIFF/WEBP headers and other chunks survive.
 func TestStripWebPLocation(t *testing.T) {
 	exif := buildTiffLE()
 	// WebP container: RIFF <size> WEBP <chunks>
@@ -316,6 +331,8 @@ func TestStripWebPLocation(t *testing.T) {
 	}
 }
 
+// TestStripImageLocationNonImageUnchanged verifies that non-image data is
+// returned byte-for-byte unchanged.
 func TestStripImageLocationNonImageUnchanged(t *testing.T) {
 	data := []byte("plain text file, definitely not an image")
 	out := StripImageLocation(data, "text/plain")

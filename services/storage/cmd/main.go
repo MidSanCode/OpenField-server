@@ -1,3 +1,5 @@
+// Command storage runs the storage service: attachment uploads (direct and
+// chunked), usage reporting and the internal file proxy.
 package main
 
 import (

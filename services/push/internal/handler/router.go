@@ -1,3 +1,5 @@
+// Package handler implements the push service's realtime transport: the
+// WebSocket hub, the Postgres NOTIFY listener and connection tickets.
 package handler
 
 import (

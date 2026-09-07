@@ -1,3 +1,5 @@
+// Command gateway runs the API gateway: it validates JWTs, checks
+// permissions, and reverse-proxies /api/v1 routes to the internal services.
 package main
 
 import (

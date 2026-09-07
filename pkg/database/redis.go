@@ -10,6 +10,9 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// RedisClient is the shared Redis connection created by ConnectRedis and
+// closed by CloseRedis. It stays nil when Redis is disabled in the
+// configuration.
 var RedisClient *redis.Client
 
 // ConnectRedis initializes the Redis client if enabled.
