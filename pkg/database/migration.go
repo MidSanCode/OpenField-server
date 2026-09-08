@@ -506,16 +506,10 @@ var versionedMigrations = []migration{
 		version: 24,
 		name:    "pins-announcements-todos-camps",
 		sql: `
-			-- Pinned posts: an author may pin one of their own posts; pinned
-			-- posts float to the top of their profile and the feed carries a
-			-- badge. camp_id scopes a post to a camp (NULL = global feed).
-			ALTER TABLE posts ADD COLUMN IF NOT EXISTS pinned BOOLEAN NOT NULL DEFAULT FALSE;
-			ALTER TABLE posts ADD COLUMN IF NOT EXISTS camp_id BIGINT REFERENCES camps(id) ON DELETE SET NULL;
-			CREATE INDEX IF NOT EXISTS idx_posts_camp ON posts(camp_id) WHERE camp_id IS NOT NULL;
-
 			-- Camps (贴吧-style communities): visibility hides them from the
 			-- public list, direct_join controls whether joining is open or
-			-- creator-only. Posts live inside camps via posts.camp_id.
+			-- creator-only. Posts live inside camps via posts.camp_id (added
+			-- after the table exists, see below).
 			CREATE TABLE IF NOT EXISTS camps (
 				id BIGSERIAL PRIMARY KEY,
 				name TEXT NOT NULL UNIQUE,
@@ -534,6 +528,15 @@ var versionedMigrations = []migration{
 				PRIMARY KEY (camp_id, user_id)
 			);
 			CREATE INDEX IF NOT EXISTS idx_camp_members_user ON camp_members(user_id);
+
+			-- Pinned posts: an author may pin one of their own posts; pinned
+			-- posts float to the top of their profile and the feed carries a
+			-- badge. camp_id scopes a post to a camp (NULL = global feed).
+			-- These come after the camps CREATE so the FK target exists; the
+			-- deferred-retry executor would also self-heal the old ordering.
+			ALTER TABLE posts ADD COLUMN IF NOT EXISTS pinned BOOLEAN NOT NULL DEFAULT FALSE;
+			ALTER TABLE posts ADD COLUMN IF NOT EXISTS camp_id BIGINT REFERENCES camps(id) ON DELETE SET NULL;
+			CREATE INDEX IF NOT EXISTS idx_posts_camp ON posts(camp_id) WHERE camp_id IS NOT NULL;
 
 			-- Group announcements: manage-scoped writes, member-visible reads.
 			CREATE TABLE IF NOT EXISTS group_announcements (
@@ -570,6 +573,18 @@ var versionedMigrations = []migration{
 				active BOOLEAN NOT NULL DEFAULT TRUE,
 				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 			);
+		`,
+	},
+	{
+		// v25 repairs databases that already recorded v24 while the executor
+		// skipped the camp_id ALTER (it referenced camps before the camps
+		// CREATE TABLE ran later in the same step). Every statement is
+		// idempotent, so databases that completed v24 cleanly are untouched.
+		version: 25,
+		name:    "repair-camp-id-column",
+		sql: `
+			ALTER TABLE posts ADD COLUMN IF NOT EXISTS camp_id BIGINT REFERENCES camps(id) ON DELETE SET NULL;
+			CREATE INDEX IF NOT EXISTS idx_posts_camp ON posts(camp_id) WHERE camp_id IS NOT NULL;
 		`,
 	},
 }
@@ -853,8 +868,10 @@ var baselineStatements = []string{
 // Statement failures inside a migration step are tolerated when they are
 // harmless: "duplicate column/table/constraint" (a partially applied earlier
 // run, a database restored from a dump of a slightly different version, or
-// a hand-repaired schema). The migration still aborts on genuine failures so
-// a broken step is never silently recorded as applied.
+// a hand-repaired schema) is skipped, and statements whose dependency is
+// created later in the same step are retried once the rest have run. The
+// migration still aborts on genuine failures so a broken step is never
+// silently recorded as applied.
 func RunMigrations() error {
 	if err := ensureSchemaMigrationsTable(); err != nil {
 		return err
@@ -919,52 +936,102 @@ func RunMigrationsIfEnabled(cfg *config.Config) error {
 	return RunMigrations()
 }
 
-// isTolerableSchemaError reports whether a migration statement failure means
-// "the requested schema change is already in place" (or targets an object
-// that a later statement creates properly), in which case the migration may
-// proceed instead of crashing the service on start-up.
-func isTolerableSchemaError(err error) bool {
+// schemaErrorClass categorizes a failed migration statement so the runner
+// knows whether the failure means "already applied" (skip), "dependency
+// created later in the same step" (retry after the rest ran) or "genuine"
+// (abort the migration).
+type schemaErrorClass int
+
+const (
+	schemaErrAbort schemaErrorClass = iota
+	schemaErrSkip
+	schemaErrRetry
+)
+
+// classifySchemaError maps a PostgreSQL DDL failure to its tolerance class:
+//   - duplicate column/table/constraint ("already exists"): the change is
+//     already in place (partially applied earlier run, dump restored from a
+//     slightly different version, manual repair) — skip permanently;
+//   - undefined table/object: either real drift or a statement that
+//     references something a later statement in the same step creates —
+//     retry after the remaining statements ran;
+//   - everything else: a genuine failure the operator must see.
+func classifySchemaError(err error) schemaErrorClass {
 	if err == nil {
-		return false
+		return schemaErrAbort
 	}
 	var pqErr *pq.Error
 	if errors.As(err, &pqErr) {
 		switch pqErr.Code {
-		case "42P01", // undefined_table
-			"42701", // duplicate_column
+		case "42701", // duplicate_column
 			"42P07", // duplicate_table
-			"42710", // duplicate_object (constraints)
+			"42710": // duplicate_object (constraints)
+			return schemaErrSkip
+		case "42P01", // undefined_table
 			"42704": // undefined_object
-			return true
+			return schemaErrRetry
 		}
 	}
 	// lib/pq does not always wrap DDL failures in *pq.Error (e.g. through
 	// database/sql retries), so also match the message text as a fallback.
 	msg := err.Error()
 	if strings.Contains(msg, "already exists") {
-		return true
+		return schemaErrSkip
 	}
-	return strings.Contains(msg, "does not exist") && strings.Contains(msg, "relation")
+	if strings.Contains(msg, "does not exist") {
+		return schemaErrRetry
+	}
+	return schemaErrAbort
 }
 
-// execStatements runs one migration's statements inside tx. A statement that
-// fails with a "schema already matches" error is logged and skipped so that
-// databases whose columns were added by an older binary, restored from a
-// dump, or manually repaired still boot instead of crash-looping; every
-// other error aborts the migration.
-func execStatements(ctx context.Context, tx *sql.Tx, version int, statements []string) error {
+// execMigrationStatements executes one migration's statements in order inside
+// tx. Duplicate-object failures are skipped and undefined-relation failures
+// are retried once after all remaining statements ran (the common cause is a
+// statement referencing a table created later in the same step, e.g. an FK
+// ALTER placed before its CREATE TABLE). Anything still failing after the
+// retry pass aborts the migration so a genuinely broken step is never
+// recorded as applied — the service surfaces the error instead of booting
+// with a silently incomplete schema.
+func execMigrationStatements(ctx context.Context, tx *sql.Tx, label string, statements []string) error {
+	var deferred []string
 	for i, stmt := range statements {
 		if _, err := tx.ExecContext(ctx, stmt); err != nil {
-			if isTolerableSchemaError(err) {
+			switch classifySchemaError(err) {
+			case schemaErrSkip:
 				logger.Log.Warn("migration statement skipped (schema already matches)",
-					"version", version,
+					"step", label,
 					"statement", i+1,
 					"error", err.Error())
-				continue
+			case schemaErrRetry:
+				logger.Log.Warn("migration statement deferred (dependency later in step)",
+					"step", label,
+					"statement", i+1,
+					"error", err.Error())
+				deferred = append(deferred, stmt)
+			default:
+				return fmt.Errorf("%s statement %d failed: %w", label, i+1, err)
 			}
-			return err
 		}
 	}
+	if len(deferred) == 0 {
+		return nil
+	}
+	var firstErr error
+	failed := 0
+	for _, stmt := range deferred {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			failed++
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	if failed > 0 {
+		return fmt.Errorf("%s: %d deferred statement(s) still failing after retry (first error: %v)",
+			label, failed, firstErr)
+	}
+	logger.Log.Info("deferred migration statements applied on retry",
+		"step", label, "count", len(deferred))
 	return nil
 }
 
@@ -1019,16 +1086,9 @@ func applyPending() error {
 		if err != nil {
 			return fmt.Errorf("failed to begin baseline migration: %w", err)
 		}
-		for _, stmt := range baselineStatements {
-			if _, err := tx.ExecContext(ctx, stmt); err != nil {
-				if isTolerableSchemaError(err) {
-					logger.Log.Warn("baseline statement skipped (schema already matches)",
-						"error", err.Error())
-					continue
-				}
-				_ = tx.Rollback()
-				return fmt.Errorf("baseline migration failed: %w", err)
-			}
+		if err := execMigrationStatements(ctx, tx, "baseline", baselineStatements); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("baseline migration failed: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO schema_migrations (version, name) VALUES ($1, $2) ON CONFLICT (version) DO NOTHING`,
@@ -1052,7 +1112,7 @@ func applyPending() error {
 		if err != nil {
 			return fmt.Errorf("failed to begin migration %d (%s): %w", m.version, m.name, err)
 		}
-		if err := execStatements(ctx, tx, m.version, splitMigrationSQL(m.sql)); err != nil {
+		if err := execMigrationStatements(ctx, tx, fmt.Sprintf("migration %d (%s)", m.version, m.name), splitMigrationSQL(m.sql)); err != nil {
 			_ = tx.Rollback()
 			return fmt.Errorf("migration %d (%s) failed: %w", m.version, m.name, err)
 		}
