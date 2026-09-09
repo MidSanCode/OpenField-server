@@ -198,24 +198,69 @@ type Post struct {
 	Pinned bool `json:"pinned"`
 	// CampID scopes the post to a camp (贴吧-style community); 0 = global.
 	CampID int64 `json:"camp_id,omitempty"`
+	// CampPinned marks a post pinned within its camp (by camp admins). Only
+	// meaningful when CampID > 0; camp feeds order these first.
+	CampPinned bool `json:"camp_pinned,omitempty"`
 }
 
 // Camp is a 贴吧-style community: a named space whose posts live in the camp
 // rather than the global feed. Visibility hides it from the public list;
 // direct join controls whether anyone may enter or only the creator.
 type Camp struct {
-	ID          int64     `json:"id"`
-	Name        string    `json:"name"`
-	Description string    `json:"description"`
-	CreatorID   int64     `json:"creator_id"`
-	CreatorName string    `json:"creator_name,omitempty"`
-	IsVisible   bool      `json:"is_visible"`
-	DirectJoin  bool      `json:"direct_join"`
-	MemberCount int64     `json:"member_count"`
-	PostCount   int64     `json:"post_count"`
-	IsMember    bool      `json:"is_member"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID          int64  `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	CreatorID   int64  `json:"creator_id"`
+	CreatorName string `json:"creator_name,omitempty"`
+	IsVisible   bool   `json:"is_visible"`
+	DirectJoin  bool   `json:"direct_join"`
+	// MemberPost allows plain members to publish posts into the camp; when
+	// false only the owner and admins may post. Defaults to true.
+	MemberPost bool `json:"member_post"`
+	// MemberPin allows plain members to pin their own posts within the camp;
+	// when false only the owner and admins may pin. Defaults to false.
+	MemberPin   bool  `json:"member_pin"`
+	MemberCount int64 `json:"member_count"`
+	PostCount   int64 `json:"post_count"`
+	IsMember    bool  `json:"is_member"`
+	// MyRole is the caller's role in this camp: "owner", "admin", "member",
+	// or "" for non-members. Populated by GetByID with a non-zero userID.
+	MyRole    string    `json:"my_role,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// CampMember is one row of a camp's roster: the member's identity plus their
+// camp role ("owner", "admin" or "member") and join time.
+type CampMember struct {
+	CampID     int64     `json:"camp_id"`
+	UserID     int64     `json:"user_id"`
+	Role       string    `json:"role"`
+	Username   string    `json:"username,omitempty"`
+	Nickname   string    `json:"nickname,omitempty"`
+	AvatarURL  string    `json:"avatar_url,omitempty"`
+	IsVerified bool      `json:"is_verified,omitempty"`
+	JoinedAt   time.Time `json:"joined_at"`
+}
+
+// Camp role levels, ordered so roleAtLeast can compare them.
+const (
+	CampRoleMember = "member"
+	CampRoleAdmin  = "admin"
+	CampRoleOwner  = "owner"
+)
+
+// CampRoleRank maps a camp role to its hierarchy level; unknown roles rank 0.
+func CampRoleRank(role string) int {
+	switch role {
+	case CampRoleOwner:
+		return 3
+	case CampRoleAdmin:
+		return 2
+	case CampRoleMember:
+		return 1
+	}
+	return 0
 }
 
 // GroupAnnouncement is a manage-scoped notice shown to conversation members.

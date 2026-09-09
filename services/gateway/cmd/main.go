@@ -251,6 +251,11 @@ func main() {
 		{http.MethodGet, "/api/v1/camps/:id/posts", cfg.Services.Posts, authPublic, ""},
 		{http.MethodPost, "/api/v1/camps/:id/join", cfg.Services.Posts, authRequired, ""},
 		{http.MethodDelete, "/api/v1/camps/:id/members/me", cfg.Services.Posts, authRequired, ""},
+		{http.MethodGet, "/api/v1/camps/:id/members", cfg.Services.Posts, authRequired, ""},
+		{http.MethodPost, "/api/v1/camps/:id/members/:user_id", cfg.Services.Posts, authRequired, ""},
+		{http.MethodPut, "/api/v1/camps/:id/members/:user_id/role", cfg.Services.Posts, authRequired, ""},
+		{http.MethodDelete, "/api/v1/camps/:id/members/:user_id", cfg.Services.Posts, authRequired, ""},
+		{http.MethodPut, "/api/v1/camps/:id/posts/:post_id/pin", cfg.Services.Posts, authRequired, ""},
 
 		// ---- group announcements / todos / files (chat service) ----
 		{http.MethodGet, "/api/v1/conversations/:id/announcements", cfg.Services.Chat, authPermission, "chat.view"},

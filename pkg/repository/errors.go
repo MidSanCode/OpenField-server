@@ -14,6 +14,9 @@ import (
 var (
 	ErrUsernameTaken = errors.New("username already taken")
 	ErrNotFound      = errors.New("not found")
+	// ErrForbidden reports that the caller's role/permissions are
+	// insufficient for the requested operation.
+	ErrForbidden = errors.New("forbidden")
 	// ErrNoSuchRow reports that no row was affected (missing or not owned).
 	ErrNoSuchRow = sql.ErrNoRows
 	// ErrAlreadyHandled reports a consent request that was already accepted or declined.

@@ -587,6 +587,31 @@ var versionedMigrations = []migration{
 			CREATE INDEX IF NOT EXISTS idx_posts_camp ON posts(camp_id) WHERE camp_id IS NOT NULL;
 		`,
 	},
+	{
+		// v26 introduces camp governance: per-camp role settings (who may
+		// post, who may pin), camp-scoped pinned posts, and the roster
+		// backfill for camps created before roles existed.
+		version: 26,
+		name:    "camp-permissions-and-pins",
+		sql: `
+			-- Camp-level permission switches. member_post gates publishing for
+			-- plain members (owner/admin always may); member_pin gates
+			-- self-pinning for plain members.
+			ALTER TABLE camps ADD COLUMN IF NOT EXISTS member_post BOOLEAN NOT NULL DEFAULT TRUE;
+			ALTER TABLE camps ADD COLUMN IF NOT EXISTS member_pin BOOLEAN NOT NULL DEFAULT FALSE;
+
+			-- Camp-scoped pinned posts float to the top of their camp feed
+			-- only; the profile/global pinned flag stays independent.
+			ALTER TABLE posts ADD COLUMN IF NOT EXISTS camp_pinned BOOLEAN NOT NULL DEFAULT FALSE;
+			CREATE INDEX IF NOT EXISTS idx_posts_camp_pinned
+				ON posts(camp_id) WHERE camp_id IS NOT NULL AND camp_pinned;
+
+			-- Roster backfill: camps whose owner row predates role semantics.
+			UPDATE camp_members cm SET role = 'owner'
+				FROM camps c
+				WHERE c.id = cm.camp_id AND c.creator_id = cm.user_id AND cm.role <> 'owner';
+		`,
+	},
 }
 
 // latestMigrationVersion returns the newest schema version the code knows

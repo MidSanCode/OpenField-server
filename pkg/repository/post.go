@@ -46,7 +46,7 @@ func scanPosts(rows *sql.Rows) ([]model.Post, []int64, error) {
 	postIDs := make([]int64, 0)
 	for rows.Next() {
 		var post model.Post
-		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.QuotedPostID, &post.Pinned, &post.CampID, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.IsBot, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.NameColors, &post.NameGradientDirection, &post.AvatarFrame, &post.ReplyCount, &post.FavoriteCount, &post.TipTotal); err != nil {
+		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.QuotedPostID, &post.Pinned, &post.CampID, &post.CampPinned, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.IsBot, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.NameColors, &post.NameGradientDirection, &post.AvatarFrame, &post.ReplyCount, &post.FavoriteCount, &post.TipTotal); err != nil {
 			return nil, nil, fmt.Errorf("failed to scan post: %w", err)
 		}
 		applyMemberStatus(&post.MemberLevel, &post.MemberExpiresAt, &post.MemberActive)
@@ -147,14 +147,14 @@ func populateQuotedPost(post *model.Post, viewerID int64) error {
 func (r *PostRepository) GetByID(id int64) (*model.Post, error) {
 	post := &model.Post{}
 	err := database.DB.QueryRow(
-		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, COALESCE(p.quoted_post_id, 0), p.pinned, COALESCE(p.camp_id, 0), u.username, u.nickname, u.avatar_url, u.is_verified`+authorMemberCols+`,
+		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, COALESCE(p.quoted_post_id, 0), p.pinned, COALESCE(p.camp_id, 0), p.camp_pinned, u.username, u.nickname, u.avatar_url, u.is_verified`+authorMemberCols+`,
 		        (SELECT COUNT(*) FROM post_favorites pf WHERE pf.post_id = p.id) AS favorite_count,
 		        `+tipTotalExpr+`
 		 FROM posts p
 		 JOIN users u ON p.user_id = u.id
 		 WHERE p.id = $1`,
 		id,
-	).Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.QuotedPostID, &post.Pinned, &post.CampID, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.IsBot, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.NameColors, &post.NameGradientDirection, &post.AvatarFrame, &post.FavoriteCount, &post.TipTotal)
+	).Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.QuotedPostID, &post.Pinned, &post.CampID, &post.CampPinned, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.IsBot, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.NameColors, &post.NameGradientDirection, &post.AvatarFrame, &post.FavoriteCount, &post.TipTotal)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -364,7 +364,7 @@ func (r *PostRepository) List(page, limit int, viewerID int64) ([]model.Post, er
 	offset := (page - 1) * limit
 
 	rows, err := database.DB.Query(
-		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, COALESCE(p.quoted_post_id, 0), p.pinned, COALESCE(p.camp_id, 0), u.username, u.nickname, u.avatar_url, u.is_verified`+authorMemberCols+`,
+		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, COALESCE(p.quoted_post_id, 0), p.pinned, COALESCE(p.camp_id, 0), p.camp_pinned, u.username, u.nickname, u.avatar_url, u.is_verified`+authorMemberCols+`,
 		        (SELECT COUNT(*) FROM post_replies pr WHERE pr.post_id = p.id AND pr.deleted_at IS NULL) AS reply_count,
 		        (SELECT COUNT(*) FROM post_favorites pf WHERE pf.post_id = p.id) AS favorite_count,
 		        `+tipTotalExpr+`
@@ -384,7 +384,7 @@ func (r *PostRepository) List(page, limit int, viewerID int64) ([]model.Post, er
 	var postIDs []int64
 	for rows.Next() {
 		var post model.Post
-		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.QuotedPostID, &post.Pinned, &post.CampID, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.IsBot, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.NameColors, &post.NameGradientDirection, &post.AvatarFrame, &post.ReplyCount, &post.FavoriteCount, &post.TipTotal); err != nil {
+		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.QuotedPostID, &post.Pinned, &post.CampID, &post.CampPinned, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.IsBot, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.NameColors, &post.NameGradientDirection, &post.AvatarFrame, &post.ReplyCount, &post.FavoriteCount, &post.TipTotal); err != nil {
 			return nil, fmt.Errorf("failed to scan post: %w", err)
 		}
 		applyMemberStatus(&post.MemberLevel, &post.MemberExpiresAt, &post.MemberActive)
@@ -471,7 +471,7 @@ func (r *PostRepository) Search(f PostSearchFilter, page, limit int, viewerID in
 	args = append([]interface{}{viewerID}, args...)
 	visibility := visibilityCondition(viewerID, "p.", "$1")
 
-	query := `SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, COALESCE(p.quoted_post_id, 0), p.pinned, COALESCE(p.camp_id, 0), u.username, u.nickname, u.avatar_url, u.is_verified` + authorMemberCols + `,
+	query := `SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, COALESCE(p.quoted_post_id, 0), p.pinned, COALESCE(p.camp_id, 0), p.camp_pinned, u.username, u.nickname, u.avatar_url, u.is_verified` + authorMemberCols + `,
 	        (SELECT COUNT(*) FROM post_replies pr WHERE pr.post_id = p.id AND pr.deleted_at IS NULL) AS reply_count,
 	        (SELECT COUNT(*) FROM post_favorites pf WHERE pf.post_id = p.id) AS favorite_count,
 	        ` + tipTotalExpr + `
@@ -522,13 +522,18 @@ func (r *PostRepository) ListByUser(userID int64, page, limit int, viewerID int6
 	offset := (page - 1) * limit
 
 	rows, err := database.DB.Query(
-		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, COALESCE(p.quoted_post_id, 0), p.pinned, COALESCE(p.camp_id, 0), u.username, u.nickname, u.avatar_url, u.is_verified`+authorMemberCols+`,
+		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, COALESCE(p.quoted_post_id, 0), p.pinned, COALESCE(p.camp_id, 0), p.camp_pinned, u.username, u.nickname, u.avatar_url, u.is_verified`+authorMemberCols+`,
 		        (SELECT COUNT(*) FROM post_replies pr WHERE pr.post_id = p.id AND pr.deleted_at IS NULL) AS reply_count,
 		        (SELECT COUNT(*) FROM post_favorites pf WHERE pf.post_id = p.id) AS favorite_count,
 		        `+tipTotalExpr+`
 		 FROM posts p
 		 JOIN users u ON p.user_id = u.id
-		 WHERE p.user_id = $1 AND `+visibilityCondition(viewerID, "p.", "$2")+`
+		 WHERE p.user_id = $1 AND
+		       -- Camp posts leak through profiles to non-members: they stay
+		       -- visible only to their author or fellow camp members.
+		       (p.camp_id IS NULL OR p.user_id = $2 OR EXISTS (
+		           SELECT 1 FROM camp_members cm WHERE cm.camp_id = p.camp_id AND cm.user_id = $2
+		       )) AND `+visibilityCondition(viewerID, "p.", "$2")+`
 		 ORDER BY p.pinned DESC, p.created_at DESC
 		 LIMIT $3 OFFSET $4`,
 		userID, viewerID, limit, offset,
@@ -542,7 +547,7 @@ func (r *PostRepository) ListByUser(userID int64, page, limit int, viewerID int6
 	var postIDs []int64
 	for rows.Next() {
 		var post model.Post
-		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.QuotedPostID, &post.Pinned, &post.CampID, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.IsBot, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.NameColors, &post.NameGradientDirection, &post.AvatarFrame, &post.ReplyCount, &post.FavoriteCount, &post.TipTotal); err != nil {
+		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.QuotedPostID, &post.Pinned, &post.CampID, &post.CampPinned, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.IsBot, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.NameColors, &post.NameGradientDirection, &post.AvatarFrame, &post.ReplyCount, &post.FavoriteCount, &post.TipTotal); err != nil {
 			return nil, fmt.Errorf("failed to scan post: %w", err)
 		}
 		applyMemberStatus(&post.MemberLevel, &post.MemberExpiresAt, &post.MemberActive)
@@ -583,14 +588,18 @@ func (r *PostRepository) ListFavoritePosts(userID int64, page, limit int) ([]mod
 	offset := (page - 1) * limit
 
 	rows, err := database.DB.Query(
-		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, COALESCE(p.quoted_post_id, 0), p.pinned, COALESCE(p.camp_id, 0), u.username, u.nickname, u.avatar_url, u.is_verified`+authorMemberCols+`,
+		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, COALESCE(p.quoted_post_id, 0), p.pinned, COALESCE(p.camp_id, 0), p.camp_pinned, u.username, u.nickname, u.avatar_url, u.is_verified`+authorMemberCols+`,
 		        (SELECT COUNT(*) FROM post_replies pr WHERE pr.post_id = p.id AND pr.deleted_at IS NULL) AS reply_count,
 		        (SELECT COUNT(*) FROM post_favorites pf WHERE pf.post_id = p.id) AS favorite_count,
 		        `+tipTotalExpr+`
 		 FROM posts p
 		 JOIN users u ON p.user_id = u.id
 		 JOIN post_favorites fv ON fv.post_id = p.id
-		 WHERE fv.user_id = $1 AND `+visibilityCondition(userID, "p.", "$1")+`
+		 WHERE fv.user_id = $1 AND
+		       -- Camp posts favorited before leaving a camp stay hidden.
+		       (p.camp_id IS NULL OR EXISTS (
+		           SELECT 1 FROM camp_members cm WHERE cm.camp_id = p.camp_id AND cm.user_id = $1
+		       )) AND `+visibilityCondition(userID, "p.", "$1")+`
 		 ORDER BY fv.created_at DESC
 		 LIMIT $2 OFFSET $3`,
 		userID, limit, offset,
@@ -604,7 +613,7 @@ func (r *PostRepository) ListFavoritePosts(userID int64, page, limit int) ([]mod
 	var postIDs []int64
 	for rows.Next() {
 		var post model.Post
-		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.QuotedPostID, &post.Pinned, &post.CampID, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.IsBot, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.NameColors, &post.NameGradientDirection, &post.AvatarFrame, &post.ReplyCount, &post.FavoriteCount, &post.TipTotal); err != nil {
+		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.QuotedPostID, &post.Pinned, &post.CampID, &post.CampPinned, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.IsBot, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.NameColors, &post.NameGradientDirection, &post.AvatarFrame, &post.ReplyCount, &post.FavoriteCount, &post.TipTotal); err != nil {
 			return nil, fmt.Errorf("failed to scan post: %w", err)
 		}
 		applyMemberStatus(&post.MemberLevel, &post.MemberExpiresAt, &post.MemberActive)
@@ -734,9 +743,21 @@ const (
 
 // canViewPost mirrors the handler-level visibility rule: public for everyone,
 // login for any authenticated user, friends for mutual follows, private for
-// the author only. It lives here so quoted-post resolution can mask quotes of
-// restricted posts without a handler->repository import cycle.
+// the author only — and camp posts for camp members (or the author) only.
+// It lives here so quoted-post resolution can mask quotes of restricted
+// posts without a handler->repository import cycle.
 func canViewPost(post *model.Post, viewerID int64) bool {
+	if post.CampID > 0 {
+		if viewerID <= 0 {
+			return false
+		}
+		if viewerID != post.UserID {
+			member, err := NewCampRepository().IsMember(post.CampID, viewerID)
+			if err != nil || !member {
+				return false
+			}
+		}
+	}
 	switch post.Visibility {
 	case visibilityPrivate:
 		return viewerID > 0 && viewerID == post.UserID
@@ -776,7 +797,7 @@ func populateQuotedPosts(posts []model.Post, viewerID int64) error {
 	}
 
 	rows, err := database.DB.Query(
-		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, COALESCE(p.quoted_post_id, 0), p.pinned, COALESCE(p.camp_id, 0), u.username, u.nickname, u.avatar_url, u.is_verified`+authorMemberCols+`
+		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, COALESCE(p.quoted_post_id, 0), p.pinned, COALESCE(p.camp_id, 0), p.camp_pinned, u.username, u.nickname, u.avatar_url, u.is_verified`+authorMemberCols+`
 		 FROM posts p
 		 JOIN users u ON p.user_id = u.id
 		 WHERE p.id = ANY($1)`,
@@ -790,7 +811,7 @@ func populateQuotedPosts(posts []model.Post, viewerID int64) error {
 	byID := make(map[int64]*model.Post, len(ids))
 	for rows.Next() {
 		var q model.Post
-		if err := rows.Scan(&q.ID, &q.UserID, &q.Content, &q.Visibility, &q.CreatedAt, &q.UpdatedAt, &q.QuotedPostID, &q.Pinned, &q.CampID, &q.Username, &q.Nickname, &q.AvatarURL, &q.IsVerified, &q.IsBot, &q.MemberLevel, &q.MemberExpiresAt, &q.NameColor, &q.NameColorTo, &q.NameDynamic, &q.NameColors, &q.NameGradientDirection, &q.AvatarFrame); err != nil {
+		if err := rows.Scan(&q.ID, &q.UserID, &q.Content, &q.Visibility, &q.CreatedAt, &q.UpdatedAt, &q.QuotedPostID, &q.Pinned, &q.CampID, &q.CampPinned, &q.Username, &q.Nickname, &q.AvatarURL, &q.IsVerified, &q.IsBot, &q.MemberLevel, &q.MemberExpiresAt, &q.NameColor, &q.NameColorTo, &q.NameDynamic, &q.NameColors, &q.NameGradientDirection, &q.AvatarFrame); err != nil {
 			return fmt.Errorf("failed to scan quoted post: %w", err)
 		}
 		applyMemberStatus(&q.MemberLevel, &q.MemberExpiresAt, &q.MemberActive)
@@ -935,14 +956,14 @@ func (r *PostRepository) ListByCamp(campID int64, viewerID int64, beforeID int64
 		limit = 20
 	}
 	rows, err := database.DB.Query(
-		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, COALESCE(p.quoted_post_id, 0), p.pinned, COALESCE(p.camp_id, 0), u.username, u.nickname, u.avatar_url, u.is_verified`+authorMemberCols+`,
+		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, COALESCE(p.quoted_post_id, 0), p.pinned, COALESCE(p.camp_id, 0), p.camp_pinned, u.username, u.nickname, u.avatar_url, u.is_verified`+authorMemberCols+`,
 		        (SELECT COUNT(*) FROM post_replies pr WHERE pr.post_id = p.id AND pr.deleted_at IS NULL) AS reply_count,
 		        (SELECT COUNT(*) FROM post_favorites pf WHERE pf.post_id = p.id) AS favorite_count,
 		        `+tipTotalExpr+`
 		 FROM posts p
 		 JOIN users u ON p.user_id = u.id
 		 WHERE p.camp_id = $1 AND `+visibilityCondition(viewerID, "p.", "$2")+`
-		 ORDER BY p.created_at DESC
+		 ORDER BY p.camp_pinned DESC, p.created_at DESC
 		 LIMIT $3`,
 		campID, viewerID, limit,
 	)
@@ -955,7 +976,7 @@ func (r *PostRepository) ListByCamp(campID int64, viewerID int64, beforeID int64
 	var postIDs []int64
 	for rows.Next() {
 		var post model.Post
-		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.QuotedPostID, &post.Pinned, &post.CampID, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.IsBot, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.NameColors, &post.NameGradientDirection, &post.AvatarFrame, &post.ReplyCount, &post.FavoriteCount, &post.TipTotal); err != nil {
+		if err := rows.Scan(&post.ID, &post.UserID, &post.Content, &post.Visibility, &post.CreatedAt, &post.UpdatedAt, &post.QuotedPostID, &post.Pinned, &post.CampID, &post.CampPinned, &post.Username, &post.Nickname, &post.AvatarURL, &post.IsVerified, &post.IsBot, &post.MemberLevel, &post.MemberExpiresAt, &post.NameColor, &post.NameColorTo, &post.NameDynamic, &post.NameColors, &post.NameGradientDirection, &post.AvatarFrame, &post.ReplyCount, &post.FavoriteCount, &post.TipTotal); err != nil {
 			return nil, fmt.Errorf("failed to scan post: %w", err)
 		}
 		applyMemberStatus(&post.MemberLevel, &post.MemberExpiresAt, &post.MemberActive)
@@ -994,6 +1015,23 @@ func (r *PostRepository) SetPinned(postID, userID int64, pinned bool) error {
 	)
 	if err != nil {
 		return fmt.Errorf("failed to set post pinned: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// SetCampPinned toggles a post's camp-scoped pin. The post must belong to
+// the given camp; who may call this (camp admins, or the author when the
+// camp allows member pins) is decided by the handler. Returns
+// sql.ErrNoRows when the post is not in that camp.
+func (r *PostRepository) SetCampPinned(postID, campID int64, pinned bool) error {
+	res, err := database.DB.Exec(
+		"UPDATE posts SET camp_pinned = $3 WHERE id = $1 AND camp_id = $2", postID, campID, pinned,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to set camp pinned: %w", err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return sql.ErrNoRows

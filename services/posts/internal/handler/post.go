@@ -65,8 +65,20 @@ var allowedVisibilities = map[string]bool{
 
 // canViewPost reports whether the viewer may see a post based on its
 // visibility: public for everyone, login for any authenticated user, friends
-// for mutual follows, private for the author only.
+// for mutual follows, private for the author only — and camp posts for camp
+// members (or the author) only.
 func canViewPost(post *model.Post, viewerID int64) bool {
+	if post.CampID > 0 {
+		if viewerID <= 0 {
+			return false
+		}
+		if viewerID != post.UserID {
+			member, err := repository.NewCampRepository().IsMember(post.CampID, viewerID)
+			if err != nil || !member {
+				return false
+			}
+		}
+	}
 	switch post.Visibility {
 	case visibilityPrivate:
 		return viewerID > 0 && viewerID == post.UserID
@@ -100,8 +112,10 @@ func NewPostHandler() *PostHandler {
 	}
 }
 
-// PinPost toggles the pinned flag of the caller's own post. Pinned posts
-// float to the top of the author's profile and carry a badge in the feed.
+// PinPost toggles a pin. Global posts pin to the author's profile (author
+// only); camp posts toggle the camp-scoped pin instead — camp admins/owner
+// may pin any post in their camp, plain members only their own and only
+// when the camp's member_pin switch allows it.
 func (h *PostHandler) PinPost(c *gin.Context) {
 	userID, ok := middleware.GetUserID(c)
 	if !ok {
@@ -120,6 +134,49 @@ func (h *PostHandler) PinPost(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body (pinned boolean required)"})
 		return
 	}
+
+	post, err := h.postRepo.GetByID(postID)
+	if err != nil {
+		logger.Log.Error("failed to load post for pin", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to pin post"})
+		return
+	}
+	if post != nil && post.CampID > 0 {
+		campRepo := repository.NewCampRepository()
+		role, err := campRepo.GetRole(post.CampID, userID)
+		if err != nil {
+			logger.Log.Error("failed to read camp role for pin", "error", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to pin post"})
+			return
+		}
+		if model.CampRoleRank(role) < model.CampRoleRank(model.CampRoleAdmin) {
+			camp, err := campRepo.GetByID(post.CampID, userID)
+			if err != nil || camp == nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to pin post"})
+				return
+			}
+			if !camp.MemberPin {
+				c.JSON(http.StatusForbidden, gin.H{"error": "pinning is limited to camp admins in this camp"})
+				return
+			}
+			if post.UserID != userID {
+				c.JSON(http.StatusForbidden, gin.H{"error": "you may only pin your own posts in this camp"})
+				return
+			}
+		}
+		if err := h.postRepo.SetCampPinned(postID, post.CampID, *req.Pinned); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				c.JSON(http.StatusNotFound, gin.H{"error": "post not found in its camp"})
+				return
+			}
+			logger.Log.Error("failed to set camp pinned", "error", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to pin post"})
+			return
+		}
+		c.Status(http.StatusNoContent)
+		return
+	}
+
 	if err := h.postRepo.SetPinned(postID, userID, *req.Pinned); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			c.JSON(http.StatusForbidden, gin.H{"error": "post not found or you are not the author"})
@@ -221,17 +278,22 @@ func (h *PostHandler) CreatePost(c *gin.Context) {
 	}
 
 	// Camp scoping: posting into a camp requires membership (the creator is
-	// always a member). Global posts leave camp_id at 0.
+	// always a member). Camps with member_post disabled only accept posts
+	// from their owner and admins. Global posts leave camp_id at 0.
 	if req.CampID > 0 {
 		campRepo := repository.NewCampRepository()
-		isMember, err := campRepo.IsMember(req.CampID, userID)
+		camp, err := campRepo.GetByID(req.CampID, userID)
 		if err != nil {
-			logger.Log.Error("failed to check camp membership", "error", err, "camp_id", req.CampID)
+			logger.Log.Error("failed to verify camp", "error", err, "camp_id", req.CampID)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to verify camp"})
 			return
 		}
-		if !isMember {
+		if camp == nil || !camp.IsMember {
 			c.JSON(http.StatusForbidden, gin.H{"error": "join the camp before posting into it"})
+			return
+		}
+		if !camp.MemberPost && model.CampRoleRank(camp.MyRole) < model.CampRoleRank(model.CampRoleAdmin) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "only camp admins may post in this camp"})
 			return
 		}
 	}

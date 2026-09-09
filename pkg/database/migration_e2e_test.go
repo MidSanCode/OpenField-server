@@ -75,6 +75,8 @@ func TestFreshDatabaseMigrationE2E(t *testing.T) {
 	for _, pair := range [][2]string{
 		{"users", "member_level"}, {"users", "last_seen_at"}, {"users", "auto_renew"},
 		{"posts", "pinned"}, {"posts", "camp_id"}, {"posts", "quoted_post_id"},
+		{"posts", "camp_pinned"},
+		{"camps", "member_post"}, {"camps", "member_pin"},
 		{"attachments", "preview_url"}, {"attachments", "burn_at"},
 		{"messages", "check_id"}, {"messages", "burn_at"},
 		{"conversations", "is_public"}, {"conversation_members", "notify_level"},
@@ -90,12 +92,15 @@ func TestFreshDatabaseMigrationE2E(t *testing.T) {
 		t.Fatalf("idempotent RunMigrations failed: %v", err)
 	}
 
-	// Phase 4: simulate the v24 broken state — version 24 recorded, camp_id
-	// dropped — then confirm v25 repairs it on the next upgrade pass.
+	// Phase 4: simulate the v24 broken state — versions 25+ rewound, camp_id
+	// dropped — then confirm the repairs re-apply on the next upgrade pass.
 	if _, err := DB.ExecContext(ctx, `ALTER TABLE posts DROP COLUMN camp_id`); err != nil {
 		t.Fatalf("simulated drift failed: %v", err)
 	}
-	if _, err := DB.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version = 25`); err != nil {
+	if _, err := DB.ExecContext(ctx, `ALTER TABLE posts DROP COLUMN camp_pinned`); err != nil {
+		t.Fatalf("simulated drift failed: %v", err)
+	}
+	if _, err := DB.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version >= 25`); err != nil {
 		t.Fatalf("version rewind failed: %v", err)
 	}
 	if err := RunMigrations(); err != nil {
@@ -103,5 +108,8 @@ func TestFreshDatabaseMigrationE2E(t *testing.T) {
 	}
 	if !columnExists(t, "posts", "camp_id") {
 		t.Fatal("camp_id was not repaired by v25")
+	}
+	if !columnExists(t, "posts", "camp_pinned") {
+		t.Fatal("camp_pinned was not re-added by v26")
 	}
 }

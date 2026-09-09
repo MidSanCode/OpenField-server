@@ -49,6 +49,11 @@ func RegisterRoutes(r *gin.Engine, postHandler *PostHandler, campHandler *CampHa
 			auth.DELETE("/camps/:id", campHandler.Delete)
 			auth.POST("/camps/:id/join", campHandler.Join)
 			auth.DELETE("/camps/:id/members/me", campHandler.Leave)
+			auth.GET("/camps/:id/members", campHandler.ListMembers)
+			auth.POST("/camps/:id/members/:user_id", campHandler.AddMember)
+			auth.PUT("/camps/:id/members/:user_id/role", campHandler.SetMemberRole)
+			auth.DELETE("/camps/:id/members/:user_id", campHandler.RemoveMember)
+			auth.PUT("/camps/:id/posts/:post_id/pin", campHandler.PinCampPost)
 		}
 	}
 }

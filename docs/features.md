@@ -220,18 +220,38 @@ rather than the global feed. Code: `services/posts/internal/handler/camp.go`
 + `pkg/repository/camp.go`.
 
 - **Create**: `POST /camps` with `name`, optional `description`,
-  `is_visible` (hidden camps are only listed to members) and `direct_join`
-  (when false, self-joining is rejected). The creator is added as owner and
-  counts against their creation quota.
+  `is_visible` (hidden camps are only listed to members), `direct_join`
+  (when false, self-joining is rejected) and the permission switches
+  `member_post` (default true) / `member_pin` (default false). The creator
+  is added as owner and counts against their creation quota.
 - **Browse**: `GET /camps` lists visible camps (search via `?q=`, the
   caller's camps via `?mine=1`, which includes hidden ones);
-  `GET /camps/:id` hides invisible camps from non-members.
+  `GET /camps/:id` hides invisible camps from non-members. Camp payloads
+  carry `my_role` ("owner"/"admin"/"member") for the caller.
 - **Membership**: `POST /camps/:id/join` (requires `direct_join`),
   `DELETE /camps/:id/members/me` (the creator cannot leave).
-- **Camp feed**: `GET /camps/:id/posts` (member or visible-camp viewers).
-  Posting into a camp happens through the normal `POST /posts` with
-  `camp_id` set; the author must be a member. Camp posts are excluded from
-  the global feed and the camp listing keeps plain date order.
+- **Roles**: `owner` (creator) > `admin` > `member`, stored in
+  `camp_members.role` (v26 backfills creator rows to owner).
+- **Members**: `GET /camps/:id/members` lists the roster (members only,
+  highest roles first); `POST /camps/:id/members/:user_id` directly
+  enrolls a user as member (admin+, bypasses `direct_join`);
+  `PUT /camps/:id/members/:user_id/role` promotes/demotes between
+  admin/member (owner only, the owner's own role is immutable);
+  `DELETE /camps/:id/members/:user_id` kicks (admin+ may remove members,
+  only the owner may remove an admin, nobody removes the owner).
+- **Camp settings**: `PUT /camps/:id` — admins may change
+  name/description/visibility/direct-join; `member_post`/`member_pin` are
+  owner-only.
+- **Camp feed**: `GET /camps/:id/posts` is **members-only** (hidden camps
+  answer 404 to outsiders, visible camps 403 with a join hint). Posting
+  into a camp happens through the normal `POST /posts` with `camp_id` set;
+  the author must be a member and, when `member_post` is off, hold admin
+  or owner. Camp posts are excluded from the global feed and masked from
+  profiles/favorites/quotes of non-members. Camp-pinned posts
+  (`camp_pinned`, v26) float to the top of their camp feed only; pinning
+  via `PUT /posts/:id/pin` or `PUT /camps/:id/posts/:post_id/pin` —
+  admins/owner may pin any camp post, plain members only their own when
+  `member_pin` is on.
 
 ## App Announcements
 
