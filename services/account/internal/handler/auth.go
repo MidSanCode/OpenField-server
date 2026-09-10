@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -19,6 +20,11 @@ import (
 	"github.com/openfield/server/services/account/internal/auth"
 	"golang.org/x/crypto/bcrypt"
 )
+
+// usernameRuleRe constrains registration usernames: 3-32 lowercase letters,
+// digits or underscores. Renames are admin-only (the backend enforces the
+// same rule), so this is the only place users name themselves.
+var usernameRuleRe = regexp.MustCompile(`^[a-z0-9_]{3,32}$`)
 
 // AuthHandler handles authentication-related requests.
 type AuthHandler struct {
@@ -257,6 +263,14 @@ func (h *AuthHandler) Register(c *gin.Context) {
 
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	// Usernames are lowercase letters, digits and underscores only (3-32
+	// chars). Renames are not self-service; admins fix names from the
+	// backend, so the rule is enforced exactly here.
+	if !usernameRuleRe.MatchString(req.Username) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "username must be 3-32 lowercase letters, digits or underscores"})
 		return
 	}
 
