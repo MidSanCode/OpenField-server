@@ -26,14 +26,14 @@ func NewOIDCProvider(cfg config.OIDCConfig) *OIDCProvider {
 			RedirectURL:  cfg.RedirectURL,
 			Scopes:       cfg.Scopes,
 			Endpoint: oauth2.Endpoint{
-				AuthURL:  cfg.IssuerURL + "/auth",
+				AuthURL:  cfg.IssuerURL + "/authorize",
 				TokenURL: cfg.IssuerURL + "/token",
 			},
 		},
 	}
 	return &OIDCProvider{
 		BaseProvider: base,
-		userInfoURL:  cfg.IssuerURL + "/me",
+		userInfoURL:  cfg.IssuerURL + "/userinfo",
 	}
 }
 
