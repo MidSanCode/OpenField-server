@@ -2,6 +2,7 @@ package handler
 
 import (
 	"database/sql"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -152,6 +153,10 @@ func (h *CampHandler) Create(c *gin.Context) {
 	}
 	camp, err := h.repo.Create(userID, req.Name, req.Description, isVisible, directJoin, memberPost, memberPin)
 	if err != nil {
+		if errors.Is(err, repository.ErrCampNameTaken) {
+			c.JSON(http.StatusConflict, gin.H{"error": "camp name already taken"})
+			return
+		}
 		logger.Log.Error("failed to create camp", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create camp"})
 		return
@@ -199,6 +204,10 @@ func (h *CampHandler) Update(c *gin.Context) {
 		}
 		if err == repository.ErrForbidden {
 			c.JSON(http.StatusForbidden, gin.H{"error": "camp admins only; permission switches are owner-only"})
+			return
+		}
+		if errors.Is(err, repository.ErrCampNameTaken) {
+			c.JSON(http.StatusConflict, gin.H{"error": "camp name already taken"})
 			return
 		}
 		logger.Log.Error("failed to update camp", "error", err)

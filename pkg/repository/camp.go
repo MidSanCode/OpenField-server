@@ -42,6 +42,11 @@ func (r *CampRepository) Create(creatorID int64, name, description string, isVis
 		name, description, creatorID, isVisible, directJoin, memberPost, memberPin,
 	).Scan(&camp.ID, &camp.Name, &camp.Description, &camp.CreatorID, &camp.IsVisible, &camp.DirectJoin, &camp.MemberPost, &camp.MemberPin, &camp.CreatedAt, &camp.UpdatedAt)
 	if err != nil {
+		if isUniqueViolation(err) {
+			// camps.name is UNIQUE — surface a 409-worthy sentinel instead
+			// of a raw 500.
+			return nil, ErrCampNameTaken
+		}
 		return nil, fmt.Errorf("failed to create camp: %w", err)
 	}
 	if _, err := tx.Exec(
@@ -244,6 +249,10 @@ func (r *CampRepository) Update(id, actorID int64, name, description *string, is
 		id, actorID, name, description, isVisible, directJoin, memberPost, memberPin,
 	)
 	if err != nil {
+		if isUniqueViolation(err) {
+			// A renamed camp collided with an existing name.
+			return ErrCampNameTaken
+		}
 		return fmt.Errorf("failed to update camp: %w", err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
