@@ -249,6 +249,7 @@ func main() {
 		{http.MethodPut, "/api/v1/camps/:id", cfg.Services.Posts, authRequired, ""},
 		{http.MethodDelete, "/api/v1/camps/:id", cfg.Services.Posts, authRequired, ""},
 		{http.MethodGet, "/api/v1/camps/:id/posts", cfg.Services.Posts, authPublic, ""},
+		{http.MethodPut, "/api/v1/camps/:id/announcement", cfg.Services.Posts, authRequired, ""},
 		{http.MethodPost, "/api/v1/camps/:id/join", cfg.Services.Posts, authRequired, ""},
 		{http.MethodDelete, "/api/v1/camps/:id/members/me", cfg.Services.Posts, authRequired, ""},
 		{http.MethodGet, "/api/v1/camps/:id/members", cfg.Services.Posts, authRequired, ""},

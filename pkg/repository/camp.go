@@ -17,12 +17,12 @@ func NewCampRepository() *CampRepository {
 	return &CampRepository{}
 }
 
-const campCols = `c.id, c.name, c.description, c.creator_id, c.is_visible, c.direct_join, c.member_post, c.member_pin,
+const campCols = `c.id, c.name, c.description, c.creator_id, c.is_visible, c.direct_join, c.member_post, c.member_pin, c.announcement,
 		(SELECT COUNT(*) FROM camp_members cm WHERE cm.camp_id = c.id) AS member_count,
 		(SELECT COUNT(*) FROM posts p WHERE p.camp_id = c.id) AS post_count,
 		c.created_at, c.updated_at`
 
-const campScan = `&c.ID, &c.Name, &c.Description, &c.CreatorID, &c.IsVisible, &c.DirectJoin, &c.MemberPost, &c.MemberPin,
+const campScan = `&c.ID, &c.Name, &c.Description, &c.CreatorID, &c.IsVisible, &c.DirectJoin, &c.MemberPost, &c.MemberPin, &c.Announcement,
 		&c.MemberCount, &c.PostCount, &c.CreatedAt, &c.UpdatedAt`
 
 // Create inserts a camp and adds the creator as its owner. memberPost/
@@ -38,10 +38,15 @@ func (r *CampRepository) Create(creatorID int64, name, description string, isVis
 	err = tx.QueryRow(
 		`INSERT INTO camps (name, description, creator_id, is_visible, direct_join, member_post, member_pin)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7)
-		 RETURNING id, name, description, creator_id, is_visible, direct_join, member_post, member_pin, created_at, updated_at`,
+		 RETURNING id, name, description, creator_id, is_visible, direct_join, member_post, member_pin, announcement, created_at, updated_at`,
 		name, description, creatorID, isVisible, directJoin, memberPost, memberPin,
-	).Scan(&camp.ID, &camp.Name, &camp.Description, &camp.CreatorID, &camp.IsVisible, &camp.DirectJoin, &camp.MemberPost, &camp.MemberPin, &camp.CreatedAt, &camp.UpdatedAt)
+	).Scan(&camp.ID, &camp.Name, &camp.Description, &camp.CreatorID, &camp.IsVisible, &camp.DirectJoin, &camp.MemberPost, &camp.MemberPin, &camp.Announcement, &camp.CreatedAt, &camp.UpdatedAt)
 	if err != nil {
+		if isUniqueViolation(err) {
+			// camps.name is UNIQUE — surface a 409-worthy sentinel instead
+			// of a raw 500.
+			return nil, ErrCampNameTaken
+		}
 		return nil, fmt.Errorf("failed to create camp: %w", err)
 	}
 	if _, err := tx.Exec(
@@ -64,7 +69,7 @@ func (r *CampRepository) GetByID(id, userID int64) (*model.Camp, error) {
 	c := &model.Camp{}
 	err := database.DB.QueryRow(
 		"SELECT "+campCols+" FROM camps c WHERE c.id = $1", id,
-	).Scan([]interface{}{&c.ID, &c.Name, &c.Description, &c.CreatorID, &c.IsVisible, &c.DirectJoin, &c.MemberPost, &c.MemberPin, &c.MemberCount, &c.PostCount, &c.CreatedAt, &c.UpdatedAt}...)
+	).Scan([]interface{}{&c.ID, &c.Name, &c.Description, &c.CreatorID, &c.IsVisible, &c.DirectJoin, &c.MemberPost, &c.MemberPin, &c.Announcement, &c.MemberCount, &c.PostCount, &c.CreatedAt, &c.UpdatedAt}...)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -128,7 +133,7 @@ func (r *CampRepository) List(userID int64, query string, limit int) ([]model.Ca
 	out := []model.Camp{}
 	for rows.Next() {
 		c := model.Camp{}
-		if err := rows.Scan([]interface{}{&c.ID, &c.Name, &c.Description, &c.CreatorID, &c.IsVisible, &c.DirectJoin, &c.MemberPost, &c.MemberPin, &c.MemberCount, &c.PostCount, &c.CreatedAt, &c.UpdatedAt}...); err != nil {
+		if err := rows.Scan([]interface{}{&c.ID, &c.Name, &c.Description, &c.CreatorID, &c.IsVisible, &c.DirectJoin, &c.MemberPost, &c.MemberPin, &c.Announcement, &c.MemberCount, &c.PostCount, &c.CreatedAt, &c.UpdatedAt}...); err != nil {
 			return nil, fmt.Errorf("failed to scan camp: %w", err)
 		}
 		out = append(out, c)
@@ -178,7 +183,7 @@ func (r *CampRepository) ListMine(userID int64, limit int) ([]model.Camp, error)
 	out := []model.Camp{}
 	for rows.Next() {
 		c := model.Camp{}
-		if err := rows.Scan([]interface{}{&c.ID, &c.Name, &c.Description, &c.CreatorID, &c.IsVisible, &c.DirectJoin, &c.MemberPost, &c.MemberPin, &c.MemberCount, &c.PostCount, &c.CreatedAt, &c.UpdatedAt}...); err != nil {
+		if err := rows.Scan([]interface{}{&c.ID, &c.Name, &c.Description, &c.CreatorID, &c.IsVisible, &c.DirectJoin, &c.MemberPost, &c.MemberPin, &c.Announcement, &c.MemberCount, &c.PostCount, &c.CreatedAt, &c.UpdatedAt}...); err != nil {
 			return nil, fmt.Errorf("failed to scan camp: %w", err)
 		}
 		c.IsMember = true
@@ -244,7 +249,34 @@ func (r *CampRepository) Update(id, actorID int64, name, description *string, is
 		id, actorID, name, description, isVisible, directJoin, memberPost, memberPin,
 	)
 	if err != nil {
+		if isUniqueViolation(err) {
+			// A renamed camp collided with an existing name.
+			return ErrCampNameTaken
+		}
 		return fmt.Errorf("failed to update camp: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// SetAnnouncement replaces a camp's announcement text. Only the owner and
+// camp admins may do this; empty text clears the announcement.
+func (r *CampRepository) SetAnnouncement(campID, actorID int64, announcement string) error {
+	role, err := r.GetRole(campID, actorID)
+	if err != nil {
+		return fmt.Errorf("failed to check camp role: %w", err)
+	}
+	if role != model.CampRoleOwner && role != model.CampRoleAdmin {
+		return ErrForbidden
+	}
+	res, err := database.DB.Exec(
+		"UPDATE camps SET announcement = $2, updated_at = NOW() WHERE id = $1",
+		campID, announcement,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to set camp announcement: %w", err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrNotFound

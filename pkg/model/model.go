@@ -219,10 +219,13 @@ type Camp struct {
 	MemberPost bool `json:"member_post"`
 	// MemberPin allows plain members to pin their own posts within the camp;
 	// when false only the owner and admins may pin. Defaults to false.
-	MemberPin   bool  `json:"member_pin"`
-	MemberCount int64 `json:"member_count"`
-	PostCount   int64 `json:"post_count"`
-	IsMember    bool  `json:"is_member"`
+	MemberPin bool `json:"member_pin"`
+	// Announcement is a short notice shown inside the camp; only the owner
+	// and admins may change it. Empty = no announcement.
+	Announcement string `json:"announcement"`
+	MemberCount  int64  `json:"member_count"`
+	PostCount    int64  `json:"post_count"`
+	IsMember     bool   `json:"is_member"`
 	// MyRole is the caller's role in this camp: "owner", "admin", "member",
 	// or "" for non-members. Populated by GetByID with a non-zero userID.
 	MyRole    string    `json:"my_role,omitempty"`

@@ -259,7 +259,10 @@ func (h *UserHandler) SearchUsers(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"users": users})
 }
 
-// UpdateProfile updates the current user's nickname.
+// UpdateProfile updates the current user's nickname and bio. The username
+// is frozen here: it is chosen once at registration (lowercase letters,
+// digits, underscores) and only admins may change it afterwards, so any
+// username sent by the client is ignored.
 func (h *UserHandler) UpdateProfile(c *gin.Context) {
 	userID, ok := middleware.GetUserID(c)
 	if !ok {
@@ -278,7 +281,7 @@ func (h *UserHandler) UpdateProfile(c *gin.Context) {
 		return
 	}
 
-	if req.Username == "" && req.Nickname == "" && req.Bio == "" {
+	if req.Nickname == "" && req.Bio == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "nothing to update"})
 		return
 	}
@@ -290,10 +293,6 @@ func (h *UserHandler) UpdateProfile(c *gin.Context) {
 		return
 	}
 
-	username := req.Username
-	if username == "" {
-		username = current.Username
-	}
 	nickname := req.Nickname
 	if nickname == "" {
 		nickname = current.Nickname
@@ -303,7 +302,7 @@ func (h *UserHandler) UpdateProfile(c *gin.Context) {
 		bio = current.Bio
 	}
 
-	user, err := h.userRepo.UpdateProfile(userID, username, nickname, bio)
+	user, err := h.userRepo.UpdateProfile(userID, current.Username, nickname, bio)
 	if err != nil {
 		logger.Log.Error("failed to update profile", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

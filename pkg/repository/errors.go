@@ -13,6 +13,9 @@ import (
 // Sentinel errors returned by repositories.
 var (
 	ErrUsernameTaken = errors.New("username already taken")
+	// ErrCampNameTaken reports that a camp name collides with an existing
+	// one (camps.name is UNIQUE).
+	ErrCampNameTaken = errors.New("camp name already taken")
 	ErrNotFound      = errors.New("not found")
 	// ErrForbidden reports that the caller's role/permissions are
 	// insufficient for the requested operation.
