@@ -612,6 +612,15 @@ var versionedMigrations = []migration{
 				WHERE c.id = cm.camp_id AND c.creator_id = cm.user_id AND cm.role <> 'owner';
 		`,
 	},
+	{
+		version: 27,
+		name:    "camp-announcements",
+		sql: `
+			-- Camp announcements: a short notice shown inside the camp, set
+			-- by the owner or camp admins. Empty string = none.
+			ALTER TABLE camps ADD COLUMN IF NOT EXISTS announcement TEXT NOT NULL DEFAULT '';
+		`,
+	},
 }
 
 // latestMigrationVersion returns the newest schema version the code knows

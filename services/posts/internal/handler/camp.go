@@ -246,6 +246,51 @@ func (h *CampHandler) Delete(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
+// SetAnnouncement replaces the camp announcement (owner/camp-admins only).
+// An empty string clears it.
+func (h *CampHandler) SetAnnouncement(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid camp ID"})
+		return
+	}
+	var req struct {
+		Announcement string `json:"announcement"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+	if len([]rune(req.Announcement)) > 500 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "announcement too long (max 500)"})
+		return
+	}
+	if err := h.repo.SetAnnouncement(id, userID, strings.TrimSpace(req.Announcement)); err != nil {
+		if errors.Is(err, repository.ErrForbidden) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "camp owner or admins only"})
+			return
+		}
+		if errors.Is(err, repository.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "camp not found"})
+			return
+		}
+		logger.Log.Error("failed to set camp announcement", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to set camp announcement"})
+		return
+	}
+	camp, err := h.repo.GetByID(id, userID)
+	if err != nil || camp == nil {
+		c.JSON(http.StatusOK, gin.H{"status": "updated"})
+		return
+	}
+	c.JSON(http.StatusOK, camp)
+}
+
 // Join enters a camp. Camps with direct_join disabled reject self-joining.
 func (h *CampHandler) Join(c *gin.Context) {
 	userID, ok := middleware.GetUserID(c)
