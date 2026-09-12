@@ -25,6 +25,17 @@ func CORS(cfg *config.Config) gin.HandlerFunc {
 	for _, o := range cfg.Server.AllowedOrigins {
 		allowedOrigins[strings.TrimSuffix(o, "/")] = struct{}{}
 	}
+	// Hosts configured in server.allowed_hosts are also accepted as CORS
+	// origins (both schemes, with and without port) so callers hitting the
+	// API directly on its own domain (https://api.a.com) pass preflight.
+	for _, h := range cfg.Server.AllowedHosts {
+		host := normalizeHost(h)
+		if host == "" {
+			continue
+		}
+		allowedOrigins["http://"+host] = struct{}{}
+		allowedOrigins["https://"+host] = struct{}{}
+	}
 
 	return func(c *gin.Context) {
 		origin := c.GetHeader("Origin")

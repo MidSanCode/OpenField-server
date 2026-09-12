@@ -387,6 +387,10 @@ func main() {
 	r := gin.New()
 	r.Use(middleware.Recovery())
 	r.Use(logger.GinLogger())
+	// API domains whitelist (server.allowed_hosts): rejects requests whose
+	// Host header is not configured (e.g. api.a.com / api.b.com). No-op when
+	// the list is empty.
+	r.Use(middleware.HostAllowlist(cfg))
 	r.Use(middleware.CORS(cfg))
 	// Coarse per-IP rate limiting over every proxied route (not /healthz):
 	// blunts abusive clients and runaway loops before they reach backends.

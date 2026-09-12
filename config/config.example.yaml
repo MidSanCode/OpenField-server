@@ -11,6 +11,11 @@ server:
   # tokens, but prefer a strict list when possible.
   allowed_origins: []
   allow_all_origins: true
+  # Public API host allow-list. List every domain clients use to reach the
+  # API, e.g. ["api.a.com", "api.b.com"], to have the gateway reject requests
+  # with an unexpected Host header and to accept those hosts as CORS origins
+  # automatically. Leave empty to accept any host (development default).
+  allowed_hosts: []
 
 # Internal microservice addresses (used by the gateway to route requests)
 services:
