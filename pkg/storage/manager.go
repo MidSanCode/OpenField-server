@@ -1,7 +1,11 @@
 package storage
 
 import (
+	"context"
+	"fmt"
+
 	"github.com/openfield/server/pkg/config"
+	"github.com/openfield/server/pkg/model"
 )
 
 // Manager owns one Store per configured logical bucket and resolves which store
@@ -58,6 +62,41 @@ func (m *Manager) ForPhysical(physicalBucket string) *Store {
 		if s != nil && s.bucket == physicalBucket {
 			return s
 		}
+	}
+	return nil
+}
+
+// SignAttachment refreshes an attachment's URL/ThumbURL/PreviewURL to
+// time-limited presigned GET URLs. It is a no-op when the manager has no
+// usable store or presigning is disabled (the stored URLs are kept as-is).
+// Thumbnail/preview URLs are only refreshed when the attachment actually has
+// them (the empty-string check doubles as the "no rendition" signal).
+func (m *Manager) SignAttachment(ctx context.Context, att *model.Attachment) error {
+	if m == nil || att == nil {
+		return nil
+	}
+	store := m.For(att.Bucket)
+	if store == nil || !store.Enabled() || !store.presignEnabled {
+		return nil
+	}
+	signed, err := store.SignObjectURL(ctx, att.ObjectKey)
+	if err != nil {
+		return fmt.Errorf("failed to sign attachment URL: %w", err)
+	}
+	att.URL = signed
+	if att.ThumbURL != "" {
+		thumb, err := store.SignObjectURL(ctx, att.ObjectKey+".thumb.jpg")
+		if err != nil {
+			return fmt.Errorf("failed to sign thumbnail URL: %w", err)
+		}
+		att.ThumbURL = thumb
+	}
+	if att.PreviewURL != "" {
+		preview, err := store.SignObjectURL(ctx, att.ObjectKey+".preview.jpg")
+		if err != nil {
+			return fmt.Errorf("failed to sign preview URL: %w", err)
+		}
+		att.PreviewURL = preview
 	}
 	return nil
 }

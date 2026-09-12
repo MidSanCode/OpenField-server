@@ -18,6 +18,7 @@ import (
 	"github.com/openfield/server/pkg/model"
 	"github.com/openfield/server/pkg/repository"
 	"github.com/openfield/server/pkg/security"
+	"github.com/openfield/server/pkg/storage"
 )
 
 // allowedReactions is the fixed set of post reactions clients may use.
@@ -99,16 +100,88 @@ func canViewPost(post *model.Post, viewerID int64) bool {
 }
 
 // PostHandler handles post and reply requests.
+// PostHandler handles posts, replies, reactions and favorites.
 type PostHandler struct {
 	postRepo  *repository.PostRepository
 	replyRepo *repository.PostReplyRepository
+	// store signs attachment read URLs (presigned mode); nil-safe.
+	store *storage.Manager
 }
 
 // NewPostHandler creates a new PostHandler.
-func NewPostHandler() *PostHandler {
+func NewPostHandler(store *storage.Manager) *PostHandler {
 	return &PostHandler{
 		postRepo:  repository.NewPostRepository(),
 		replyRepo: repository.NewPostReplyRepository(),
+		store:     store,
+	}
+}
+
+// signPostAttachments refreshes every attachment URL of the given posts to a
+// fresh presigned URL (no-op when presigning is disabled or storage is
+// unavailable on this service).
+func (h *PostHandler) signPostAttachments(c *gin.Context, posts ...*model.Post) {
+	if h.store == nil {
+		return
+	}
+	ctx := c.Request.Context()
+	for _, p := range posts {
+		if p == nil {
+			continue
+		}
+		for i := range p.Attachments {
+			if err := h.store.SignAttachment(ctx, &p.Attachments[i]); err != nil {
+				logger.Log.Warn("failed to sign post attachment URL", "error", err, "attachment_id", p.Attachments[i].ID)
+			}
+		}
+	}
+}
+
+// signPosts is the slice version of signPostAttachments for feed responses.
+func (h *PostHandler) signPosts(c *gin.Context, posts []model.Post) {
+	if h.store == nil {
+		return
+	}
+	ctx := c.Request.Context()
+	for i := range posts {
+		for j := range posts[i].Attachments {
+			if err := h.store.SignAttachment(ctx, &posts[i].Attachments[j]); err != nil {
+				logger.Log.Warn("failed to sign post attachment URL", "error", err, "attachment_id", posts[i].Attachments[j].ID)
+			}
+		}
+	}
+}
+
+// signReplyAttachments is the reply/comment analogue of signPostAttachments.
+func (h *PostHandler) signReplyAttachments(c *gin.Context, replies ...*model.PostReply) {
+	if h.store == nil {
+		return
+	}
+	ctx := c.Request.Context()
+	for _, r := range replies {
+		if r == nil {
+			continue
+		}
+		for i := range r.Attachments {
+			if err := h.store.SignAttachment(ctx, &r.Attachments[i]); err != nil {
+				logger.Log.Warn("failed to sign reply attachment URL", "error", err, "attachment_id", r.Attachments[i].ID)
+			}
+		}
+	}
+}
+
+// signReplies is the slice version of signReplyAttachments for reply feeds.
+func (h *PostHandler) signReplies(c *gin.Context, replies []model.PostReply) {
+	if h.store == nil {
+		return
+	}
+	ctx := c.Request.Context()
+	for i := range replies {
+		for j := range replies[i].Attachments {
+			if err := h.store.SignAttachment(ctx, &replies[i].Attachments[j]); err != nil {
+				logger.Log.Warn("failed to sign reply attachment URL", "error", err, "attachment_id", replies[i].Attachments[j].ID)
+			}
+		}
 	}
 }
 
@@ -319,6 +392,7 @@ func (h *PostHandler) CreatePost(c *gin.Context) {
 	// content unfiltered would leak restricted posts to everyone online.
 	events.Publish(c.Request.Context(), events.PostCreated, postRecipients(userID, req.Visibility), post)
 
+	h.signPostAttachments(c, post)
 	c.JSON(http.StatusCreated, post)
 }
 
@@ -356,6 +430,7 @@ func (h *PostHandler) GetPost(c *gin.Context) {
 	}
 
 	attachTags([]model.Post{*post})
+	h.signPostAttachments(c, post)
 	c.JSON(http.StatusOK, post)
 }
 
@@ -480,6 +555,7 @@ func (h *PostHandler) ListPosts(c *gin.Context) {
 	}
 
 	attachTags(posts)
+	h.signPosts(c, posts)
 	c.JSON(http.StatusOK, gin.H{
 		"posts": posts,
 		"page":  page,
@@ -508,6 +584,7 @@ func (h *PostHandler) ListPostsByUser(c *gin.Context) {
 	}
 
 	attachTags(posts)
+	h.signPosts(c, posts)
 	c.JSON(http.StatusOK, gin.H{
 		"posts": posts,
 		"page":  page,
@@ -544,6 +621,7 @@ func (h *PostHandler) ListFavoritePosts(c *gin.Context) {
 	}
 
 	attachTags(posts)
+	h.signPosts(c, posts)
 	c.JSON(http.StatusOK, gin.H{
 		"posts": posts,
 		"page":  page,
@@ -579,6 +657,7 @@ func (h *PostHandler) ListFavoriteReplies(c *gin.Context) {
 		return
 	}
 
+	h.signReplies(c, replies)
 	c.JSON(http.StatusOK, gin.H{
 		"replies": replies,
 		"page":    page,
@@ -622,6 +701,7 @@ func (h *PostHandler) FavoritePost(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load post"})
 		return
 	}
+	h.signPostAttachments(c, post)
 	c.JSON(http.StatusOK, post)
 }
 
@@ -650,6 +730,7 @@ func (h *PostHandler) UnfavoritePost(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load post"})
 		return
 	}
+	h.signPostAttachments(c, post)
 	c.JSON(http.StatusOK, post)
 }
 
@@ -694,6 +775,7 @@ func (h *PostHandler) FavoriteReply(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load reply"})
 		return
 	}
+	h.signReplyAttachments(c, reply)
 	c.JSON(http.StatusOK, reply)
 }
 
@@ -738,6 +820,7 @@ func (h *PostHandler) UnfavoriteReply(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load reply"})
 		return
 	}
+	h.signReplyAttachments(c, reply)
 	c.JSON(http.StatusOK, reply)
 }
 
@@ -912,6 +995,7 @@ func (h *PostHandler) UpdatePost(c *gin.Context) {
 		return
 	}
 
+	h.signPostAttachments(c, post)
 	c.JSON(http.StatusOK, post)
 }
 
@@ -1040,6 +1124,7 @@ func (h *PostHandler) ListReplies(c *gin.Context) {
 		return
 	}
 
+	h.signReplies(c, replies)
 	c.JSON(http.StatusOK, gin.H{
 		"replies": replies,
 		"page":    page,
@@ -1093,6 +1178,7 @@ func (h *PostHandler) UpdateReply(c *gin.Context) {
 		return
 	}
 
+	h.signReplyAttachments(c, reply)
 	c.JSON(http.StatusOK, reply)
 }
 
@@ -1161,6 +1247,7 @@ func (h *PostHandler) SetPostReaction(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load post"})
 		return
 	}
+	h.signPostAttachments(c, post)
 	c.JSON(http.StatusOK, post)
 }
 
@@ -1189,5 +1276,6 @@ func (h *PostHandler) RemovePostReaction(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load post"})
 		return
 	}
+	h.signPostAttachments(c, post)
 	c.JSON(http.StatusOK, post)
 }

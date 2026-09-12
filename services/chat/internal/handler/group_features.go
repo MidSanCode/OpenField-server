@@ -8,22 +8,27 @@ import (
 	"github.com/openfield/server/pkg/logger"
 	"github.com/openfield/server/pkg/middleware"
 	"github.com/openfield/server/pkg/repository"
+	"github.com/openfield/server/pkg/storage"
 )
 
 // GroupExtrasHandler handles per-conversation announcements, todos and the
 // shared attachment (file) list.
 type GroupExtrasHandler struct {
-	convRepo  *repository.ConversationRepository
-	annRepo   *repository.GroupAnnouncementRepository
-	todoRepo  *repository.GroupTodoRepository
+	convRepo *repository.ConversationRepository
+	annRepo  *repository.GroupAnnouncementRepository
+	todoRepo *repository.GroupTodoRepository
+	// store signs attachment read URLs (presigned mode); nil-safe.
+	store *storage.Manager
 }
 
-// NewGroupExtrasHandler creates a new GroupExtrasHandler.
-func NewGroupExtrasHandler() *GroupExtrasHandler {
+// NewGroupExtrasHandler creates a new GroupExtrasHandler. store may be nil
+// (storage not configured on this service) — attachment URLs keep stored form.
+func NewGroupExtrasHandler(store *storage.Manager) *GroupExtrasHandler {
 	return &GroupExtrasHandler{
 		convRepo: repository.NewConversationRepository(),
 		annRepo:  repository.NewGroupAnnouncementRepository(),
 		todoRepo: repository.NewGroupTodoRepository(),
+		store:    store,
 	}
 }
 
@@ -285,6 +290,16 @@ func (h *GroupExtrasHandler) ListFiles(c *gin.Context) {
 		logger.Log.Error("failed to list conversation files", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list files"})
 		return
+	}
+
+	// Refresh every read URL to a fresh presigned one (no-op when presign off).
+	if h.store != nil {
+		ctx := c.Request.Context()
+		for i := range files {
+			if serr := h.store.SignAttachment(ctx, &files[i].Attachment); serr != nil {
+				logger.Log.Warn("failed to sign file URL", "error", serr, "attachment_id", files[i].Attachment.ID)
+			}
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{"files": files})
 }

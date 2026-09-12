@@ -13,20 +13,61 @@ import (
 	"github.com/openfield/server/pkg/events"
 	"github.com/openfield/server/pkg/logger"
 	"github.com/openfield/server/pkg/middleware"
+	"github.com/openfield/server/pkg/model"
 	"github.com/openfield/server/pkg/repository"
+	"github.com/openfield/server/pkg/storage"
 )
 
 // MessageHandler handles chat message endpoints.
 type MessageHandler struct {
 	msgRepo  *repository.MessageRepository
 	convRepo *repository.ConversationRepository
+	// store signs attachment read URLs (presigned mode); nil-safe.
+	store *storage.Manager
 }
 
-// NewMessageHandler creates a new MessageHandler.
-func NewMessageHandler() *MessageHandler {
+// NewMessageHandler creates a new MessageHandler. store may be nil (storage
+// not configured on this service) — attachment URLs then keep stored form.
+func NewMessageHandler(store *storage.Manager) *MessageHandler {
 	return &MessageHandler{
 		msgRepo:  repository.NewMessageRepository(),
 		convRepo: repository.NewConversationRepository(),
+		store:    store,
+	}
+}
+
+// signMessageAttachments refreshes every attachment URL on the given messages
+// to a fresh presigned URL (no-op when presigning is disabled or storage is
+// unavailable on this service).
+func (h *MessageHandler) signMessageAttachments(c *gin.Context, msgs ...*model.Message) {
+	if h.store == nil {
+		return
+	}
+	ctx := c.Request.Context()
+	for _, m := range msgs {
+		if m == nil {
+			continue
+		}
+		for i := range m.Attachments {
+			if err := h.store.SignAttachment(ctx, &m.Attachments[i]); err != nil {
+				logger.Log.Warn("failed to sign message attachment URL", "error", err, "attachment_id", m.Attachments[i].ID)
+			}
+		}
+	}
+}
+
+// signMessages is the slice version of signMessageAttachments.
+func (h *MessageHandler) signMessages(c *gin.Context, msgs []model.Message) {
+	if h.store == nil {
+		return
+	}
+	ctx := c.Request.Context()
+	for i := range msgs {
+		for j := range msgs[i].Attachments {
+			if err := h.store.SignAttachment(ctx, &msgs[i].Attachments[j]); err != nil {
+				logger.Log.Warn("failed to sign message attachment URL", "error", err, "attachment_id", msgs[i].Attachments[j].ID)
+			}
+		}
 	}
 }
 
@@ -69,6 +110,7 @@ func (h *MessageHandler) List(c *gin.Context) {
 		return
 	}
 
+	h.signMessages(c, msgs)
 	c.JSON(http.StatusOK, gin.H{"messages": msgs})
 }
 
@@ -163,6 +205,7 @@ func (h *MessageHandler) Search(c *gin.Context) {
 		return
 	}
 
+	h.signMessages(c, msgs)
 	c.JSON(http.StatusOK, gin.H{"messages": msgs})
 }
 
@@ -271,6 +314,7 @@ func (h *MessageHandler) Send(c *gin.Context) {
 
 	h.publishMessageEvent(c.Request.Context(), events.ChatMessageCreated, convID, msg)
 
+	h.signMessageAttachments(c, msg)
 	c.JSON(http.StatusCreated, msg)
 }
 
@@ -467,6 +511,7 @@ func (h *MessageHandler) MarkBurnRead(c *gin.Context) {
 		h.publishMessageEvent(c.Request.Context(), events.ChatMessageUpdated, msg.ConversationID, msg)
 	}
 
+	h.signMessageAttachments(c, msg)
 	c.JSON(http.StatusOK, msg)
 }
 
@@ -579,6 +624,7 @@ func (h *MessageHandler) Update(c *gin.Context) {
 
 	h.publishMessageEvent(c.Request.Context(), events.ChatMessageUpdated, msg.ConversationID, msg)
 
+	h.signMessageAttachments(c, msg)
 	c.JSON(http.StatusOK, msg)
 }
 

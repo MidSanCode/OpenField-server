@@ -217,7 +217,7 @@ func (h *AttachmentHandler) ChunkUpload(c *gin.Context) {
 		return
 	}
 
-	if err := store.UploadChunk(c.Request.Context(), uploadID, index, bytes.NewReader(data), int64(len(data))); err != nil {
+	if err := store.UploadChunk(c.Request.Context(), userID, uploadID, index, bytes.NewReader(data), int64(len(data))); err != nil {
 		logger.Log.Error("failed to upload chunk", "error", err, "index", index)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upload chunk"})
 		return
@@ -248,7 +248,7 @@ func (h *AttachmentHandler) ChunkStatus(c *gin.Context) {
 	// Stat per expected key instead of listing the prefix: RustFS prefix
 	// listings omit freshly written objects, which made resume status lie
 	// about which chunks had landed.
-	existing, err := store.StatChunks(c.Request.Context(), uploadID, session.TotalChunks)
+	existing, err := store.StatChunks(c.Request.Context(), userID, uploadID, session.TotalChunks)
 	if err != nil {
 		logger.Log.Error("failed to stat chunks", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list chunks"})
@@ -307,7 +307,7 @@ func (h *AttachmentHandler) ChunkComplete(c *gin.Context) {
 	// chunks missing while the client had a 200 for every PUT — the root
 	// cause of the recurring "100% uploaded but missing chunks" reports.
 	// req.TotalChunks was already validated to equal session.TotalChunks.
-	existing, err := store.StatChunks(c.Request.Context(), uploadID, req.TotalChunks)
+	existing, err := store.StatChunks(c.Request.Context(), userID, uploadID, req.TotalChunks)
 	if err != nil {
 		logger.Log.Error("failed to stat chunks", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list chunks"})
@@ -361,7 +361,7 @@ func (h *AttachmentHandler) ChunkComplete(c *gin.Context) {
 		visibility = "public"
 	}
 
-	objectKey, url, assembledHash, err := store.AssembleChunks(c.Request.Context(), uploadID, req.TotalChunks, contentType, req.Filename)
+	objectKey, url, assembledHash, err := store.AssembleChunks(c.Request.Context(), userID, uploadID, req.TotalChunks, contentType, req.Filename)
 	if err != nil {
 		logger.Log.Error("failed to assemble chunks", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to assemble chunks"})
@@ -376,7 +376,7 @@ func (h *AttachmentHandler) ChunkComplete(c *gin.Context) {
 		if data, gerr := store.GetBytes(c.Request.Context(), objectKey, maxStripReadBytes); gerr == nil {
 			cleanData = imaging.StripImageLocation(data, contentType)
 			if !bytes.Equal(cleanData, data) {
-				newKey, newURL, uerr := store.Upload(c.Request.Context(), bytes.NewReader(cleanData), int64(len(cleanData)), contentType, req.Filename)
+				newKey, newURL, uerr := store.Upload(c.Request.Context(), userID, bytes.NewReader(cleanData), int64(len(cleanData)), contentType, req.Filename)
 				if uerr == nil {
 					_ = store.Delete(c.Request.Context(), objectKey)
 					objectKey, url = newKey, newURL
@@ -408,9 +408,12 @@ func (h *AttachmentHandler) ChunkComplete(c *gin.Context) {
 		_ = store.Delete(c.Request.Context(), objectKey)
 		_ = store.DeleteThumb(c.Request.Context(), objectKey)
 		_ = store.DeletePreview(c.Request.Context(), objectKey)
-		_ = store.DeleteChunks(c.Request.Context(), uploadID)
+		_ = store.DeleteChunks(c.Request.Context(), userID, uploadID)
 		_ = repository.DeleteUploadSession(uploadID)
 		logger.Log.Info("reused existing attachment by content hash", "hash", finalHash, "attachment_id", existing.ID)
+		if serr := h.store.SignAttachment(c.Request.Context(), existing); serr != nil {
+			logger.Log.Warn("failed to sign attachment URL", "error", serr, "attachment_id", existing.ID)
+		}
 		c.JSON(http.StatusOK, existing)
 		return
 	}
@@ -448,7 +451,7 @@ func (h *AttachmentHandler) ChunkComplete(c *gin.Context) {
 		return
 	}
 
-	if err := store.DeleteChunks(c.Request.Context(), uploadID); err != nil {
+	if err := store.DeleteChunks(c.Request.Context(), userID, uploadID); err != nil {
 		logger.Log.Warn("failed to delete temp chunks", "error", err)
 	}
 	if err := repository.DeleteUploadSession(uploadID); err != nil {

@@ -412,7 +412,7 @@ func (h *UserHandler) uploadImage(c *gin.Context, kind string) {
 	}
 
 	store := h.store.For(user.StorageBucket)
-	objectKey, url, err := store.Upload(c.Request.Context(), bytes.NewReader(data), int64(len(data)), contentType, header.Filename)
+	objectKey, url, err := store.Upload(c.Request.Context(), userID, bytes.NewReader(data), int64(len(data)), contentType, header.Filename)
 	if err != nil {
 		logger.Log.Error("failed to upload image", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upload image"})

@@ -205,7 +205,7 @@ func (h *AttachmentHandler) Upload(c *gin.Context) {
 	}
 
 	store := h.store.For(user.StorageBucket)
-	objectKey, url, err := store.Upload(c.Request.Context(), bytes.NewReader(data), int64(len(data)), contentType, header.Filename)
+	objectKey, url, err := store.Upload(c.Request.Context(), userID, bytes.NewReader(data), int64(len(data)), contentType, header.Filename)
 	if err != nil {
 		logger.Log.Error("failed to upload file", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upload file"})
@@ -277,6 +277,11 @@ func (h *AttachmentHandler) Get(c *gin.Context) {
 		return
 	}
 
+	// Fresh time-limited URL for this response (no-op when presign is off).
+	if err := h.store.SignAttachment(c.Request.Context(), att); err != nil {
+		logger.Log.Warn("failed to sign attachment URL", "error", err, "attachment_id", att.ID)
+	}
+
 	c.JSON(http.StatusOK, att)
 }
 
@@ -299,6 +304,10 @@ func (h *AttachmentHandler) Reuse(c *gin.Context) {
 	if att == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "attachment not found"})
 		return
+	}
+
+	if err := h.store.SignAttachment(c.Request.Context(), att); err != nil {
+		logger.Log.Warn("failed to sign attachment URL", "error", err, "attachment_id", att.ID)
 	}
 
 	c.JSON(http.StatusOK, att)
@@ -455,6 +464,13 @@ func (h *AttachmentHandler) ListByUser(c *gin.Context) {
 		logger.Log.Error("failed to list attachments", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list attachments"})
 		return
+	}
+
+	// Refresh every read URL to a fresh presigned one (no-op when presign off).
+	for i := range atts {
+		if serr := h.store.SignAttachment(c.Request.Context(), &atts[i]); serr != nil {
+			logger.Log.Warn("failed to sign attachment URL", "error", serr, "attachment_id", atts[i].ID)
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"attachments": atts})

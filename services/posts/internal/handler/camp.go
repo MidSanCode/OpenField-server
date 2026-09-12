@@ -12,6 +12,7 @@ import (
 	"github.com/openfield/server/pkg/middleware"
 	"github.com/openfield/server/pkg/model"
 	"github.com/openfield/server/pkg/repository"
+	"github.com/openfield/server/pkg/storage"
 )
 
 // CampHandler handles 贴吧-style camp endpoints.
@@ -19,14 +20,33 @@ type CampHandler struct {
 	repo     *repository.CampRepository
 	postRepo *repository.PostRepository
 	userRepo *repository.UserRepository
+	// store signs attachment read URLs (presigned mode); nil-safe.
+	store *storage.Manager
 }
 
-// NewCampHandler creates a new CampHandler.
-func NewCampHandler() *CampHandler {
+// NewCampHandler creates a new CampHandler. store may be nil (storage not
+// configured on this service) — attachment URLs then keep their stored form.
+func NewCampHandler(store *storage.Manager) *CampHandler {
 	return &CampHandler{
 		repo:     repository.NewCampRepository(),
 		postRepo: repository.NewPostRepository(),
 		userRepo: repository.NewUserRepository(),
+		store:    store,
+	}
+}
+
+// signCampPostAttachments refreshes attachment URLs on camp feed posts.
+func (h *CampHandler) signCampPostAttachments(c *gin.Context, posts []model.Post) {
+	if h.store == nil {
+		return
+	}
+	ctx := c.Request.Context()
+	for i := range posts {
+		for j := range posts[i].Attachments {
+			if err := h.store.SignAttachment(ctx, &posts[i].Attachments[j]); err != nil {
+				logger.Log.Warn("failed to sign camp post attachment URL", "error", err, "attachment_id", posts[i].Attachments[j].ID)
+			}
+		}
 	}
 }
 
@@ -390,6 +410,7 @@ func (h *CampHandler) ListPosts(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list camp posts"})
 		return
 	}
+	h.signCampPostAttachments(c, posts)
 	c.JSON(http.StatusOK, gin.H{"posts": posts})
 }
 

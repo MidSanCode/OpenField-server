@@ -35,6 +35,12 @@ type Store struct {
 	// (<public_base_url>/<bucket>/<key>) and objects are streamed back by the
 	// storage service, so buckets never need public read access.
 	proxied bool
+	// presignEnabled switches URL generation to time-limited presigned GET
+	// URLs so the physical bucket can stay private while clients download
+	// objects directly from the S3 endpoint.
+	presignEnabled bool
+	// presignTTL is how long a presigned read URL stays valid.
+	presignTTL time.Duration
 }
 
 // IsConfigured reports whether object storage has been configured. When no
@@ -125,18 +131,23 @@ func New(cfg config.StorageConfig) (*Manager, error) {
 		logger.Log.Warn("internal_proxy enabled but storage.public_base_url is empty; falling back to direct bucket URLs")
 		proxied = false
 	}
+	if cfg.Presign.Enabled && proxied {
+		logger.Log.Warn("storage presign and internal_proxy are both enabled; presign wins for attachment URLs")
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
 	for _, b := range m.order {
 		store := &Store{
-			client:        client,
-			bucket:        b.Bucket,
-			publicBaseURL: resolvePublicBaseURL(cfg, b),
-			enabled:       true,
-			name:          b.Name,
-			proxied:       proxied,
+			client:         client,
+			bucket:         b.Bucket,
+			publicBaseURL:  resolvePublicBaseURL(cfg, b),
+			enabled:        true,
+			name:           b.Name,
+			proxied:        proxied,
+			presignEnabled: cfg.Presign.Enabled,
+			presignTTL:     time.Duration(cfg.Presign.PresignGetTTL()) * time.Second,
 		}
 		if proxied {
 			store.publicBaseURL = strings.TrimRight(cfg.PublicBaseURL, "/")
@@ -212,6 +223,45 @@ func (s *Store) publicURL(objectKey string) string {
 	return base.String()
 }
 
+// rewriteHost points a presigned URL at the client-reachable host. minio signs
+// against the internal endpoint (e.g. 127.0.0.1:9000), which clients cannot
+// reach; the public base's scheme and host replace it while the rest of the
+// URL (bucket path + X-Amz query) is preserved.
+func rewriteHost(u *url.URL, publicBase string) (string, error) {
+	base, err := url.Parse(publicBase)
+	if err != nil || base.Host == "" {
+		return u.String(), nil
+	}
+	u.Scheme = base.Scheme
+	u.Host = base.Host
+	return u.String(), nil
+}
+
+// SignObjectURL returns the read URL for an object key. In presign mode it is
+// a time-limited signed URL clients can fetch directly from the S3 endpoint;
+// otherwise the legacy public/proxy URL is returned.
+func (s *Store) SignObjectURL(ctx context.Context, objectKey string) (string, error) {
+	if !s.presignEnabled {
+		return s.publicURL(objectKey), nil
+	}
+	u, err := s.client.PresignedGetObject(ctx, s.bucket, objectKey, s.presignTTL, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to sign object URL: %w", err)
+	}
+	return rewriteHost(u, s.publicBaseURL)
+}
+
+// SignPutURL returns a time-limited presigned PUT URL for direct client
+// uploads (reserved for future use; uploads currently proxy through the
+// storage service with server-side credentials).
+func (s *Store) SignPutURL(ctx context.Context, objectKey string) (string, error) {
+	u, err := s.client.PresignedPutObject(ctx, s.bucket, objectKey, s.presignTTL)
+	if err != nil {
+		return "", fmt.Errorf("failed to sign upload URL: %w", err)
+	}
+	return rewriteHost(u, s.publicBaseURL)
+}
+
 // Open streams an object for server-side delivery (internal proxy mode). The
 // caller owns the returned object and must Close it; metadata such as size
 // and content type is read lazily via [minio.Object.Stat].
@@ -240,10 +290,18 @@ func (s *Store) Bucket() string {
 	return s.bucket
 }
 
-// Upload stores a file and returns its object key and public URL.
-func (s *Store) Upload(ctx context.Context, reader io.Reader, size int64, contentType, originalName string) (string, string, error) {
+// userPrefix builds the per-user object-key prefix so every uploaded object
+// lives under the owner's directory ("users/<id>/..."), isolating attachments
+// by user at the storage level.
+func userPrefix(userID int64) string {
+	return fmt.Sprintf("users/%d", userID)
+}
+
+// Upload stores a file under the owner's user directory and returns its
+// object key and (signed or public) URL.
+func (s *Store) Upload(ctx context.Context, userID int64, reader io.Reader, size int64, contentType, originalName string) (string, string, error) {
 	ext := filepath.Ext(originalName)
-	objectKey := fmt.Sprintf("%s/%s%s", time.Now().Format("2006/01/02"), uuid.NewString(), ext)
+	objectKey := fmt.Sprintf("%s/%s/%s%s", userPrefix(userID), time.Now().Format("2006/01/02"), uuid.NewString(), ext)
 
 	_, err := s.client.PutObject(ctx, s.bucket, objectKey, reader, size, minio.PutObjectOptions{
 		ContentType: contentType,
@@ -252,10 +310,14 @@ func (s *Store) Upload(ctx context.Context, reader io.Reader, size int64, conten
 		return "", "", fmt.Errorf("failed to upload object: %w", err)
 	}
 
-	return objectKey, s.publicURL(objectKey), nil
+	url, err := s.SignObjectURL(ctx, objectKey)
+	if err != nil {
+		return "", "", err
+	}
+	return objectKey, url, nil
 }
 
-// UploadThumb stores a thumbnail image next to an object and returns its public URL.
+// UploadThumb stores a thumbnail image next to an object and returns its URL.
 // The thumbnail key is derived from the parent object key with a ".thumb.jpg" suffix.
 func (s *Store) UploadThumb(ctx context.Context, parentObjectKey string, reader io.Reader, size int64) (string, error) {
 	thumbKey := parentObjectKey + ".thumb.jpg"
@@ -265,7 +327,7 @@ func (s *Store) UploadThumb(ctx context.Context, parentObjectKey string, reader 
 	if err != nil {
 		return "", fmt.Errorf("failed to upload thumbnail: %w", err)
 	}
-	return s.publicURL(thumbKey), nil
+	return s.SignObjectURL(ctx, thumbKey)
 }
 
 // GetBytes downloads the full contents of an object into memory. It is meant
@@ -301,7 +363,7 @@ func (s *Store) DeleteThumb(ctx context.Context, parentObjectKey string) error {
 }
 
 // UploadPreview stores the mid-size preview rendition derived from a parent
-// object key and returns its public URL.
+// object key and returns its URL.
 func (s *Store) UploadPreview(ctx context.Context, parentObjectKey string, reader io.Reader, size int64) (string, error) {
 	previewKey := parentObjectKey + ".preview.jpg"
 	_, err := s.client.PutObject(ctx, s.bucket, previewKey, reader, size, minio.PutObjectOptions{
@@ -310,7 +372,7 @@ func (s *Store) UploadPreview(ctx context.Context, parentObjectKey string, reade
 	if err != nil {
 		return "", fmt.Errorf("failed to upload preview: %w", err)
 	}
-	return s.publicURL(previewKey), nil
+	return s.SignObjectURL(ctx, previewKey)
 }
 
 // DeletePreview removes the preview derived from a parent object key.
@@ -318,20 +380,27 @@ func (s *Store) DeletePreview(ctx context.Context, parentObjectKey string) error
 	return s.Delete(ctx, parentObjectKey+".preview.jpg")
 }
 
-// ChunkKey returns the object key for a chunk of an in-progress upload.
-func ChunkKey(uploadID string, index int) string {
-	return fmt.Sprintf("chunks/%s/%08d", uploadID, index)
+// ChunkKey returns the object key for a chunk of an in-progress upload. Chunks
+// live under the uploading user's directory so intermediate state is isolated
+// per user like every other object.
+func ChunkKey(userID int64, uploadID string, index int) string {
+	return fmt.Sprintf("%s/chunks/%s/%08d", userPrefix(userID), uploadID, index)
 }
 
 // UploadChunk stores a single chunk of a large-file upload. Chunks are kept
 // as independent objects so interrupted uploads can resume.
-func (s *Store) UploadChunk(ctx context.Context, uploadID string, index int, reader io.Reader, size int64) error {
-	key := ChunkKey(uploadID, index)
+func (s *Store) UploadChunk(ctx context.Context, userID int64, uploadID string, index int, reader io.Reader, size int64) error {
+	key := ChunkKey(userID, uploadID, index)
 	_, err := s.client.PutObject(ctx, s.bucket, key, reader, size, minio.PutObjectOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to upload chunk: %w", err)
 	}
 	return nil
+}
+
+// chunkPrefix returns the prefix under which a user's chunked upload lives.
+func chunkPrefix(userID int64, uploadID string) string {
+	return fmt.Sprintf("%s/chunks/%s/", userPrefix(userID), uploadID)
 }
 
 // ListChunks returns the set of chunk indexes already uploaded for an upload
@@ -340,8 +409,8 @@ func (s *Store) UploadChunk(ctx context.Context, uploadID string, index int, rea
 // under a multi-segment prefix right after they were PutObject-ed), so
 // callers that need a definitive "which chunks exist?" answer must use
 // StatChunks instead. Kept only as a best-effort debugging aid.
-func (s *Store) ListChunks(ctx context.Context, uploadID string) (map[int]int64, error) {
-	prefix := fmt.Sprintf("chunks/%s/", uploadID)
+func (s *Store) ListChunks(ctx context.Context, userID int64, uploadID string) (map[int]int64, error) {
+	prefix := chunkPrefix(userID, uploadID)
 	existing := make(map[int]int64)
 	for obj := range s.client.ListObjects(ctx, s.bucket, minio.ListObjectsOptions{
 		Prefix: prefix,
@@ -366,10 +435,10 @@ func (s *Store) ListChunks(ctx context.Context, uploadID string) (map[int]int64,
 // report every chunk as missing while the client had received a 200 for each
 // PUT. The key layout is fully owned by ChunkKey, so stat-ing each known key
 // is deterministic — there is nothing to enumerate or parse.
-func (s *Store) StatChunks(ctx context.Context, uploadID string, totalChunks int) (map[int]int64, error) {
+func (s *Store) StatChunks(ctx context.Context, userID int64, uploadID string, totalChunks int) (map[int]int64, error) {
 	existing := make(map[int]int64, totalChunks)
 	for i := 1; i <= totalChunks; i++ {
-		info, err := s.client.StatObject(ctx, s.bucket, ChunkKey(uploadID, i), minio.StatObjectOptions{})
+		info, err := s.client.StatObject(ctx, s.bucket, ChunkKey(userID, uploadID, i), minio.StatObjectOptions{})
 		if err != nil {
 			resp := minio.ToErrorResponse(err)
 			if resp.Code == "NoSuchKey" || resp.Code == "NotFound" || resp.StatusCode == 404 {
@@ -386,13 +455,13 @@ func (s *Store) StatChunks(ctx context.Context, uploadID string, totalChunks int
 // chunks back from storage, so it must only be called with the full set of
 // chunk indexes (1..total). The SHA-256 of the assembled bytes is computed
 // while streaming so callers can deduplicate uploads.
-func (s *Store) AssembleChunks(ctx context.Context, uploadID string, totalChunks int, contentType, originalName string) (objectKey, publicURL, sha256Hex string, err error) {
+func (s *Store) AssembleChunks(ctx context.Context, userID int64, uploadID string, totalChunks int, contentType, originalName string) (objectKey, signedURL, sha256Hex string, err error) {
 	ext := filepath.Ext(originalName)
-	objectKey = fmt.Sprintf("%s/%s%s", time.Now().Format("2006/01/02"), uuid.NewString(), ext)
+	objectKey = fmt.Sprintf("%s/%s/%s%s", userPrefix(userID), time.Now().Format("2006/01/02"), uuid.NewString(), ext)
 
 	var readers []io.ReadCloser
 	for i := 1; i <= totalChunks; i++ {
-		obj, err := s.client.GetObject(ctx, s.bucket, ChunkKey(uploadID, i), minio.GetObjectOptions{})
+		obj, err := s.client.GetObject(ctx, s.bucket, ChunkKey(userID, uploadID, i), minio.GetObjectOptions{})
 		if err != nil {
 			closeAll(readers)
 			return "", "", "", fmt.Errorf("failed to open chunk %d: %w", i, err)
@@ -415,12 +484,16 @@ func (s *Store) AssembleChunks(ctx context.Context, uploadID string, totalChunks
 		return "", "", "", fmt.Errorf("failed to assemble chunks: %w", err)
 	}
 
-	return objectKey, s.publicURL(objectKey), hex.EncodeToString(hasher.Sum(nil)), nil
+	signed, serr := s.SignObjectURL(ctx, objectKey)
+	if serr != nil {
+		return "", "", "", serr
+	}
+	return objectKey, signed, hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
 // DeleteChunks removes all chunk objects for an upload.
-func (s *Store) DeleteChunks(ctx context.Context, uploadID string) error {
-	prefix := fmt.Sprintf("chunks/%s/", uploadID)
+func (s *Store) DeleteChunks(ctx context.Context, userID int64, uploadID string) error {
+	prefix := chunkPrefix(userID, uploadID)
 	for obj := range s.client.ListObjects(ctx, s.bucket, minio.ListObjectsOptions{
 		Prefix: prefix,
 	}) {

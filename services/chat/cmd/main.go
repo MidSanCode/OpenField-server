@@ -13,6 +13,7 @@ import (
 	"github.com/openfield/server/pkg/health"
 	"github.com/openfield/server/pkg/logger"
 	"github.com/openfield/server/pkg/middleware"
+	"github.com/openfield/server/pkg/storage"
 	"github.com/openfield/server/services/chat/internal/handler"
 )
 
@@ -42,10 +43,18 @@ func main() {
 		log.Fatalf("failed to run database migrations: %v", err)
 	}
 
+	// Attachment read URLs are signed against the object store (presigned
+	// mode). When storage is not configured the manager is empty and URLs
+	// keep their stored form — never fatal.
+	store, err := storage.New(cfg.Storage)
+	if err != nil {
+		log.Fatalf("failed to initialize object storage: %v", err)
+	}
+
 	convHandler := handler.NewConversationHandler()
-	extrasHandler := handler.NewGroupExtrasHandler()
+	extrasHandler := handler.NewGroupExtrasHandler(store)
 	consentHandler := handler.NewConsentHandler()
-	msgHandler := handler.NewMessageHandler()
+	msgHandler := handler.NewMessageHandler(store)
 
 	r := gin.New()
 	r.Use(middleware.Recovery())

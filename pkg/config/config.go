@@ -18,6 +18,13 @@ type ServerConfig struct {
 	Mode            string   `yaml:"mode"`
 	AllowedOrigins  []string `yaml:"allowed_origins"`
 	AllowAllOrigins bool     `yaml:"allow_all_origins"`
+	// AllowedHosts is the API host allow-list (e.g. ["api.a.com",
+	// "api.b.com"]). When non-empty the gateway rejects requests whose Host
+	// header is not listed (host-header injection hardening) and
+	// automatically allows those hosts as CORS origins for callers that hit
+	// the API directly on its own domain. Empty keeps today's behavior of
+	// accepting any host.
+	AllowedHosts []string `yaml:"allowed_hosts"`
 }
 
 // DatabaseConfig holds database configuration.
@@ -114,6 +121,42 @@ type InternalProxyConfig struct {
 	Enabled bool `yaml:"enabled"`
 }
 
+// PresignConfig switches attachment URLs to time-limited presigned GET URLs.
+// Buckets then never need public read access: clients download objects
+// directly from the S3 endpoint using a URL the storage service signs per
+// response. Uploads still flow through the storage service (server-side
+// credentials), which keeps MIME/denylist checks, GPS stripping and
+// thumbnail generation in one place.
+type PresignConfig struct {
+	// Enabled turns on presigned read URLs. The physical buckets must be
+	// private; storage.public_base_url (or the per-bucket override) must
+	// point at the client-reachable S3 endpoint whose host the signed URLs
+	// are rewritten to (e.g. https://io.example.com).
+	Enabled bool `yaml:"enabled"`
+	// GetTTLSeconds is how long a presigned read URL stays valid. Defaults
+	// to 3600 (one hour) when unset or non-positive.
+	GetTTLSeconds int `yaml:"get_ttl_seconds"`
+	// PutTTLSeconds is how long a presigned upload URL stays valid (reserved
+	// for future client-direct uploads). Defaults to 900 when unset.
+	PutTTLSeconds int `yaml:"put_ttl_seconds"`
+}
+
+// PresignGetTTL returns the presigned-read URL lifetime with the default applied.
+func (c PresignConfig) PresignGetTTL() (seconds int) {
+	if c.GetTTLSeconds <= 0 {
+		return 3600
+	}
+	return c.GetTTLSeconds
+}
+
+// PresignPutTTL returns the presigned-upload URL lifetime with the default applied.
+func (c PresignConfig) PresignPutTTL() (seconds int) {
+	if c.PutTTLSeconds <= 0 {
+		return 900
+	}
+	return c.PutTTLSeconds
+}
+
 // StorageConfig holds S3-compatible object storage configuration.
 type StorageConfig struct {
 	// Endpoint is the S3 API endpoint exposed to clients and used to
@@ -142,6 +185,9 @@ type StorageConfig struct {
 	// InternalProxy serves files through the gateway instead of exposing the
 	// bucket host publicly; see InternalProxyConfig.
 	InternalProxy InternalProxyConfig `yaml:"internal_proxy"`
+	// Presign serves attachment reads as time-limited presigned URLs; see
+	// PresignConfig.
+	Presign PresignConfig `yaml:"presign"`
 	// Recycle controls the orphan-attachment sweeper; see RecycleConfig.
 	Recycle RecycleConfig `yaml:"recycle"`
 }
@@ -338,6 +384,9 @@ func (c *Config) overrideFromEnv() {
 	}
 	if v := os.Getenv("ALLOWED_ORIGINS"); v != "" {
 		c.Server.AllowedOrigins = strings.Split(v, ",")
+	}
+	if v := os.Getenv("ALLOWED_HOSTS"); v != "" {
+		c.Server.AllowedHosts = strings.Split(v, ",")
 	}
 	if v := os.Getenv("DATABASE_URL"); v != "" {
 		// Parse DATABASE_URL if provided (format: postgres://user:pass@host:port/dbname)

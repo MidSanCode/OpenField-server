@@ -12,6 +12,7 @@ import (
 	"github.com/openfield/server/pkg/health"
 	"github.com/openfield/server/pkg/logger"
 	"github.com/openfield/server/pkg/middleware"
+	"github.com/openfield/server/pkg/storage"
 	"github.com/openfield/server/services/posts/internal/handler"
 )
 
@@ -41,8 +42,16 @@ func main() {
 		log.Fatalf("failed to run database migrations: %v", err)
 	}
 
-	postHandler := handler.NewPostHandler()
-	campHandler := handler.NewCampHandler()
+	// Attachment read URLs are signed against the object store (presigned
+	// mode). When storage is not configured the manager is empty and URLs
+	// keep their stored form — never fatal.
+	store, err := storage.New(cfg.Storage)
+	if err != nil {
+		log.Fatalf("failed to initialize object storage: %v", err)
+	}
+
+	postHandler := handler.NewPostHandler(store)
+	campHandler := handler.NewCampHandler(store)
 
 	r := gin.New()
 	r.Use(middleware.Recovery())
