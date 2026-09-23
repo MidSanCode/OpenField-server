@@ -97,6 +97,56 @@ Otherwise (e.g. API-only or web clients) it returns JSON:
 }
 ```
 
+### Multi-Account Login (OAuth identity → several OpenField accounts)
+
+One OAuth identity may be bound to up to `5` OpenField accounts (see
+`docs/multi-account.md`). When the identity is already bound to at least one
+account, the callback does **not** auto-login: it issues a short-lived
+single-use **pick ticket** and redirects with `?pick=<ticket>` (web:
+`web_redirect_url?pick=...`, app: `app_redirect_url?pick=...`, no redirect
+configured: JSON `{ "pick": "..." }`). The client then uses the ticket to
+choose an account or add a new one:
+
+#### Get bound accounts for a pick ticket
+```
+GET /auth/oidc/pick?ticket=<ticket>
+```
+Does **not** consume the ticket (safe to re-fetch). Returns the identity and
+the accounts bound to it:
+```json
+{
+  "provider": "oidc",
+  "oauth2_username": "alice",
+  "email": "alice@example.com",
+  "avatar_url": "https://...",
+  "max_accounts": 5,
+  "accounts": [
+    { "id": 1, "username": "openfield", "nickname": "Alice", ... }
+  ]
+}
+```
+`404` when the ticket is unknown or expired.
+
+#### Select an account and sign in
+```
+POST /auth/oidc/pick/select
+Body: { "ticket": "...", "user_id": 1 }
+```
+Consumes the ticket. Verifies the account really belongs to the ticket's
+identity, then returns the same token payload as a normal login
+(`access_token`, `refresh_token`, `user`). `403` when the account is not bound
+to the identity or is banned/scheduled for deletion.
+
+#### Add a new account and sign in
+```
+POST /auth/oidc/pick/create
+Body: { "ticket": "..." }
+```
+Consumes the ticket. Enforces the per-identity quota server-side (`409
+{"error":"account quota reached"}` when the identity already holds
+`max_accounts` accounts), provisions a new `needs_registration = true` account
+bound to the identity, and returns the login token payload.
+
 ### Refresh Token
 ```
 POST /auth/refresh

@@ -22,6 +22,15 @@ func RegisterRoutes(r *gin.Engine, authHandler *AuthHandler, userHandler *UserHa
 			auth.GET("/oidc/login", authHandler.OIDCLogin)
 			auth.POST("/oidc/bind", middleware.GatewayAuthMiddleware(), authHandler.OIDCBind)
 			auth.GET("/oidc/callback", authHandler.OIDCCallback)
+			// Multi-account OIDC login: after the callback the identity may map
+			// to several OpenField accounts. A short-lived single-use pick
+			// ticket parks the identity; these endpoints list the bound
+			// accounts, sign into the chosen one, or add a new one (quota
+			// permitting). Public because the client has no token yet — the
+			// ticket itself is the credential.
+			auth.GET("/oidc/pick", authHandler.OIDCPick)
+			auth.POST("/oidc/pick/select", authHandler.OIDCPickSelect)
+			auth.POST("/oidc/pick/create", authHandler.OIDCPickCreate)
 			auth.POST("/login", authHandler.Login)
 			auth.POST("/register", middleware.GatewayAuthMiddleware(), authHandler.Register)
 			auth.POST("/refresh", authHandler.RefreshToken)

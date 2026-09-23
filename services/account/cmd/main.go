@@ -175,8 +175,9 @@ func startMembershipRenewer() {
 	}
 }
 
-// startAuthDataSweeper periodically deletes expired refresh tokens and OIDC
-// login states so dead sessions and nonces do not accumulate.
+// startAuthDataSweeper periodically deletes expired refresh tokens, OIDC
+// login states and multi-account pick tickets so dead sessions and nonces do
+// not accumulate.
 func startAuthDataSweeper() {
 	ticker := time.NewTicker(1 * time.Hour)
 	defer ticker.Stop()
@@ -187,6 +188,9 @@ func startAuthDataSweeper() {
 		}
 		if err := repository.PurgeExpiredOIDCStates(); err != nil {
 			logger.Log.Error("failed to purge expired oidc states", "error", err)
+		}
+		if err := repository.PurgeExpiredOAuth2Picks(); err != nil {
+			logger.Log.Error("failed to purge expired oauth2 pick tickets", "error", err)
 		}
 		if err := repository.PurgeExpiredQrLogins(); err != nil {
 			logger.Log.Error("failed to purge expired qr logins", "error", err)

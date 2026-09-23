@@ -35,6 +35,13 @@ func isUniqueViolation(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "23505")
 }
 
+// IsUniqueViolation is the exported form of isUniqueViolation, used by
+// services that provision rows outside this package (e.g. OAuth account
+// creation with username collision retries).
+func IsUniqueViolation(err error) bool {
+	return isUniqueViolation(err)
+}
+
 // hashRefreshToken derives the stored form of a refresh token. Tokens are kept
 // hashed so a database leak does not expose usable session credentials; the
 // raw token only ever lives in the response body and the client's storage.

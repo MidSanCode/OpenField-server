@@ -324,10 +324,28 @@ func (h *AuthHandler) OIDCCallback(c *gin.Context) {
 		return
 	}
 
-	user, err := h.authManager.Authenticate(c.Request.Context(), code)
+	userInfo, accounts, err := h.authManager.ResolveIdentity(c.Request.Context(), code)
 	if err != nil {
 		logger.Log.Error("oidc authentication failed", "error", err)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "authentication failed"})
+		return
+	}
+
+	// Multi-account login: when the identity is already bound to one or more
+	// OpenField accounts, don't pick one server-side (the OAuth code is single
+	// use, so it cannot be re-exchanged later). Instead park the identity
+	// behind a short-lived pick ticket and let the client choose an account
+	// (or add a new one, quota permitting).
+	if len(accounts) > 0 {
+		h.redirectToPick(c, userInfo, flow)
+		return
+	}
+
+	// First sign-in for this identity: provision a new account.
+	user, err := h.authManager.CreateAccountFromOAuth2(userInfo)
+	if err != nil {
+		logger.Log.Error("failed to create user", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "authentication failed"})
 		return
 	}
 
@@ -400,6 +418,8 @@ func (h *AuthHandler) handleOIDCBind(c *gin.Context, code string, userID int64) 
 		reason := "unknown"
 		if errors.Is(err, auth.ErrOAuth2AlreadyBound) {
 			reason = "taken"
+		} else if errors.Is(err, auth.ErrOAuth2QuotaExceeded) {
+			reason = "quota"
 		}
 		appLink := ""
 		if h.appRedirectURL != "" {
@@ -414,6 +434,244 @@ func (h *AuthHandler) handleOIDCBind(c *gin.Context, code string, userID int64) 
 		appLink = fmt.Sprintf("%s?bind=success&name=%s", h.appRedirectURL, url.QueryEscape(boundName(user)))
 	}
 	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(bindResultPage("success", "", boundName(user), appLink)))
+}
+
+// redirectToPick parks the just-exchanged OAuth identity behind a short-lived
+// pick ticket and sends the client to the account-selection flow instead of
+// auto-logging in. The ticket is single-use and holds the identity payload, so
+// the client can later list the bound accounts or add a new one (quota
+// permitting) through the pick endpoints without re-exchanging the OAuth code.
+func (h *AuthHandler) redirectToPick(c *gin.Context, userInfo *auth.UserInfo, flow string) {
+	ticket, err := randomState()
+	if err != nil {
+		logger.Log.Error("failed to generate pick ticket", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "authentication failed"})
+		return
+	}
+	provider := h.authManager.GetProvider().Name()
+	if err := repository.IssueOAuth2Pick(ticket, provider, userInfo.OAuth2ID, userInfo.Username, userInfo.Email, userInfo.AvatarURL); err != nil {
+		logger.Log.Error("failed to issue pick ticket", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "authentication failed"})
+		return
+	}
+	logger.Log.Info("multi-account pick ticket issued", "provider", provider, "identity", userInfo.OAuth2ID, "flow", flow)
+
+	// Web sign-ins get redirected to the frontend callback page, which then
+	// navigates the SPA to the account picker route with the ticket.
+	if flow == "web" && h.webRedirectURL != "" {
+		webLink := fmt.Sprintf("%s?pick=%s", h.webRedirectURL, url.QueryEscape(ticket))
+		c.Redirect(http.StatusFound, webLink)
+		return
+	}
+
+	if h.appRedirectURL != "" {
+		appLink := fmt.Sprintf("%s?pick=%s", h.appRedirectURL, url.QueryEscape(ticket))
+		if strings.HasPrefix(h.appRedirectURL, "openfield://") || !strings.HasPrefix(h.appRedirectURL, "http") {
+			c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(pickResultPage(appLink)))
+			return
+		}
+		c.Redirect(http.StatusFound, appLink)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"pick": ticket})
+}
+
+// OIDCPick returns the identity and the accounts bound to it for a pending
+// multi-account pick ticket. It does NOT consume the ticket, so the client can
+// re-fetch the list; only select/create consume it.
+func (h *AuthHandler) OIDCPick(c *gin.Context) {
+	ticket := c.Query("ticket")
+	if ticket == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing ticket"})
+		return
+	}
+	pick, err := repository.GetOAuth2Pick(ticket)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "invalid or expired pick ticket"})
+			return
+		}
+		logger.Log.Error("failed to read pick ticket", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read pick ticket"})
+		return
+	}
+
+	accounts, err := h.userRepo.FindByOAuth2(pick.Provider, pick.OAuth2ID)
+	if err != nil {
+		logger.Log.Error("failed to list accounts for pick", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list accounts"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"provider":        pick.Provider,
+		"oauth2_username": pick.OAuth2Username,
+		"email":           pick.Email,
+		"avatar_url":      pick.AvatarURL,
+		"max_accounts":    auth.MaxOAuth2Accounts,
+		"accounts":        accounts,
+	})
+}
+
+// OIDCPickSelect completes the multi-account login for a chosen account: it
+// consumes the pick ticket, verifies the account really belongs to the ticket's
+// identity, then issues the same tokens/session as a normal login.
+func (h *AuthHandler) OIDCPickSelect(c *gin.Context) {
+	var req struct {
+		Ticket string `json:"ticket" binding:"required"`
+		UserID int64  `json:"user_id" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	pick, err := repository.ConsumeOAuth2Pick(req.Ticket)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "invalid or expired pick ticket"})
+			return
+		}
+		logger.Log.Error("failed to consume pick ticket", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to consume pick ticket"})
+		return
+	}
+
+	user, err := h.userRepo.GetByID(req.UserID)
+	if err != nil || user == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "account not found"})
+		return
+	}
+	if user.OAuth2Provider != pick.Provider || user.OAuth2ID != pick.OAuth2ID {
+		logger.Log.Warn("pick select identity mismatch", "user_id", user.ID, "ticket_identity", pick.OAuth2ID)
+		c.JSON(http.StatusForbidden, gin.H{"error": "account is not bound to this identity"})
+		return
+	}
+
+	if h.bannedResponse(c, user) {
+		return
+	}
+	if user.DeletedAt != nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "account scheduled for deletion"})
+		return
+	}
+
+	accessToken, err := h.tokenMgr.GenerateToken(user.ID, user.Email, user.Username, user.NeedsRegistration)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate token"})
+		return
+	}
+	refreshToken, err := generateRefreshToken()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate refresh token"})
+		return
+	}
+	device, ip := clientDevice(c)
+	knownDevice, err := repository.CreateSession(user.ID, refreshToken, h.refreshExpiresIn(), device, ip)
+	if err != nil {
+		logger.Log.Error("failed to create session", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "authentication failed"})
+		return
+	}
+	if !knownDevice {
+		h.notifyNewDeviceLogin(user.ID, device, ip)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"access_token":       accessToken,
+		"refresh_token":      refreshToken,
+		"token_type":         "Bearer",
+		"expires_in":         h.accessExpiresIn(),
+		"refresh_expires_in": h.refreshExpiresIn(),
+		"user":               user,
+	})
+}
+
+// OIDCPickCreate adds a brand-new account bound to the pick ticket's identity
+// ("添加新账号") and signs into it. Enforces the per-identity quota server-side
+// so a stale client cannot exceed MaxOAuth2Accounts.
+func (h *AuthHandler) OIDCPickCreate(c *gin.Context) {
+	var req struct {
+		Ticket string `json:"ticket" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	pick, err := repository.ConsumeOAuth2Pick(req.Ticket)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "invalid or expired pick ticket"})
+			return
+		}
+		logger.Log.Error("failed to consume pick ticket", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to consume pick ticket"})
+		return
+	}
+
+	used, err := h.userRepo.CountOAuth2Accounts(pick.Provider, pick.OAuth2ID)
+	if err != nil {
+		logger.Log.Error("failed to count accounts for pick", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to count accounts"})
+		return
+	}
+	if used >= auth.MaxOAuth2Accounts {
+		logger.Log.Warn("pick create quota exceeded", "identity", pick.OAuth2ID, "used", used)
+		c.JSON(http.StatusConflict, gin.H{"error": "account quota reached"})
+		return
+	}
+
+	user, err := h.authManager.CreateAccountFromOAuth2(&auth.UserInfo{
+		OAuth2ID:  pick.OAuth2ID,
+		Email:     pick.Email,
+		Username:  pick.OAuth2Username,
+		AvatarURL: pick.AvatarURL,
+	})
+	if err != nil {
+		logger.Log.Error("failed to create account from pick", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create account"})
+		return
+	}
+
+	accessToken, err := h.tokenMgr.GenerateToken(user.ID, user.Email, user.Username, user.NeedsRegistration)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate token"})
+		return
+	}
+	refreshToken, err := generateRefreshToken()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate refresh token"})
+		return
+	}
+	device, ip := clientDevice(c)
+	knownDevice, err := repository.CreateSession(user.ID, refreshToken, h.refreshExpiresIn(), device, ip)
+	if err != nil {
+		logger.Log.Error("failed to create session", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "authentication failed"})
+		return
+	}
+	if !knownDevice {
+		h.notifyNewDeviceLogin(user.ID, device, ip)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"access_token":       accessToken,
+		"refresh_token":      refreshToken,
+		"token_type":         "Bearer",
+		"expires_in":         h.accessExpiresIn(),
+		"refresh_expires_in": h.refreshExpiresIn(),
+		"user":               user,
+	})
+}
+
+// pickResultPage renders a small HTML page that deep-links into the app's
+// account-selection flow after a multi-account OIDC login.
+func pickResultPage(appLink string) string {
+	return renderResultPage("ok", "&#10003;", "选择登录账号",
+		"该身份已绑定多个 OpenField 账号。请在应用内选择要登录的账号，或创建一个新账号。",
+		"打开 OpenField", appLink, "", "")
 }
 
 // boundName returns the human-readable OAuth identity label for display.
@@ -447,6 +705,9 @@ func bindResultPage(result, reason, accountName, appLink string) string {
 		desc = "无法完成账号绑定，请回到应用内重试。"
 		if reason == "taken" {
 			desc = "该 OIDC 身份已被其他账号绑定，请回到应用内重试。"
+		}
+		if reason == "quota" {
+			desc = fmt.Sprintf("该 OIDC 身份已绑定 %d 个账号，达到上限，无法继续绑定。", auth.MaxOAuth2Accounts)
 		}
 		btnLabel = "返回应用"
 		btnHref = hmmAppFallback

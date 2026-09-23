@@ -28,6 +28,7 @@ var ServerCapabilities = map[string]bool{
 	// Auth & identity
 	"auth.password_login":    true,
 	"auth.oidc_login":        true,
+	"auth.oidc_multi_account": true,
 	"user.password_register": true,
 	"user.e2ee_key":          true,
 	"user.exp_levels":        true,

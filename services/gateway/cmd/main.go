@@ -138,6 +138,11 @@ func main() {
 		{http.MethodPost, "/api/v1/auth/oidc/bind", cfg.Services.Account, authRequired, ""},
 		{http.MethodGet, "/api/v1/auth/oidc/callback", cfg.Services.Account, authPublic, ""},
 		{http.MethodPost, "/api/v1/auth/oidc/callback", cfg.Services.Account, authPublic, ""},
+		// Multi-account OIDC login: the pick ticket is the client's credential
+		// (no access token yet), so these stay public like the callback.
+		{http.MethodGet, "/api/v1/auth/oidc/pick", cfg.Services.Account, authPublic, ""},
+		{http.MethodPost, "/api/v1/auth/oidc/pick/select", cfg.Services.Account, authPublic, ""},
+		{http.MethodPost, "/api/v1/auth/oidc/pick/create", cfg.Services.Account, authPublic, ""},
 		{http.MethodPost, "/api/v1/auth/login", cfg.Services.Account, authPublic, ""},
 		{http.MethodPost, "/api/v1/auth/refresh", cfg.Services.Account, authPublic, ""},
 		{http.MethodPost, "/api/v1/auth/register", cfg.Services.Account, authRequired, ""},

@@ -73,6 +73,44 @@ func (r *UserRepository) GetByEmail(email string) (*model.User, error) {
 	return user, nil
 }
 
+// FindByOAuth2 returns every non-deleted user bound to the OAuth2 identity
+// (provider + provider-specific id). With multi-account support one identity
+// may be linked to several OpenField accounts; the picker lists them.
+func (r *UserRepository) FindByOAuth2(provider, oauth2ID string) ([]*model.User, error) {
+	rows, err := database.DB.Query(
+		"SELECT "+userColumns+" FROM users WHERE oauth2_provider = $1 AND oauth2_id = $2 AND deleted_at IS NULL ORDER BY id",
+		provider, oauth2ID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query users by oauth2: %w", err)
+	}
+	defer rows.Close()
+
+	users := []*model.User{}
+	for rows.Next() {
+		user, err := scanUser(rows)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan user: %w", err)
+		}
+		users = append(users, user)
+	}
+	return users, rows.Err()
+}
+
+// CountOAuth2Accounts returns how many non-deleted accounts are bound to the
+// given OAuth2 identity. Used to enforce the per-identity account quota.
+func (r *UserRepository) CountOAuth2Accounts(provider, oauth2ID string) (int, error) {
+	var n int
+	err := database.DB.QueryRow(
+		"SELECT COUNT(*) FROM users WHERE oauth2_provider = $1 AND oauth2_id = $2 AND deleted_at IS NULL",
+		provider, oauth2ID,
+	).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count oauth2 accounts: %w", err)
+	}
+	return n, nil
+}
+
 // UpdateProfile updates a user's registration profile (username, nickname, bio).
 // Returns the updated user or a conflict error if username is taken.
 func (r *UserRepository) UpdateProfile(userID int64, username, nickname, bio string) (*model.User, error) {

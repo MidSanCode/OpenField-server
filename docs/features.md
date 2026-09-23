@@ -10,6 +10,7 @@ for the service layout and [wallet.md](wallet.md) for the wallet in detail.
 | Feature                    | Location                                                     | Notes |
 |----------------------------|--------------------------------------------------------------|-------|
 | Authentication & OIDC      | `services/account/internal/handler/auth.go`                  | OIDC + password login |
+| OAuth multi-account        | `services/account/internal/handler/auth.go`, `pkg/repository/oauth_pick.go` | one identity → up to 5 accounts |
 | QR login                   | `services/account/internal/handler/auth.go`                  | 5-minute handshake, scanner approves |
 | Profile & users            | `services/account/internal/handler/user.go`                  | edit, avatar/banner, locale |
 | Permissions (groups)       | gateway auth + `pkg/repository/permission.go`                | route-level checks |
@@ -36,6 +37,12 @@ for the service layout and [wallet.md](wallet.md) for the wallet in detail.
   tokens. When `oidc.app_redirect_url` is configured, the callback responds
   with a `302` to a deep link (`openfield://oauth/callback?...`) carrying the
   tokens and user info; otherwise it returns JSON.
+- **Multi-account login**: one OAuth identity may be bound to several OpenField
+  accounts (default max `5`, see [multi-account.md](multi-account.md)). When
+  the identity is already bound to one or more accounts, the callback parks the
+  identity behind a short-lived single-use **pick ticket** and redirects with
+  `?pick=<ticket>`; the client lists the bound accounts and selects one, or
+  adds a new account (quota permitting) via `/auth/oidc/pick/{select,create}`.
 - **Password login** exists for admin-created local accounts.
 - **Self-registration is not allowed.** New OAuth users are created with
   `needs_registration = true` and must call `POST /auth/register` to pick a
@@ -47,7 +54,9 @@ for the service layout and [wallet.md](wallet.md) for the wallet in detail.
   injecting `X-User-ID` for downstream services.
 
 Endpoint: `POST /auth/login`, `POST /auth/refresh`, `GET /auth/oidc/login`,
-`GET|POST /auth/oidc/callback`, `POST /auth/oidc/bind`, `POST /auth/register`.
+`GET|POST /auth/oidc/callback`, `GET /auth/oidc/pick`,
+`POST /auth/oidc/pick/select`, `POST /auth/oidc/pick/create`,
+`POST /auth/oidc/bind`, `POST /auth/register`.
 
 ## Profile & Users
 

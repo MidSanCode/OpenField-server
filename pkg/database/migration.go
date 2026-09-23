@@ -621,6 +621,31 @@ var versionedMigrations = []migration{
 			ALTER TABLE camps ADD COLUMN IF NOT EXISTS announcement TEXT NOT NULL DEFAULT '';
 		`,
 	},
+	{
+		// v28 introduces multi-account OAuth: one OIDC identity may now be
+		// bound to up to MaxOAuth2Accounts OpenField accounts. The login
+		// callback can no longer resolve a code to a single account, so when
+		// an identity maps to several accounts it issues a short-lived pick
+		// ticket; the client then lists the bound accounts (or adds a new
+		// one, quota permitting) and completes login through the pick
+		// endpoints. oauth2_picks is the single-use ticket store.
+		version: 28,
+		name:    "oauth2-multi-account-picks",
+		sql: `
+			CREATE TABLE IF NOT EXISTS oauth2_picks (
+				ticket VARCHAR(128) PRIMARY KEY,
+				provider VARCHAR(50) NOT NULL,
+				oauth2_id VARCHAR(255) NOT NULL,
+				oauth2_username VARCHAR(255) NOT NULL DEFAULT '',
+				email VARCHAR(255) NOT NULL DEFAULT '',
+				avatar_url TEXT NOT NULL DEFAULT '',
+				expires_at TIMESTAMPTZ NOT NULL
+			);
+			CREATE INDEX IF NOT EXISTS idx_oauth2_picks_expires ON oauth2_picks(expires_at);
+			-- Speed up identity→accounts lookups (one identity, many users).
+			CREATE INDEX IF NOT EXISTS idx_users_oauth2_identity ON users(oauth2_provider, oauth2_id);
+		`,
+	},
 }
 
 // latestMigrationVersion returns the newest schema version the code knows
