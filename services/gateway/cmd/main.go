@@ -295,6 +295,7 @@ func main() {
 		{http.MethodPost, "/api/v1/tasks/daily-login/claim", cfg.Services.Account, authRequired, ""},
 		{http.MethodPost, "/api/v1/tasks/daily-login/makeup", cfg.Services.Account, authRequired, ""},
 		{http.MethodPost, "/api/v1/tasks/daily-login/makeup-date", cfg.Services.Account, authRequired, ""},
+		{http.MethodPost, "/api/v1/tasks/daily/:code/claim", cfg.Services.Account, authRequired, ""},
 		{http.MethodPost, "/api/v1/tasks/:code/claim", cfg.Services.Account, authRequired, ""},
 		{http.MethodGet, "/api/v1/exp/history", cfg.Services.Account, authRequired, ""},
 		{http.MethodGet, "/api/v1/transfers", cfg.Services.Account, authRequired, ""},

@@ -1371,6 +1371,44 @@ var taskSeeds = []seedTask{
 		description: "累计发布 10 篇动态",
 		rewardExp:   150, rewardCurrency: 80, target: 10, sort: 106,
 	},
+	// Daily activity milestones (kind "daily"): each tier can be earned once
+	// per day. Posting tiers are cumulative, so publishing 20 posts in a day
+	// unlocks all four post rewards; the same holds for the chat tiers.
+	{
+		code: "daily_posts_1", kind: "daily", name: "每日发布 1 篇动态",
+		description: "今天发布 1 篇动态，即可领取本档奖励（每日一次）",
+		rewardExp:   10, rewardCurrency: 5, target: 1, sort: 200,
+	},
+	{
+		code: "daily_posts_5", kind: "daily", name: "每日发布 5 篇动态",
+		description: "今天发布 5 篇动态，即可领取本档奖励（每日一次）",
+		rewardExp:   40, rewardCurrency: 25, target: 5, sort: 201,
+	},
+	{
+		code: "daily_posts_10", kind: "daily", name: "每日发布 10 篇动态",
+		description: "今天发布 10 篇动态，即可领取本档奖励（每日一次）",
+		rewardExp:   100, rewardCurrency: 60, target: 10, sort: 202,
+	},
+	{
+		code: "daily_posts_20", kind: "daily", name: "每日发布 20 篇动态",
+		description: "今天发布 20 篇动态，即可领取本档奖励（每日一次）",
+		rewardExp:   260, rewardCurrency: 160, target: 20, sort: 203,
+	},
+	{
+		code: "daily_chat_25", kind: "daily", name: "每日聊天 25 条",
+		description: "今天发送 25 条聊天消息，即可领取本档奖励（每日一次）",
+		rewardExp:   30, rewardCurrency: 15, target: 25, sort: 210,
+	},
+	{
+		code: "daily_chat_50", kind: "daily", name: "每日聊天 50 条",
+		description: "今天发送 50 条聊天消息，即可领取本档奖励（每日一次）",
+		rewardExp:   80, rewardCurrency: 45, target: 50, sort: 211,
+	},
+	{
+		code: "daily_chat_100", kind: "daily", name: "每日聊天 100 条",
+		description: "今天发送 100 条聊天消息，即可领取本档奖励（每日一次）",
+		rewardExp:   200, rewardCurrency: 120, target: 100, sort: 212,
+	},
 }
 
 func seedTasks() error {

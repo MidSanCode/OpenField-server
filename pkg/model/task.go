@@ -12,6 +12,11 @@ const (
 	// user's current consecutive check-in streak and the target is the streak
 	// length required to earn the reward.
 	TaskKindStreak TaskKind = "streak"
+	// TaskKindDaily is a per-day activity milestone (e.g. "publish 5 posts
+	// today"). Progress is the user's count of that activity for the current
+	// server day and the target is the milestone; each tier is claimable once
+	// per day, independently of the other tiers.
+	TaskKindDaily TaskKind = "daily"
 )
 
 // Task is a built-in achievable reward definition.

@@ -51,7 +51,7 @@ func (r *TaskRepository) UserRepo() *UserRepository {
 	return r.userRepo
 }
 
-// ListTaskCodes maps a task code to an SQL count used to derive one-time
+// listTaskCounts maps a task code to an SQL count used to derive one-time
 // progress. Keys without an entry always report progress 0 (never eligible).
 var listTaskCounts = map[string]string{
 	"first_post":   "SELECT COUNT(*) FROM posts WHERE user_id = $1",
@@ -61,6 +61,36 @@ var listTaskCounts = map[string]string{
 	"follow_10":    "SELECT COUNT(*) FROM user_follows WHERE follower_id = $1",
 	"first_upload": "SELECT COUNT(*) FROM attachments WHERE user_id = $1",
 	"first_chat":   "SELECT COUNT(*) FROM messages WHERE sender_id = $1",
+}
+
+// dailyTaskCounts maps a daily-milestone task code to the SQL count of that
+// activity for the current day. Both statements take the user id as $1 and the
+// UTC bounds of the local day as $2/$3.
+var dailyTaskCounts = map[string]string{
+	"daily_posts_1":  "SELECT COUNT(*) FROM posts WHERE user_id = $1 AND created_at >= $2 AND created_at < $3",
+	"daily_posts_5":  "SELECT COUNT(*) FROM posts WHERE user_id = $1 AND created_at >= $2 AND created_at < $3",
+	"daily_posts_10": "SELECT COUNT(*) FROM posts WHERE user_id = $1 AND created_at >= $2 AND created_at < $3",
+	"daily_posts_20": "SELECT COUNT(*) FROM posts WHERE user_id = $1 AND created_at >= $2 AND created_at < $3",
+	"daily_chat_25":  "SELECT COUNT(*) FROM messages WHERE sender_id = $1 AND deleted_at IS NULL AND created_at >= $2 AND created_at < $3",
+	"daily_chat_50":  "SELECT COUNT(*) FROM messages WHERE sender_id = $1 AND deleted_at IS NULL AND created_at >= $2 AND created_at < $3",
+	"daily_chat_100": "SELECT COUNT(*) FROM messages WHERE sender_id = $1 AND deleted_at IS NULL AND created_at >= $2 AND created_at < $3",
+}
+
+// dailyProgress counts the user's activity for the local day [loc] containing
+// now, for the daily-milestone task code. Unknown codes report 0.
+func dailyProgress(userID int64, code string, loc *time.Location, now time.Time) (int64, error) {
+	q, ok := dailyTaskCounts[code]
+	if !ok {
+		return 0, nil
+	}
+	day := now.In(loc)
+	from := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, loc)
+	to := from.AddDate(0, 0, 1)
+	var count int64
+	if err := database.DB.QueryRow(q, userID, from, to).Scan(&count); err != nil {
+		return 0, fmt.Errorf("failed to compute daily progress for %s: %w", code, err)
+	}
+	return count, nil
 }
 
 // cycleKeyFor returns the cycle key for a given time in the user's timezone.
@@ -156,6 +186,21 @@ func (r *TaskRepository) computeState(userID int64, user *model.User, t *model.T
 		}
 		state.Completed = done
 		state.Claimable = !done && user.CheckinStreak >= int64(t.Target)
+
+	case model.TaskKindDaily:
+		// Daily activity milestones: progress is today's count of the
+		// activity; each tier is claimable once per day, independently.
+		progress, err := dailyProgress(userID, t.Code, loc, now)
+		if err != nil {
+			return nil, err
+		}
+		state.Progress = progress
+		done, err := hasCompletion(userID, t.ID, today)
+		if err != nil {
+			return nil, err
+		}
+		state.Completed = done
+		state.Claimable = !done && progress >= int64(t.Target)
 
 	default:
 		state.Claimable = false
@@ -544,6 +589,41 @@ func (r *TaskRepository) ClaimOnce(userID int64, code string) (int64, int64, err
 		return 0, 0, ErrAlreadyClaimed
 	}
 	expGranted, err := r.grantTaskReward(userID, t, "")
+	if err != nil {
+		return 0, 0, err
+	}
+	return expGranted, t.RewardCurrency, nil
+}
+
+// ClaimDaily claims a daily activity milestone (e.g. "publish 5 posts today").
+// The reward is granted once per local day per tier: the completion row is
+// keyed by today's date, so the same tier can be earned again tomorrow.
+// Returns ErrNotEligible when today's count is below the target and
+// ErrAlreadyClaimed when this tier was already claimed today.
+func (r *TaskRepository) ClaimDaily(userID int64, code string, loc *time.Location, now time.Time) (int64, int64, error) {
+	t, err := getTaskByCode(code)
+	if err != nil {
+		return 0, 0, err
+	}
+	if model.TaskKind(t.Kind) != model.TaskKindDaily {
+		return 0, 0, ErrNotEligible
+	}
+	progress, err := dailyProgress(userID, t.Code, loc, now)
+	if err != nil {
+		return 0, 0, err
+	}
+	if progress < int64(t.Target) {
+		return 0, 0, ErrNotEligible
+	}
+	cycleKey := cycleKeyFor(now.In(loc))
+	done, err := hasCompletion(userID, t.ID, cycleKey)
+	if err != nil {
+		return 0, 0, err
+	}
+	if done {
+		return 0, 0, ErrAlreadyClaimed
+	}
+	expGranted, err := r.grantTaskReward(userID, t, cycleKey)
 	if err != nil {
 		return 0, 0, err
 	}

@@ -264,6 +264,34 @@ func (h *TaskHandler) ClaimOneTime(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"claimed": true, "exp": expAward, "currency": curAward})
 }
 
+// ClaimDaily claims a daily activity milestone task (posting / chatting tiers).
+// The reward is granted at most once per local day per tier.
+func (h *TaskHandler) ClaimDaily(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	code := c.Param("code")
+	loc := h.gameCfg.Location()
+	expAward, curAward, err := h.taskRepo.ClaimDaily(userID, code, loc, time.Now())
+	if err != nil {
+		switch err {
+		case repository.ErrNotFound:
+			c.JSON(http.StatusNotFound, gin.H{"error": "task not found"})
+		case repository.ErrNotEligible:
+			c.JSON(http.StatusConflict, gin.H{"error": "task requirements not met"})
+		case repository.ErrAlreadyClaimed:
+			c.JSON(http.StatusConflict, gin.H{"error": "task already claimed today"})
+		default:
+			logger.Log.Error("failed to claim daily task", "error", err, "user_id", userID, "code", code)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to claim task"})
+		}
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"claimed": true, "exp": expAward, "currency": curAward})
+}
+
 // ListExpHistory returns the user's experience award history, newest first.
 func (h *TaskHandler) ListExpHistory(c *gin.Context) {
 	userID, ok := middleware.GetUserID(c)

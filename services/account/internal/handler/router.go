@@ -138,6 +138,9 @@ func RegisterRoutes(r *gin.Engine, authHandler *AuthHandler, userHandler *UserHa
 			tasks.POST("/daily-login/claim", taskHandler.ClaimDailyLogin)
 			tasks.POST("/daily-login/makeup", taskHandler.MakeupCheckin)
 			tasks.POST("/daily-login/makeup-date", taskHandler.MakeupByDate)
+			// Daily activity milestones (posts / chat tiers): one claim per
+			// tier per day.
+			tasks.POST("/daily/:code/claim", taskHandler.ClaimDaily)
 			tasks.POST("/:code/claim", taskHandler.ClaimOneTime)
 		}
 
