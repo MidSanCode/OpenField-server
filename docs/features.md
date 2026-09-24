@@ -252,6 +252,12 @@ rather than the global feed. Code: `services/posts/internal/handler/camp.go`
   caller's camps via `?mine=1`, which includes hidden ones);
   `GET /camps/:id` hides invisible camps from non-members. Camp payloads
   carry `my_role` ("owner"/"admin"/"member") for the caller.
+  These three reads are **public routes that still personalize**: the gateway
+  forwards `X-User-ID` for a valid Bearer token, and the handlers must read it
+  through the `requesterID(c)` helper (context first, then the header).
+  Reading `middleware.GetUserID(c)` alone always yields 0 on a public route,
+  which would answer 401 to `?mine=1`, hide a hidden camp from its own owner,
+  and 403 the owner out of their own camp feed.
   **The creator always counts as a member/owner**, even when their
   `camp_members` row is missing (e.g. camps predating role semantics): both
   `GET /camps` and `GET /camps?mine=1` fall back to `creator_id`, so an owner

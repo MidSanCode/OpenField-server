@@ -52,7 +52,10 @@ func (h *CampHandler) signCampPostAttachments(c *gin.Context, posts []model.Post
 
 // List returns visible camps; ?mine=1 lists the caller's camps instead.
 func (h *CampHandler) List(c *gin.Context) {
-	userID, _ := middleware.GetUserID(c)
+	// Public route: the gateway still forwards X-User-ID for a valid token, so
+	// read it directly — middleware.GetUserID alone would always be 0 here and
+	// ?mine=1 would answer 401 even to a signed-in caller.
+	userID := requesterID(c)
 	if c.Query("mine") == "1" {
 		if userID == 0 {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
@@ -83,7 +86,7 @@ func (h *CampHandler) Get(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid camp ID"})
 		return
 	}
-	userID, _ := middleware.GetUserID(c)
+	userID := requesterID(c)
 	camp, err := h.repo.GetByID(id, userID)
 	if err != nil {
 		logger.Log.Error("failed to get camp", "error", err)
@@ -382,7 +385,7 @@ func (h *CampHandler) Leave(c *gin.Context) {
 // camps answer 404 to outsiders (they reveal nothing, not even membership
 // gating), visible camps answer 403 with a join hint.
 func (h *CampHandler) ListPosts(c *gin.Context) {
-	userID, _ := middleware.GetUserID(c)
+	userID := requesterID(c)
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid camp ID"})

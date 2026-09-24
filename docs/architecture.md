@@ -41,7 +41,10 @@ the gateway (`:8080`).
    `Authorization: Bearer <jwt>` header when authenticated.
 2. The gateway matches the method + path against its route table.
 3. Depending on the route's auth level, the gateway:
-   - `authPublic` — forwards without validating the token.
+   - `authPublic` — forwards without *requiring* a token, but still resolves a
+     valid Bearer token when one is present and injects `X-User-ID`, so public
+     reads can be personalized (e.g. `is_following`, `my_role`). An absent or
+     invalid token simply leaves the request anonymous.
    - `authRequired` — validates the JWT and injects `X-User-ID`.
    - `authPermission` — validates the JWT and checks the route's permission key.
 4. If the permission check fails, the gateway returns `403` and never contacts
@@ -53,6 +56,15 @@ Internal services run `GatewayAuthMiddleware()`, which trusts the `X-User-ID`
 header set by the gateway. Internal services are **not exposed directly**: they
 bind to `127.0.0.1` only, so the sole externally reachable entry point is the
 gateway on `:8080`.
+
+> **Public routes that personalize.** `middleware.GetUserID(c)` only reads the
+> gin context, which `GatewayAuthMiddleware` populates — so on a public route
+> it always returns `0`/false. A public handler that needs the caller's
+> identity must use the package's `requesterID(c)` helper (context first, then
+> the raw `X-User-ID` header). Getting this wrong is silent: authenticated
+> users are treated as anonymous, which surfaces as spurious `401`s
+> (`GET /camps?mine=1`), missing `my_role`/`is_member` fields, or an owner
+> being locked out of their own resource by a `403`.
 
 ## Route Matching Rules
 
