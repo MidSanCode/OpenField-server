@@ -237,6 +237,10 @@ rather than the global feed. Code: `services/posts/internal/handler/camp.go`
   caller's camps via `?mine=1`, which includes hidden ones);
   `GET /camps/:id` hides invisible camps from non-members. Camp payloads
   carry `my_role` ("owner"/"admin"/"member") for the caller.
+  **The creator always counts as a member/owner**, even when their
+  `camp_members` row is missing (e.g. camps predating role semantics): both
+  `GET /camps` and `GET /camps?mine=1` fall back to `creator_id`, so an owner
+  is never reported as a non-member and never sees a join action.
 - **Membership**: `POST /camps/:id/join` (requires `direct_join`),
   `DELETE /camps/:id/members/me` (the creator cannot leave).
 - **Roles**: `owner` (creator) > `admin` > `member`, stored in

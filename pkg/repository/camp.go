@@ -143,8 +143,10 @@ func (r *CampRepository) List(userID int64, query string, limit int) ([]model.Ca
 	}
 	if userID > 0 && len(out) > 0 {
 		ids := make([]int64, 0, len(out))
+		creatorMap := make(map[int64]int64, len(out))
 		for _, c := range out {
 			ids = append(ids, c.ID)
+			creatorMap[c.ID] = c.CreatorID
 		}
 		mine, err := memberCampIDs(userID, ids)
 		if err == nil {
@@ -153,8 +155,13 @@ func (r *CampRepository) List(userID int64, query string, limit int) ([]model.Ca
 				set[id] = true
 			}
 			for i := range out {
-				out[i].IsMember = set[out[i].ID]
-				if out[i].IsMember {
+				// The creator is always a member (owner) even when their row
+				// is missing from camp_members (e.g. very old camps created
+				// before role semantics). Treat creator_id as a membership
+				// fallback so the owner sees "进入" instead of "加入".
+				isMember := set[out[i].ID] || creatorMap[out[i].ID] == userID
+				out[i].IsMember = isMember
+				if isMember {
 					role, err := r.GetRole(out[i].ID, userID)
 					if err == nil {
 						out[i].MyRole = role
@@ -166,13 +173,17 @@ func (r *CampRepository) List(userID int64, query string, limit int) ([]model.Ca
 	return out, nil
 }
 
-// ListMine returns camps the user belongs to (including hidden ones).
+// ListMine returns camps the user belongs to (including hidden ones). The
+// creator is included even when their roster row is missing, matching
+// GetByID's creator-is-owner rule.
 func (r *CampRepository) ListMine(userID int64, limit int) ([]model.Camp, error) {
 	if limit < 1 || limit > 100 {
 		limit = 50
 	}
 	rows, err := database.DB.Query(
-		"SELECT "+campCols+" FROM camps c JOIN camp_members cm ON cm.camp_id = c.id AND cm.user_id = $1 ORDER BY c.updated_at DESC LIMIT "+fmt.Sprintf("%d", limit),
+		"SELECT "+campCols+" FROM camps c WHERE c.creator_id = $1 OR EXISTS ("+
+			"SELECT 1 FROM camp_members cm WHERE cm.camp_id = c.id AND cm.user_id = $1"+
+			") ORDER BY c.updated_at DESC LIMIT "+fmt.Sprintf("%d", limit),
 		userID,
 	)
 	if err != nil {
