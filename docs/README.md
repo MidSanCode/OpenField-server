@@ -4,6 +4,8 @@
 
 - [Features](features.md) — feature guide for the whole server (auth,
   membership, wallet, tasks, chat, storage, admin).
+- [Daily tasks](daily-tasks.md) — per-day activity milestones (posts 1/5/10/20,
+  chat 25/50/100) and how their progress and cycle keys work.
 - [Architecture](architecture.md) — service layout, ports, routes and the
   permission model.
 - [API](API.md) — full REST API reference.

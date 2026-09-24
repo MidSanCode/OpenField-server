@@ -16,7 +16,7 @@ for the service layout and [wallet.md](wallet.md) for the wallet in detail.
 | Permissions (groups)       | gateway auth + `pkg/repository/permission.go`                | route-level checks |
 | Wallet & transfers          | `services/account/internal/handler/wallet.go`, `transfer.go` | cents storage |
 | Payment PIN                | `services/account/internal/handler/pin.go`                   | authorizes payments |
-| Tasks & experience         | `services/account/internal/handler/task.go`                  | daily login, one-time codes |
+| Tasks & experience         | `services/account/internal/handler/task.go`                  | daily login, daily activity milestones, one-time codes |
 | Exp history                | `services/account/internal/handler/task.go`                  | level derivation |
 | Membership                 | `services/account/internal/handler/membership.go`            | tiers, multiplier, storage, quotas |
 | Name styling               | `services/account/internal/handler/user.go`                  | color / gradient / animation |
@@ -128,6 +128,19 @@ Experience fuels the account level; every exp grant is routed through
   `POST /tasks/daily-login/makeup-date` (per date).
 - **One-time tasks**: `POST /tasks/:code/claim` completes a task by its
   achievement code (e.g. profile completion) for a one-time reward.
+- **Daily activity milestones** (kind `daily`):
+  `POST /tasks/daily/:code/claim` grants a per-day reward for reaching an
+  activity count **today**. Progress is the user's count for the current
+  server day (timezone from the game config) and each tier is claimable once
+  per day, keyed in `task_completions.cycle_key` by the date. Tiers are
+  cumulative, so reaching the highest tier of a group unlocks every lower one
+  the same day.
+  - Posts: `daily_posts_1` / `daily_posts_5` / `daily_posts_10` /
+    `daily_posts_20` (1, 5, 10, 20 posts published today).
+  - Chat: `daily_chat_25` / `daily_chat_50` / `daily_chat_100` (25, 50, 100
+    chat messages sent today; soft-deleted messages do not count).
+  - The catalog is seeded by `seedTasks()` (upsert by code), so existing
+    installs gain the tiers on the next boot without a schema migration.
 - **Exp history**: `GET /exp/history` returns a paginated ledger of every exp
   grant with the level applied, which the client uses to render the timeline.
 - **Levels**: derived from cumulative total exp with geometric cost growth
@@ -232,7 +245,9 @@ rather than the global feed. Code: `services/posts/internal/handler/camp.go`
   `is_visible` (hidden camps are only listed to members), `direct_join`
   (when false, self-joining is rejected) and the permission switches
   `member_post` (default true) / `member_pin` (default false). The creator
-  is added as owner and counts against their creation quota.
+  is added as owner and counts against their creation quota. `camps.name` is
+  UNIQUE: a duplicate answers **409** (`camp name already taken`), never 500.
+  The same holds for `PUT /camps/:id` renames.
 - **Browse**: `GET /camps` lists visible camps (search via `?q=`, the
   caller's camps via `?mine=1`, which includes hidden ones);
   `GET /camps/:id` hides invisible camps from non-members. Camp payloads
@@ -256,15 +271,26 @@ rather than the global feed. Code: `services/posts/internal/handler/camp.go`
   name/description/visibility/direct-join; `member_post`/`member_pin` are
   owner-only.
 - **Camp feed**: `GET /camps/:id/posts` is **members-only** (hidden camps
-  answer 404 to outsiders, visible camps 403 with a join hint). Posting
-  into a camp happens through the normal `POST /posts` with `camp_id` set;
-  the author must be a member and, when `member_post` is off, hold admin
+  answer 404 to outsiders, visible camps 403 with a join hint). The camp's
+  **owner and admins** receive every post in their camp regardless of each
+  post's own `visibility` (they moderate it), so the creator always sees the
+  camp's content; plain members only see posts whose visibility admits them.
+  Posting into a camp happens through the normal `POST /posts` with `camp_id`
+  set; the author must be a member and, when `member_post` is off, hold admin
   or owner. Camp posts are excluded from the global feed and masked from
   profiles/favorites/quotes of non-members. Camp-pinned posts
   (`camp_pinned`, v26) float to the top of their camp feed only; pinning
   via `PUT /posts/:id/pin` or `PUT /camps/:id/posts/:post_id/pin` —
   admins/owner may pin any camp post, plain members only their own when
   `member_pin` is on.
+- **Choosing a camp when posting**: `POST /posts` accepts an optional
+  `camp_id` (0/omitted = the global feed), so the composer can publish either
+  to the square or into any camp the author joined. Editing a post never moves
+  it between camps.
+- **Edit / delete**: `PUT /camps/:id` edits the basics (admins) plus the
+  permission switches (owner); `DELETE /camps/:id` removes a camp and is
+  **creator-only**. Clients surface both from the camp directory row menu and
+  from the camp feed's settings sheet.
 
 ## App Announcements
 
