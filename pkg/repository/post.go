@@ -960,8 +960,11 @@ func (r *PostRepository) ListByCamp(campID int64, viewerID int64, beforeID int64
 	}
 	visibility := visibilityCondition(viewerID, "p.", "$2")
 	if ownerView {
-		// The camp's owner/admin sees the whole camp feed.
-		visibility = "TRUE"
+		// The camp's owner/admin sees the whole camp feed. $2 must still be
+		// referenced or PostgreSQL cannot infer the type of the bound viewer
+		// id ("could not determine data type of parameter $2"); this no-op
+		// predicate keeps the placeholder in the statement.
+		visibility = "($2::bigint IS NOT NULL)"
 	}
 	rows, err := database.DB.Query(
 		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, COALESCE(p.quoted_post_id, 0), p.pinned, COALESCE(p.camp_id, 0), p.camp_pinned, u.username, u.nickname, u.avatar_url, u.is_verified`+authorMemberCols+`,
