@@ -7,6 +7,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/lib/pq"
 	"github.com/openfield/server/pkg/database"
 )
 
@@ -30,9 +31,22 @@ var (
 	ErrInvalidAmount = errors.New("invalid amount")
 )
 
-// isUniqueViolation detects PostgreSQL unique constraint violations.
+// isUniqueViolation detects PostgreSQL unique constraint violations. lib/pq
+// exposes the SQLSTATE in *pq.Error.Code — its Error() string carries only the
+// message (e.g. `pq: duplicate key value violates unique constraint "..."`),
+// so matching "23505" against the text silently misses every violation. Both
+// the typed check and a text fallback are used so wrapped errors are caught.
 func isUniqueViolation(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "23505")
+	if err == nil {
+		return false
+	}
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) {
+		return pqErr.Code == "23505"
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "23505") ||
+		strings.Contains(msg, "duplicate key value violates unique constraint")
 }
 
 // IsUniqueViolation is the exported form of isUniqueViolation, used by

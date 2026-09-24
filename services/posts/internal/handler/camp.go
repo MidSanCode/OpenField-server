@@ -404,7 +404,11 @@ func (h *CampHandler) ListPosts(c *gin.Context) {
 	}
 	beforeID, _ := strconv.ParseInt(c.DefaultQuery("before", "0"), 10, 64)
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
-	posts, err := h.postRepo.ListByCamp(id, userID, beforeID, limit)
+	// Owners and admins moderate the camp, so they see its posts regardless
+	// of each post's visibility (notably the camp creator, who may not hold a
+	// roster row on very old camps).
+	ownerView := model.CampRoleRank(camp.MyRole) >= model.CampRoleRank(model.CampRoleAdmin)
+	posts, err := h.postRepo.ListByCamp(id, userID, beforeID, limit, ownerView)
 	if err != nil {
 		logger.Log.Error("failed to list camp posts", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list camp posts"})

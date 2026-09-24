@@ -951,9 +951,17 @@ func (r *PostRepository) replyCount(postID int64) (int64, error) {
 
 // ListByCamp retrieves a camp's posts, newest first, with the same
 // visibility/attachment/population treatment as the global feed.
-func (r *PostRepository) ListByCamp(campID int64, viewerID int64, beforeID int64, limit int) ([]model.Post, error) {
+// ListByCamp returns one page of a camp's posts. Camp owners and admins see
+// every post inside their camp regardless of the author's visibility (they
+// moderate it); plain members only see posts whose visibility admits them.
+func (r *PostRepository) ListByCamp(campID int64, viewerID int64, beforeID int64, limit int, ownerView bool) ([]model.Post, error) {
 	if limit < 1 {
 		limit = 20
+	}
+	visibility := visibilityCondition(viewerID, "p.", "$2")
+	if ownerView {
+		// The camp's owner/admin sees the whole camp feed.
+		visibility = "TRUE"
 	}
 	rows, err := database.DB.Query(
 		`SELECT p.id, p.user_id, p.content, p.visibility, p.created_at, p.updated_at, COALESCE(p.quoted_post_id, 0), p.pinned, COALESCE(p.camp_id, 0), p.camp_pinned, u.username, u.nickname, u.avatar_url, u.is_verified`+authorMemberCols+`,
@@ -962,7 +970,7 @@ func (r *PostRepository) ListByCamp(campID int64, viewerID int64, beforeID int64
 		        `+tipTotalExpr+`
 		 FROM posts p
 		 JOIN users u ON p.user_id = u.id
-		 WHERE p.camp_id = $1 AND `+visibilityCondition(viewerID, "p.", "$2")+`
+		 WHERE p.camp_id = $1 AND `+visibility+`
 		 ORDER BY p.camp_pinned DESC, p.created_at DESC
 		 LIMIT $3`,
 		campID, viewerID, limit,
