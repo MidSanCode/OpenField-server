@@ -60,6 +60,17 @@ oidc:
   # tokens up from the query string); desktop/mobile builds use a custom scheme
   # deep link instead (e.g. openfield://oauth/callback).
   app_redirect_url: "https://openfield.eu.cc/"
+  # Where the browser lands when the sign-in started from a browser client
+  # (`GET /auth/oidc/login?flow=web`). Must be the web client's callback route,
+  # e.g. "https://horizon.example.com/oauth/callback" in production or
+  # "http://localhost:5173/oauth/callback" for the Vite dev server. Tokens are
+  # appended as a query string, so the route must be same-origin with the web
+  # client and served over HTTPS in production. Leave empty to fall back to
+  # app_redirect_url (and then to the JSON token response).
+  #
+  # This is read by the instance the OIDC provider redirects to — set it on
+  # every gateway deployment, not only on the one the client talks to.
+  web_redirect_url: ""
   scopes:
     - "openid"
     - "profile"

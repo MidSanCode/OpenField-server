@@ -62,6 +62,16 @@ Response:
 }
 ```
 
+Pass `?flow=web` when the sign-in starts from a browser client, so step 4
+bounces back to the web app instead of firing the `openfield://` deep link
+(browsers refuse to open custom schemes silently):
+
+```
+GET /auth/oidc/login?flow=web
+```
+
+The response is unchanged; `flow` is echoed back in the payload.
+
 2. Redirect user to the auth_url.
 
 3. After authorization, the provider redirects to the callback URL with an authorization code.
@@ -96,6 +106,45 @@ Otherwise (e.g. API-only or web clients) it returns JSON:
   }
 }
 ```
+
+#### Browser (web) callbacks
+
+A login started with `flow=web` never reaches the JSON branch: when
+`oidc.web_redirect_url` is set, the server redirects the browser to that URL
+with the same token payload in the query string, so the web client can pick it
+up on its own callback route and store the tokens itself.
+
+```
+302 Found
+Location: https://horizon.example.com/oauth/callback
+  ?access_token=eyJ...
+  &refresh_token=...
+  &expires_in=86400
+  &refresh_expires_in=2592000
+  &username=openfield
+  &email=user@example.com
+  &avatar_url=https%3A%2F%2F...
+  &needs_registration=false
+```
+
+If the identity is bound to several accounts the callback redirects with
+`?pick=<ticket>` instead (see *Multi-Account Login* below), and the client
+resolves it through `GET /auth/oidc/pick`.
+
+Three things worth designing for:
+
+- The tokens arrive in the query string, so the client should strip them from
+  the URL (and from browser history) as soon as it has stored them, and the
+  route must be served over HTTPS in production.
+- `web_redirect_url` is read by the gateway instance the OIDC provider
+  redirects to. Set it on that deployment, not only on the one the web client
+  talks to. When it is empty, `flow=web` falls back to `app_redirect_url` and
+  then to the JSON response.
+- The web app itself needs two things outside this endpoint: the host serving
+  it must rewrite unknown paths to `index.html` (history-mode SPA) so the
+  callback route resolves, and — when the app and the gateway are on different
+  hosts — its origin must be allowed by `server.allowed_origins` for the
+  `GET /auth/providers` / `GET /auth/oidc/login` calls that start the flow.
 
 ### Multi-Account Login (OAuth identity → several OpenField accounts)
 
