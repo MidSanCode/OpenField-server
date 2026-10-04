@@ -22,16 +22,25 @@ func RegisterRoutes(r *gin.Engine, h *PluginHandler) {
 		api.GET("/plugins", h.List)
 		api.GET("/plugins/:id", h.Get)
 
-		// Download requires a valid token (counted per install).
-		api.GET("/plugins/:id/download", h.Download)
-
 		// Admin management.
-		admin := api.Group("/plugins/admin", manage)
+		//
+		// GatewayAuthMiddleware must come first: Require reads the user id from
+		// the request context, and that value is written only by this
+		// middleware. With it missing, every admin route answered 401 for every
+		// caller, legitimate administrators included, so the defence in depth
+		// documented for these routes was in fact a functional outage.
+		admin := api.Group("/plugins/admin",
+			middleware.GatewayAuthMiddleware(),
+			manage,
+		)
 		{
 			admin.POST("/upload", h.Upload)
 			admin.PUT("/:id/publish", h.Publish)
 			admin.PUT("/:id/unpublish", h.Unpublish)
 			admin.DELETE("/:id", h.Delete)
 		}
+
+		// Download requires a valid token (counted per install).
+		api.GET("/plugins/:id/download", middleware.GatewayAuthMiddleware(), h.Download)
 	}
 }
