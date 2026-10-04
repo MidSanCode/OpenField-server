@@ -575,10 +575,27 @@ func parseByteRange(header string, size int64) (int64, int64, bool) {
 	return start, end, true
 }
 
+// isChunkObjectKey reports whether an object key belongs to an in-progress
+// upload. Chunk keys are "<userPrefix>/chunks/<uploadID>/<index>" (see
+// storage.chunkObjectKey), so the marker can appear anywhere in the path — a
+// leading-prefix test never matches and would expose partial uploads.
+func isChunkObjectKey(key string) bool {
+	for _, seg := range strings.Split(key, "/") {
+		if seg == "chunks" {
+			return true
+		}
+	}
+	return false
+}
+
 // ServeFile streams an object from the bucket through the API (internal proxy
-// mode). Path form: GET /api/v1/files/<physical-bucket>/<object-key>. Public:
-// read access matches what direct bucket URLs offered before; chunk uploads
-// are never exposed. Supports single Range requests so media players can seek.
+// mode). Path form: GET /api/v1/files/<physical-bucket>/<object-key>.
+//
+// Access is decided by the attachment row that owns the object: public
+// attachments are readable by anyone, private ones only by their owner. The
+// object key therefore is not a bearer credential — losing membership of a
+// group or being unfriended revokes access, and a leaked URL stops working.
+// Chunk uploads are never exposed.
 func (h *AttachmentHandler) ServeFile(c *gin.Context) {
 	if !h.storageAvailable(c) {
 		return
@@ -595,12 +612,31 @@ func (h *AttachmentHandler) ServeFile(c *gin.Context) {
 		return
 	}
 	// In-progress upload chunks are internal state, not user-facing files.
-	if strings.HasPrefix(key, "chunks/") {
+	// Chunk keys are "<user path>/chunks/...", so match on any path segment
+	// rather than only a leading prefix.
+	if isChunkObjectKey(key) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 		return
 	}
 	store := h.store.ForPhysical(bucketName)
 	if store == nil || !store.Enabled() {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+
+	// Authorize against the owning attachment row. An object with no
+	// attachment row is not something this endpoint should serve: the row is
+	// what carries visibility and ownership.
+	requester, _ := middleware.GetUserID(c) // 0 for anonymous reads
+	att, err := h.attRepo.GetByObjectKey(key)
+	if err != nil {
+		logger.Log.Error("failed to look up attachment for proxied object", "error", err, "key", key)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read file"})
+		return
+	}
+	if att == nil || att.Visibility != "public" && att.UserID != requester {
+		// 404 for private objects, so foreign files are indistinguishable
+		// from nonexistent ones (matching the /attachments/:id handler).
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 		return
 	}
@@ -621,8 +657,14 @@ func (h *AttachmentHandler) ServeFile(c *gin.Context) {
 		return
 	}
 
-	// Object keys embed a fresh UUID, so successful responses are immutable.
-	c.Header("Cache-Control", "public, max-age=31536000, immutable")
+	// Public objects are immutable (keys embed a UUID) and may be cached
+	// widely. Private ones must not be, or an intermediary could keep serving
+	// them after access is revoked.
+	if att.Visibility == "public" {
+		c.Header("Cache-Control", "public, max-age=31536000, immutable")
+	} else {
+		c.Header("Cache-Control", "private, no-store")
+	}
 	c.Header("Accept-Ranges", "bytes")
 	c.Header("X-Content-Type-Options", "nosniff")
 	contentType := stat.ContentType

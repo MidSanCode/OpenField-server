@@ -428,12 +428,24 @@ func main() {
 		path := c.Request.URL.Path
 		method := c.Request.Method
 
-		// Internal file proxy (public read, matching direct bucket URL
-		// semantics): object keys contain multiple path segments which the
-		// per-segment route matcher cannot express, so this prefix is
-		// special-cased before normal routing.
+		// Internal file proxy: object keys contain multiple path segments
+		// which the per-segment route matcher cannot express, so this prefix
+		// is special-cased before normal routing. The storage service decides
+		// visibility (public objects are open; private ones are owner-only),
+		// so forward an optional identity rather than stripping it — without
+		// it every request would look anonymous and private files would be
+		// unreachable even for their owner.
 		if method == http.MethodGet && strings.HasPrefix(path, "/api/v1/files/") {
-			c.Request.Header.Del(middleware.UserIDHeader)
+			if header := c.GetHeader("Authorization"); strings.HasPrefix(header, "Bearer ") {
+				token := strings.TrimPrefix(header, "Bearer ")
+				if id, _, err := middleware.ParseTokenWithClaims(token, cfg.JWT.SecretKey); err == nil {
+					c.Request.Header.Set(middleware.UserIDHeader, itoa(id))
+				} else {
+					c.Request.Header.Del(middleware.UserIDHeader)
+				}
+			} else {
+				c.Request.Header.Del(middleware.UserIDHeader)
+			}
 			proxies[cfg.Services.Storage].proxy.ServeHTTP(c.Writer, c.Request)
 			return
 		}
