@@ -957,6 +957,9 @@ func RunMigrations() error {
 	if err := seedDefaultGroup(); err != nil {
 		return err
 	}
+	if err := ensureAdminGroup(); err != nil {
+		return err
+	}
 	if err := seedTasks(); err != nil {
 		return err
 	}
@@ -1254,14 +1257,28 @@ func seedDefaultGroup() error {
 		}
 	}
 
-	// Backfill: keep the default group granted every permission (including new
-	// ones added after the group already existed).
-	for _, key := range permission.All() {
+	// Grant the default group the ordinary features only. Administrative keys
+	// are deliberately excluded: granting them here would make every
+	// registered user an administrator (see ensureAdminGroup for where they
+	// live instead).
+	for _, key := range permission.DefaultGroupPermissions() {
 		if _, err := DB.Exec(
 			`INSERT INTO group_permissions (group_id, permission_key) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
 			groupID, key,
 		); err != nil {
 			return fmt.Errorf("failed to seed group permission %s: %w", key, err)
+		}
+	}
+
+	// Revoke administrative keys that earlier versions mis-granted to the
+	// default group, so an upgrade repairs existing installs instead of
+	// leaving them wide open.
+	for _, key := range permission.AdminPermissions() {
+		if _, err := DB.Exec(
+			`DELETE FROM group_permissions WHERE group_id = $1 AND permission_key = $2`,
+			groupID, key,
+		); err != nil {
+			return fmt.Errorf("failed to revoke admin permission %s from default group: %w", key, err)
 		}
 	}
 
@@ -1296,12 +1313,50 @@ func createDefaultGroup() (int64, error) {
 	var groupID int64
 	err := DB.QueryRow(
 		`INSERT INTO groups (name, description, is_default) VALUES ($1, $2, TRUE) RETURNING id`,
-		permission.DefaultGroupName, "内置默认用户组，默认拥有全部权限",
+		permission.DefaultGroupName, "内置默认用户组，拥有普通功能权限",
 	).Scan(&groupID)
 	if err != nil {
 		return 0, fmt.Errorf("failed to seed default group: %w", err)
 	}
 	return groupID, nil
+}
+
+// ensureAdminGroup creates the built-in administrators group (if absent) and
+// grants it the administrative permission keys. It deliberately does NOT add
+// any user to the group: operators must opt accounts in explicitly, so an
+// upgrade never silently promotes existing accounts.
+func ensureAdminGroup() error {
+	adminKeys := permission.AdminPermissions()
+	if len(adminKeys) == 0 {
+		return nil
+	}
+
+	var groupID int64
+	err := DB.QueryRow(
+		`SELECT id FROM groups WHERE name = $1 AND is_default = FALSE LIMIT 1`,
+		permission.AdminGroupName,
+	).Scan(&groupID)
+	if err != nil {
+		if err != sql.ErrNoRows {
+			return fmt.Errorf("failed to look up admin group: %w", err)
+		}
+		if err := DB.QueryRow(
+			`INSERT INTO groups (name, description, is_default) VALUES ($1, $2, FALSE) RETURNING id`,
+			permission.AdminGroupName, "内置管理员用户组，仅授予管理类权限",
+		).Scan(&groupID); err != nil {
+			return fmt.Errorf("failed to create admin group: %w", err)
+		}
+	}
+
+	for _, key := range adminKeys {
+		if _, err := DB.Exec(
+			`INSERT INTO group_permissions (group_id, permission_key) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+			groupID, key,
+		); err != nil {
+			return fmt.Errorf("failed to grant admin permission %s: %w", key, err)
+		}
+	}
+	return nil
 }
 
 // seedTask is one built-in task definition written into the tasks table.
