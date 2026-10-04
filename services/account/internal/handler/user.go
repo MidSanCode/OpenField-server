@@ -12,12 +12,36 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/openfield/server/pkg/config"
+	"github.com/openfield/server/pkg/imaging"
 	"github.com/openfield/server/pkg/logger"
 	"github.com/openfield/server/pkg/middleware"
 	"github.com/openfield/server/pkg/model"
 	"github.com/openfield/server/pkg/repository"
 	"github.com/openfield/server/pkg/storage"
 )
+
+// avatarMimeAllowed restricts profile images to inert raster formats. An
+// allowlist rather than storage.MimeAllowed's blocklist, because anything
+// outside these types is never a valid avatar.
+func avatarMimeAllowed(contentType string) bool {
+	switch storage.NormalizeMimeType(contentType) {
+	case "image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp":
+		return true
+	}
+	return false
+}
+
+// bucketAllowed reports whether the user's membership permits this bucket.
+// Mirrors the storage service's rule so the two upload paths agree.
+func bucketAllowed(b config.StorageBucketConfig, user *model.User, now time.Time) bool {
+	if b.MinMemberLevel <= 0 {
+		return true
+	}
+	if user == nil {
+		return false
+	}
+	return model.MembershipActive(user.MemberLevel, user.MemberExpiresAt, now) && user.MemberLevel >= b.MinMemberLevel
+}
 
 // sha256Hex returns the hex-encoded SHA-256 of the given bytes.
 func sha256Hex(data []byte) string {
@@ -427,6 +451,15 @@ func (h *UserHandler) uploadImage(c *gin.Context, kind string) {
 
 	if user != nil {
 		now := time.Now()
+		// The bucket the user is pointed at may require a membership tier; the
+		// attachment and chunked paths both enforce this, so without it an
+		// expired member could keep writing into a higher-tier bucket.
+		if bucket, ok := h.cfg.BucketByName(user.StorageBucket); ok {
+			if !bucketAllowed(bucket, user, now) {
+				c.JSON(http.StatusForbidden, gin.H{"error": "your membership level does not allow this storage bucket"})
+				return
+			}
+		}
 		effectiveQuota := user.StorageQuota
 		if bucket, ok := h.cfg.BucketByName(user.StorageBucket); ok && bucket.IsDefault {
 			effectiveQuota += model.MemberStorageBonusAt(user.MemberLevel, user.MemberExpiresAt, now)
@@ -445,9 +478,21 @@ func (h *UserHandler) uploadImage(c *gin.Context, kind string) {
 		}
 	}
 
-	contentType := header.Header.Get("Content-Type")
+	// Accept only genuine raster image types. The Content-Type arrives from the
+	// client and is what the object store records and later serves, so trusting
+	// it let an attacker store text/html or image/svg+xml under an
+	// attacker-chosen extension: with the documented default deployment (bucket
+	// allows anonymous reads, client talks to the bucket directly) that renders
+	// as stored XSS on the bucket origin. Avatars and banners are images, so an
+	// allowlist is both stricter and more accurate than the blocklist the
+	// attachment paths use.
+	contentType := storage.NormalizeMimeType(header.Header.Get("Content-Type"))
 	if contentType == "" {
 		contentType = "image/jpeg"
+	}
+	if !avatarMimeAllowed(contentType) {
+		c.JSON(http.StatusUnsupportedMediaType, gin.H{"error": "avatar and banner must be a PNG, JPEG, GIF or WebP image"})
+		return
 	}
 
 	data, err := io.ReadAll(file)
@@ -455,6 +500,21 @@ func (h *UserHandler) uploadImage(c *gin.Context, kind string) {
 		logger.Log.Error("failed to read image", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upload image"})
 		return
+	}
+
+	// Confirm the bytes really are the claimed format: the header is advisory,
+	// and a mismatch means the stored type would not match the stored content.
+	if detected := http.DetectContentType(data); !avatarMimeAllowed(storage.NormalizeMimeType(detected)) {
+		c.JSON(http.StatusUnsupportedMediaType, gin.H{"error": "file does not look like an image"})
+		return
+	}
+
+	// Strip GPS and other location EXIF before the bytes are stored and served
+	// publicly. Fail-open, matching the attachment paths: if sanitization
+	// cannot run, the upload still succeeds.
+	if clean := imaging.StripImageLocation(data, contentType); !bytes.Equal(clean, data) {
+		data = clean
+		logger.Log.Info("stripped location metadata from profile image", "user_id", userID, "kind", kind)
 	}
 
 	store := h.store.For(user.StorageBucket)
