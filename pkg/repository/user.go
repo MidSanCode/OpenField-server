@@ -38,8 +38,30 @@ func scanUser(row interface{ Scan(...any) error }) (*model.User, error) {
 }
 
 // GetByID retrieves a user by ID.
+//
+// This deliberately does NOT filter deleted_at: 31 internal callers rely on
+// reading a soft-deleted account to finish cleanup, resolve an existing
+// session, or check a ban. Request handlers that turn the result into a
+// response must use GetActiveByID (or PublicView) instead, so a deleted
+// account is not disclosed.
 func (r *UserRepository) GetByID(id int64) (*model.User, error) {
 	user, err := scanUser(database.DB.QueryRow("SELECT "+userColumns+" FROM users WHERE id = $1", id))
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return user, nil
+}
+
+// GetActiveByID retrieves a user by ID, returning nil when the account has been
+// soft-deleted (or does not exist). Use this wherever the result is exposed to
+// another user.
+func (r *UserRepository) GetActiveByID(id int64) (*model.User, error) {
+	user, err := scanUser(database.DB.QueryRow(
+		"SELECT "+userColumns+" FROM users WHERE id = $1 AND deleted_at IS NULL", id,
+	))
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}

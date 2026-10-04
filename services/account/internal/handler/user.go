@@ -602,7 +602,9 @@ func (h *UserHandler) FollowUser(c *gin.Context) {
 		return
 	}
 
-	target, err := h.userRepo.GetByID(followeeID)
+	// Only an active account may be followed; a soft-deleted user must not be
+	// reachable through this endpoint.
+	target, err := h.userRepo.GetActiveByID(followeeID)
 	if err != nil {
 		logger.Log.Error("failed to get user", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to follow user"})
@@ -730,7 +732,9 @@ func (h *UserHandler) ListFriends(c *gin.Context) {
 // target that hides its lists is only visible to the target themself; everyone
 // else receives 403. The response is written on failure.
 func (h *UserHandler) followListVisible(c *gin.Context, userID int64) bool {
-	target, err := h.userRepo.GetByID(userID)
+	// Only active accounts are visible: a soft-deleted user's follow graph
+	// should not remain enumerable.
+	target, err := h.userRepo.GetActiveByID(userID)
 	if err != nil {
 		logger.Log.Error("failed to get user", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get user"})
