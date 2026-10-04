@@ -753,13 +753,27 @@ func (h *PostHandler) FavoriteReply(c *gin.Context) {
 		return
 	}
 
+	// The reply's own post decides who may see it. Without this check any
+	// logged-in user could enumerate reply ids and read the body of replies on
+	// private or friends-only posts, and of replies the author had deleted.
+	post, err := h.postRepo.GetByID(postID)
+	if err != nil {
+		logger.Log.Error("failed to get post", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to favorite reply"})
+		return
+	}
+	if post == nil || !canViewPost(post, userID) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "reply not found"})
+		return
+	}
+
 	reply, err := h.replyRepo.GetByID(replyID)
 	if err != nil {
 		logger.Log.Error("failed to get reply", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to favorite reply"})
 		return
 	}
-	if reply == nil || reply.PostID != postID {
+	if reply == nil || reply.PostID != postID || reply.DeletedAt != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "reply not found"})
 		return
 	}
@@ -798,13 +812,24 @@ func (h *PostHandler) UnfavoriteReply(c *gin.Context) {
 		return
 	}
 
+	post, err := h.postRepo.GetByID(postID)
+	if err != nil {
+		logger.Log.Error("failed to get post", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to unfavorite reply"})
+		return
+	}
+	if post == nil || !canViewPost(post, userID) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "reply not found"})
+		return
+	}
+
 	reply, err := h.replyRepo.GetByID(replyID)
 	if err != nil {
 		logger.Log.Error("failed to get reply", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to unfavorite reply"})
 		return
 	}
-	if reply == nil || reply.PostID != postID {
+	if reply == nil || reply.PostID != postID || reply.DeletedAt != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "reply not found"})
 		return
 	}
