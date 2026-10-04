@@ -105,6 +105,9 @@ func (r *PunishmentRepository) ListByUser(userID int64, limit int) ([]model.Puni
 	if limit < 1 {
 		limit = 50
 	}
+	if limit > MaxPageLimit {
+		limit = MaxPageLimit
+	}
 	rows, err := database.DB.Query(
 		`SELECT id, user_id, operator_id, type, permission_key, reason, expires_at, created_at
 		 FROM user_punishments WHERE user_id = $1 ORDER BY id DESC LIMIT $2`,

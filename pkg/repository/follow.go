@@ -109,6 +109,9 @@ func (r *FollowRepository) ListFollowers(userID int64, page, limit int) ([]model
 	if limit < 1 {
 		limit = 20
 	}
+	if limit > MaxPageLimit {
+		limit = MaxPageLimit
+	}
 	offset := (page - 1) * limit
 
 	rows, err := database.DB.Query(
@@ -134,6 +137,9 @@ func (r *FollowRepository) ListFollowing(userID int64, page, limit int) ([]model
 	}
 	if limit < 1 {
 		limit = 20
+	}
+	if limit > MaxPageLimit {
+		limit = MaxPageLimit
 	}
 	offset := (page - 1) * limit
 
@@ -161,6 +167,9 @@ func (r *FollowRepository) ListFriends(userID int64, page, limit int) ([]model.U
 	}
 	if limit < 1 {
 		limit = 20
+	}
+	if limit > MaxPageLimit {
+		limit = MaxPageLimit
 	}
 	offset := (page - 1) * limit
 

@@ -333,6 +333,9 @@ func (r *UserRepository) Search(query string, limit int) ([]model.User, error) {
 	if limit < 1 {
 		limit = 20
 	}
+	if limit > MaxPageLimit {
+		limit = MaxPageLimit
+	}
 	pattern := "%" + query + "%"
 	rows, err := database.DB.Query(
 		"SELECT "+userColumns+" FROM users WHERE deleted_at IS NULL AND (username ILIKE $1 OR nickname ILIKE $1) ORDER BY username ASC LIMIT $2",

@@ -78,6 +78,9 @@ func ListPostsByTag(tag string, limit int) ([]int64, error) {
 	if limit < 1 {
 		limit = 50
 	}
+	if limit > MaxPageLimit {
+		limit = MaxPageLimit
+	}
 	rows, err := database.DB.Query(
 		"SELECT post_id FROM post_tags WHERE tag = $1 ORDER BY post_id DESC LIMIT $2",
 		tag, limit,

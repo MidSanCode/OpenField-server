@@ -61,6 +61,9 @@ func (r *PostReplyRepository) ListByPost(postID int64, page, limit int, viewerID
 	if limit < 1 {
 		limit = 50
 	}
+	if limit > MaxPageLimit {
+		limit = MaxPageLimit
+	}
 	offset := (page - 1) * limit
 
 	rows, err := database.DB.Query(
@@ -225,6 +228,9 @@ func (r *PostReplyRepository) ListFavoriteReplies(userID int64, page, limit int)
 	}
 	if limit < 1 {
 		limit = 50
+	}
+	if limit > MaxPageLimit {
+		limit = MaxPageLimit
 	}
 	offset := (page - 1) * limit
 

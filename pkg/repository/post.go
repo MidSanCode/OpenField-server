@@ -22,6 +22,13 @@ type PostRepository struct {
 // bot flag, membership tier and display-name styling to the client.
 const authorMemberCols = ", u.is_bot, u.member_level, u.member_expires_at, u.name_color, u.name_color_to, u.name_dynamic, u.name_colors, u.name_gradient_direction, u.avatar_frame"
 
+// MaxPageLimit caps how many rows a single page query may return, matching the
+// bound the chat and camp repositories already apply. The post/reply queries
+// normalized only the lower bound, so `?limit=100000000` on the public
+// /posts and /posts/:id/replies routes passed the value straight into LIMIT
+// and pulled the whole table into memory for an unauthenticated request.
+const MaxPageLimit = 100
+
 // tipTotalExpr is a correlated subquery summing the non-refunded net tip
 // amount (cents) for a post. It is appended after the favorite-count subquery
 // in every post SELECT and scanned last into model.Post.TipTotal.
@@ -361,6 +368,9 @@ func (r *PostRepository) List(page, limit int, viewerID int64) ([]model.Post, er
 	if limit < 1 {
 		limit = 20
 	}
+	if limit > MaxPageLimit {
+		limit = MaxPageLimit
+	}
 	offset := (page - 1) * limit
 
 	rows, err := database.DB.Query(
@@ -465,6 +475,9 @@ func (r *PostRepository) Search(f PostSearchFilter, page, limit int, viewerID in
 	if limit < 1 {
 		limit = 20
 	}
+	if limit > MaxPageLimit {
+		limit = MaxPageLimit
+	}
 	offset := (page - 1) * limit
 	where, args := buildPostFilter(f)
 	// Visibility takes the first placeholder.
@@ -518,6 +531,9 @@ func (r *PostRepository) ListByUser(userID int64, page, limit int, viewerID int6
 	}
 	if limit < 1 {
 		limit = 20
+	}
+	if limit > MaxPageLimit {
+		limit = MaxPageLimit
 	}
 	offset := (page - 1) * limit
 
@@ -584,6 +600,9 @@ func (r *PostRepository) ListFavoritePosts(userID int64, page, limit int) ([]mod
 	}
 	if limit < 1 {
 		limit = 20
+	}
+	if limit > MaxPageLimit {
+		limit = MaxPageLimit
 	}
 	offset := (page - 1) * limit
 
@@ -957,6 +976,9 @@ func (r *PostRepository) replyCount(postID int64) (int64, error) {
 func (r *PostRepository) ListByCamp(campID int64, viewerID int64, beforeID int64, limit int, ownerView bool) ([]model.Post, error) {
 	if limit < 1 {
 		limit = 20
+	}
+	if limit > MaxPageLimit {
+		limit = MaxPageLimit
 	}
 	visibility := visibilityCondition(viewerID, "p.", "$2")
 	if ownerView {

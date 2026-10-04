@@ -252,6 +252,9 @@ func (r *AttachmentRepository) ListByUser(userID int64, limit int) ([]model.Atta
 	if limit < 1 {
 		limit = 50
 	}
+	if limit > MaxPageLimit {
+		limit = MaxPageLimit
+	}
 	rows, err := database.DB.Query(
 		"SELECT id, user_id, object_key, original_name, mime_type, size_bytes, url, thumb_url, preview_url, visibility, bucket, created_at FROM attachments WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2",
 		userID, limit,
