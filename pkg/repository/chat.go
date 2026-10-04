@@ -397,18 +397,10 @@ func (r *ConversationRepository) UpdateNotifyLevel(conversationID, userID int64,
 	return nil
 }
 
-// AddMember adds a member to a conversation with the given status.
+// AddMember adds a member to a conversation with the given status, refusing to
+// grow the group past MaxGroupMembers.
 func (r *ConversationRepository) AddMember(conversationID, userID, addedBy int64, role, status string) error {
-	_, err := database.DB.Exec(
-		`INSERT INTO conversation_members (conversation_id, user_id, role, status, added_by)
-		 VALUES ($1, $2, $3, $4, $5)
-		 ON CONFLICT (conversation_id, user_id) DO UPDATE SET status = $4, added_by = $5`,
-		conversationID, userID, role, status, addedBy,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to add member: %w", err)
-	}
-	return nil
+	return r.addMemberLimited(conversationID, userID, addedBy, role, status)
 }
 
 // RemoveMember removes a member from a conversation. The owner is never

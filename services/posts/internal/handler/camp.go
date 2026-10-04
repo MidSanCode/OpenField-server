@@ -502,6 +502,10 @@ func (h *CampHandler) AddMember(c *gin.Context) {
 	}
 	added, err := h.repo.AddMember(campID, targetID, model.CampRoleMember)
 	if err != nil {
+		if errors.Is(err, repository.ErrMemberLimitReached) {
+			c.JSON(http.StatusConflict, gin.H{"error": "this camp has reached its member limit"})
+			return
+		}
 		logger.Log.Error("failed to add camp member", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to add camp member"})
 		return

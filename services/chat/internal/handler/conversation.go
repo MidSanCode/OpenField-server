@@ -702,6 +702,10 @@ func (h *ConversationHandler) JoinGroup(c *gin.Context) {
 	}
 
 	if err := h.convRepo.AddMember(convID, userID, userID, "member", "active"); err != nil {
+		if errors.Is(err, repository.ErrMemberLimitReached) {
+			c.JSON(http.StatusConflict, gin.H{"error": "this group has reached its member limit"})
+			return
+		}
 		logger.Log.Error("failed to add member", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to join group"})
 		return

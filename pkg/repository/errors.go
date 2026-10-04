@@ -33,6 +33,9 @@ var (
 	// ErrQuotaExceeded reports that storing an attachment would push the user's
 	// total usage past their storage quota.
 	ErrQuotaExceeded = errors.New("storage quota exceeded")
+	// ErrMemberLimitReached reports that a group chat or camp is at its member
+	// ceiling and cannot accept another member.
+	ErrMemberLimitReached = errors.New("member limit reached")
 )
 
 // isUniqueViolation detects PostgreSQL unique constraint violations. lib/pq

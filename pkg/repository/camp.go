@@ -318,19 +318,17 @@ func (r *CampRepository) IsMember(campID, userID int64) (bool, error) {
 
 // Join adds the user as a plain member; returns false when the camp does not
 // exist. Promoting an existing member to admin/owner goes through
-// SetMemberRole, not this method.
+// SetMemberRole, not this method. Refuses to grow the camp past
+// MaxCampMembers.
 func (r *CampRepository) Join(campID, userID int64) (bool, error) {
-	res, err := database.DB.Exec(
-		"INSERT INTO camp_members (camp_id, user_id, role) VALUES ($1, $2, 'member') ON CONFLICT (camp_id, user_id) DO NOTHING",
-		campID, userID,
-	)
-	if err != nil {
-		return false, fmt.Errorf("failed to join camp: %w", err)
+	var exists bool
+	if err := database.DB.QueryRow("SELECT EXISTS (SELECT 1 FROM camps WHERE id = $1)", campID).Scan(&exists); err != nil {
+		return false, fmt.Errorf("failed to check camp: %w", err)
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return true, nil // already a member
+	if !exists {
+		return false, nil
 	}
-	if _, err := database.DB.Exec("UPDATE camps SET updated_at = NOW() WHERE id = $1", campID); err != nil {
+	if err := r.joinCampLimited(campID, userID); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -423,8 +421,29 @@ func (r *CampRepository) ListMembers(campID int64, limit int) ([]model.CampMembe
 }
 
 // AddMember inserts a roster row (admin invite). Returns false when the user
-// was already a member.
+// was already a member, and ErrMemberLimitReached when the camp is full.
 func (r *CampRepository) AddMember(campID, userID int64, role string) (bool, error) {
+	// An invite must respect the same ceiling as a self-join, otherwise the
+	// cap is trivially bypassed by inviting instead of joining.
+	var exists bool
+	if err := database.DB.QueryRow(
+		"SELECT EXISTS (SELECT 1 FROM camp_members WHERE camp_id = $1 AND user_id = $2)",
+		campID, userID,
+	).Scan(&exists); err != nil {
+		return false, fmt.Errorf("failed to check camp member: %w", err)
+	}
+	if !exists {
+		var count int
+		if err := database.DB.QueryRow(
+			"SELECT COUNT(*) FROM camp_members WHERE camp_id = $1", campID,
+		).Scan(&count); err != nil {
+			return false, fmt.Errorf("failed to count camp members: %w", err)
+		}
+		if count >= MaxCampMembers {
+			return false, ErrMemberLimitReached
+		}
+	}
+
 	res, err := database.DB.Exec(
 		"INSERT INTO camp_members (camp_id, user_id, role) VALUES ($1, $2, $3) ON CONFLICT (camp_id, user_id) DO NOTHING",
 		campID, userID, role,
