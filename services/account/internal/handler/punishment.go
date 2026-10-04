@@ -68,6 +68,42 @@ func (h *PunishmentHandler) Punish(c *gin.Context) {
 		return
 	}
 
+	// Refuse self-moderation. Without this an operator holding user.punish
+	// could lift their own ban, or clear a permission ban that was imposed on
+	// them, which makes every sanction revocable by its own subject.
+	if target.ID == operatorID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "cannot punish yourself"})
+		return
+	}
+
+	// Rank check: a moderator must not be able to sanction an account of equal
+	// or higher standing. Otherwise anyone with user.punish could ban an
+	// administrator (or the operator who granted them the permission) and take
+	// the instance over through the moderation surface alone.
+	operator, err := h.userRepo.GetByID(operatorID)
+	if err != nil {
+		logger.Log.Error("failed to get operator", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to punish user"})
+		return
+	}
+	if operator == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	if target.Role == "admin" && operator.Role != "admin" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "cannot punish an administrator"})
+		return
+	}
+	// The operator must strictly outrank a peer-level target for the actions
+	// that remove someone else's standing.
+	switch model.PunishmentType(req.Type) {
+	case model.PunishBan, model.PunishTempBan, model.PunishRevoke:
+		if target.ID == operatorID || target.Role == operator.Role && target.Role != "user" {
+			c.JSON(http.StatusForbidden, gin.H{"error": "insufficient rank to punish this user"})
+			return
+		}
+	}
+
 	ptype := model.PunishmentType(req.Type)
 	switch ptype {
 	case model.PunishWarning, model.PunishDemerit:

@@ -543,6 +543,26 @@ func main() {
 			}
 		}
 
+		// Enforce bans here, at the single point every authenticated request
+		// passes through. The status column was written by moderation but never
+		// read, so a banned user kept full API access on their existing token
+		// until it expired (24h by default) — the ban only took effect at the
+		// next login or refresh. Only the account endpoints needed to appeal or
+		// inspect the ban stay reachable.
+		if authenticated && userID > 0 && rt.level != authPublic {
+			if banned, banErr := banChecker.IsBannedCached(userID); banErr != nil {
+				logger.Log.Error("ban check failed", "error", banErr, "user_id", userID)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "account status check failed"})
+				return
+			} else if banned && !banAllowedPath(method, path) {
+				c.JSON(http.StatusForbidden, gin.H{
+					"error":  "account is banned",
+					"banned": true,
+				})
+				return
+			}
+		}
+
 		if rt.level == authPermission {
 			allowed, err := permFactory.Permit(userID, rt.permission)
 			if err != nil {
