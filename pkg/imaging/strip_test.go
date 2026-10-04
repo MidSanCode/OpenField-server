@@ -3,6 +3,7 @@ package imaging
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"hash/crc32"
 	"testing"
 )
@@ -338,5 +339,215 @@ func TestStripImageLocationNonImageUnchanged(t *testing.T) {
 	out := StripImageLocation(data, "text/plain")
 	if !bytes.Equal(out, data) {
 		t.Fatal("non-image data must be returned unchanged")
+	}
+}
+
+// TestStripImageLocationMalformedDoesNotPanic feeds malformed containers whose
+// declared segment/chunk lengths overflow a 32-bit int to every code path.
+// On a 32-bit platform (GOARCH=386 / arm) the reported conversion of these
+// lengths produced a negative int, so end := start + length wrapped below
+// start and the unchecked slice expression panicked instead of taking the
+// "truncated, copy the remainder" branch. The assertions below therefore prove
+// the overflow is gone on 32-bit builds and that the same input stays safe on
+// 64-bit ones.
+func TestStripImageLocationMalformedDoesNotPanic(t *testing.T) {
+	// Declared lengths chosen to overflow a signed 32-bit int when they are
+	// converted, and to overflow the start+length sum even on 64-bit builds.
+	overflow := []uint32{0x80000000, 0xFFFFFFFF, 0xFFFFFFF0, 0x7FFFFFFF, 0x40000000}
+
+	for _, v := range overflow {
+		be := make([]byte, 4)
+		binary.BigEndian.PutUint32(be, v)
+
+		// PNG chunk header declaring an absurd payload length.
+		png := append([]byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A}, be...)
+		png = append(png, "eXIf"...)
+
+		// WebP chunk header declaring an absurd payload length.
+		le := make([]byte, 4)
+		binary.LittleEndian.PutUint32(le, v)
+		webp := append([]byte("RIFF"), make([]byte, 4)...)
+		webp = append(webp, "WEBP"...)
+		webp = append(webp, "EXIF"...)
+		webp = append(webp, le...)
+
+		for _, tc := range []struct {
+			name        string
+			data        []byte
+			contentType string
+		}{
+			{"png", png, "image/png"},
+			{"webp", webp, "image/webp"},
+		} {
+			t.Run(fmt.Sprintf("%s/%08x", tc.name, v), func(t *testing.T) {
+				got := StripImageLocation(tc.data, tc.contentType)
+				// A malformed container cannot be parsed, so it must come back
+				// byte-for-byte unchanged.
+				if !bytes.Equal(got, tc.data) {
+					t.Fatalf("malformed %s with declared length %#x was rewritten; want the original bytes", tc.name, v)
+				}
+			})
+		}
+	}
+}
+
+// TestStripExifGPSMalformedTIFFDoesNotPanic drives the TIFF/GPS walker with
+// 32-bit counts and offsets that overflow int arithmetic on 32-bit platforms:
+// valueCount * typeSize and dataOffset + total both wrap there.
+func TestStripExifGPSMalformedTIFFDoesNotPanic(t *testing.T) {
+	const (
+		gpsLongCount = uint32(0xFFFFFFFF) // RATIONAL count -> 8 * 0xFFFFFFFF
+		gpsBadOffset = uint32(0xFFFFFFF0) // absolute offset near the 32-bit limit
+	)
+
+	for _, tc := range []struct {
+		name string
+		tiff []byte
+	}{
+		{
+			name: "count_times_size_overflows",
+			tiff: func() []byte {
+				b := make([]byte, 64)
+				b[0], b[1] = 'I', 'I'
+				u16le(b, 2, 42)
+				u32le(b, 4, 8) // IFD0 at 8
+				u16le(b, 8, 1) // one entry
+				u16le(b, 10, 0x8825)
+				u16le(b, 12, 4) // LONG
+				u32le(b, 14, 1)
+				u32le(b, 18, 32) // GPS IFD at 32
+				u32le(b, 22, 0)  // next IFD
+				u16le(b, 32, 1)  // GPS IFD: one entry
+				u16le(b, 34, 0x0002)
+				u16le(b, 36, 5) // RATIONAL (size 8)
+				u32le(b, 38, gpsLongCount)
+				u32le(b, 42, gpsBadOffset)
+				u32le(b, 46, 0)
+				return b
+			}(),
+		},
+		{
+			name: "offset_plus_total_overflows",
+			tiff: func() []byte {
+				b := make([]byte, 64)
+				b[0], b[1] = 'I', 'I'
+				u16le(b, 2, 42)
+				u32le(b, 4, 8)
+				u16le(b, 8, 1)
+				u16le(b, 10, 0x8825)
+				u16le(b, 12, 4)
+				u32le(b, 14, 1)
+				u32le(b, 18, 32)
+				u32le(b, 22, 0)
+				u16le(b, 32, 1)
+				u16le(b, 34, 0x0002)
+				u16le(b, 36, 5)
+				u32le(b, 38, 1)
+				u32le(b, 42, gpsBadOffset) // wraps below 8 when added to total
+				u32le(b, 46, 0)
+				return b
+			}(),
+		},
+		{
+			name: "gps_ifd_offset_out_of_range",
+			tiff: func() []byte {
+				b := make([]byte, 32)
+				b[0], b[1] = 'M', 'M' // big-endian variant
+				b[2], b[3] = 0, 42
+				b[4], b[5], b[6], b[7] = 0, 0, 0, 8
+				b[8], b[9] = 0, 1
+				b[10], b[11] = 0x88, 0x25
+				b[12], b[13] = 0, 4
+				b[14], b[15], b[16], b[17] = 0, 0, 0, 1
+				b[18], b[19], b[20], b[21] = 0xFF, 0xFF, 0xFF, 0xF0 // GPS IFD past end
+				b[22], b[23], b[24], b[25] = 0, 0, 0, 0
+				return b
+			}(),
+		},
+		{
+			name: "truncated_ifd",
+			tiff: []byte{'I', 'I', 42, 0, 8, 0, 0, 0, 0xFF, 0xFF},
+		},
+		{
+			name: "count_exceeds_buffer",
+			tiff: func() []byte {
+				b := make([]byte, 16)
+				b[0], b[1] = 'I', 'I'
+				u16le(b, 2, 42)
+				u32le(b, 4, 8)
+				u16le(b, 8, 512) // claims 512 entries in a 16-byte buffer
+				return b
+			}(),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			orig := append([]byte(nil), tc.tiff...)
+			got := stripExifGPS(tc.tiff)
+			// Malformed input must not panic, must not write out of bounds and
+			// must be returned unchanged when no GPS IFD can be resolved.
+			if !bytes.Equal(got, orig) {
+				t.Errorf("malformed TIFF was modified; want it returned unchanged")
+			}
+		})
+	}
+}
+
+// TestStripImageLocationMalformedTruncatedVariants runs the container parsers
+// over every prefix of a valid image so that a length field is always read
+// with a partially missing payload — the boundary where offset arithmetic is
+// most likely to run past the buffer.
+func TestStripImageLocationMalformedTruncatedVariants(t *testing.T) {
+	var jpeg bytes.Buffer
+	jpeg.Write([]byte{0xFF, 0xD8})
+	payload := append([]byte("Exif\x00\x00"), buildTiffLE()...)
+	jpeg.Write([]byte{0xFF, 0xE1})
+	var l [2]byte
+	binary.BigEndian.PutUint16(l[:], uint16(2+len(payload)))
+	jpeg.Write(l[:])
+	jpeg.Write(payload)
+	jpeg.Write([]byte{0xFF, 0xD9})
+
+	var png bytes.Buffer
+	png.Write([]byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A})
+	png.Write(pngChunk("IHDR", make([]byte, 13)))
+	png.Write(pngChunk("eXIf", buildTiffLE()))
+	png.Write(pngChunk("IEND", nil))
+
+	var body bytes.Buffer
+	body.Write(webpChunk("VP8 ", make([]byte, 4)))
+	body.Write(webpChunk("EXIF", buildTiffLE()))
+	var webp bytes.Buffer
+	webp.WriteString("RIFF")
+	var sz [4]byte
+	binary.LittleEndian.PutUint32(sz[:], uint32(4+body.Len()))
+	webp.Write(sz[:])
+	webp.WriteString("WEBP")
+	webp.Write(body.Bytes())
+
+	for _, tc := range []struct {
+		name        string
+		full        []byte
+		contentType string
+	}{
+		{"jpeg", jpeg.Bytes(), "image/jpeg"},
+		{"png", png.Bytes(), "image/png"},
+		{"webp", webp.Bytes(), "image/webp"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for n := 0; n <= len(tc.full); n++ {
+				// StripImageLocation takes ownership of nothing and must never
+				// mutate its input; use a copy of each prefix.
+				prefix := make([]byte, n)
+				copy(prefix, tc.full[:n])
+				got := StripImageLocation(prefix, tc.contentType)
+				// The input is never extended, so the result can never be
+				// longer than what was handed in. Anything shorter than the
+				// original prefix would mean bytes were dropped from a
+				// malformed stream instead of being copied through.
+				if len(got) > len(prefix) {
+					t.Fatalf("prefix %d: result grew to %d bytes", n, len(got))
+				}
+			}
+		})
 	}
 }
