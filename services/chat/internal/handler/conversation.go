@@ -444,6 +444,24 @@ func (h *ConversationHandler) MarkRead(c *gin.Context) {
 		return
 	}
 
+	// The id must name a message in THIS conversation. It was previously stored
+	// verbatim, so a caller could pass an arbitrary large value and permanently
+	// zero their own unread count — and, more importantly, the column could be
+	// set to a message belonging to a different conversation, which makes the
+	// unread computation compare across conversations.
+	if req.LastMessageID > 0 {
+		msg, mErr := h.msgRepo.GetByID(req.LastMessageID)
+		if mErr != nil {
+			logger.Log.Error("failed to load message for mark-read", "error", mErr, "message_id", req.LastMessageID)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to mark read"})
+			return
+		}
+		if msg == nil || msg.ConversationID != convID {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "last_message_id does not belong to this conversation"})
+			return
+		}
+	}
+
 	if err := h.convRepo.UpdateLastReadMessage(convID, userID, req.LastMessageID); err != nil {
 		logger.Log.Error("failed to mark read", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to mark read"})
