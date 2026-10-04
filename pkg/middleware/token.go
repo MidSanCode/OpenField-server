@@ -137,6 +137,15 @@ func ParseToken(tokenStr string, secretKey string) (int64, error) {
 	}
 
 	if claims, ok := token.Claims.(*Claims); ok && token.Valid {
+		// Purpose tokens are signed with the same key and carry a real user
+		// id, but they are not access tokens. One of them travels in the
+		// OIDC state query parameter, where it leaks through Referer
+		// headers, browser history and server access logs; accepting it here
+		// handed whoever saw that URL full API access as the user. An access
+		// token must carry no purpose.
+		if claims.Purpose != "" {
+			return 0, fmt.Errorf("token is not an access token")
+		}
 		return claims.UserID, nil
 	}
 
@@ -160,6 +169,11 @@ func ParseTokenWithClaims(tokenStr string, secretKey string) (int64, bool, error
 	claims, ok := token.Claims.(*Claims)
 	if !ok || !token.Valid {
 		return 0, false, fmt.Errorf("invalid token claims")
+	}
+	// Same rule as ParseToken: this is the gateway's authentication path, so a
+	// purpose token must not be accepted as an access token here either.
+	if claims.Purpose != "" {
+		return 0, false, fmt.Errorf("token is not an access token")
 	}
 	return claims.UserID, claims.NeedsRegistration, nil
 }
