@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"mime"
 	"net/http"
@@ -513,8 +514,18 @@ func (h *AttachmentHandler) ChunkComplete(c *gin.Context) {
 		attSize = int64(len(cleanData))
 	}
 
-	att, err := h.attRepo.Create(userID, objectKey, req.Filename, contentType, attSize, url, thumbURL, previewURL, visibility, session.Bucket, finalHash)
+	// Same atomic check-and-insert as the direct upload path: the chunked path
+	// had the identical gap, where the quota was read at init and the row was
+	// written at completion with the whole assembly in between.
+	att, err := h.attRepo.CreateWithinQuota(userID, objectKey, req.Filename, contentType, attSize, url, thumbURL, previewURL, visibility, session.Bucket, finalHash, h.effectiveQuota(user))
 	if err != nil {
+		if errors.Is(err, repository.ErrQuotaExceeded) {
+			if delErr := store.Delete(c.Request.Context(), objectKey); delErr != nil {
+				logger.Log.Warn("failed to remove object after quota rejection", "error", delErr, "object_key", objectKey)
+			}
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "storage quota exceeded"})
+			return
+		}
 		logger.Log.Error("failed to save attachment", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save attachment"})
 		return

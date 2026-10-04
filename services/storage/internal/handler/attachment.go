@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -53,6 +54,21 @@ func NewAttachmentHandler(store *storage.Manager, cfg config.StorageConfig) *Att
 	}
 }
 
+// effectiveQuota returns the byte budget applied to a user, including the
+// membership storage bonus on the default bucket. Shared by the cheap
+// pre-check and the authoritative transactional check so the two cannot
+// disagree.
+func (h *AttachmentHandler) effectiveQuota(user *model.User) int64 {
+	if user == nil {
+		return 0
+	}
+	quota := user.StorageQuota
+	if bucket, ok := h.cfg.BucketByName(user.StorageBucket); ok && bucket.IsDefault {
+		quota += model.MemberStorageBonusAt(user.MemberLevel, user.MemberExpiresAt, time.Now())
+	}
+	return quota
+}
+
 // checkQuota returns true when the current user may upload size bytes more.
 // Members receive a storage bonus while their membership is active, but only
 // while the user is on the default bucket; on non-default buckets they get
@@ -91,7 +107,11 @@ func (h *AttachmentHandler) checkQuotaExcluding(user *model.User, size, ignore i
 		effectiveQuota += model.MemberStorageBonusAt(user.MemberLevel, user.MemberExpiresAt, now)
 	}
 	if effectiveQuota <= 0 {
-		return true, nil
+		// A non-positive quota means "may not store", not "unlimited". Treating
+		// it as unlimited inverted the intent: zeroing a quota (the natural way
+		// to suspend storage for an account, or the result of a misconfigured
+		// bonus) silently removed all limits.
+		return false, nil
 	}
 	used, err := h.attRepo.SumSizeByUser(user.ID)
 	if err != nil {
@@ -262,8 +282,22 @@ func (h *AttachmentHandler) Upload(c *gin.Context) {
 		}
 	}
 
-	att, err := h.attRepo.Create(userID, objectKey, header.Filename, contentType, int64(len(data)), url, thumbURL, previewURL, visibility, user.StorageBucket, hash)
+	// The authoritative quota decision happens inside CreateWithinQuota, which
+	// sums usage and inserts in one transaction under a per-user lock. The
+	// earlier checkQuota above is only a cheap early rejection; on its own it
+	// left a wide race in which concurrent uploads each sized just under the
+	// remaining quota all passed and were all committed.
+	att, err := h.attRepo.CreateWithinQuota(userID, objectKey, header.Filename, contentType, int64(len(data)), url, thumbURL, previewURL, visibility, user.StorageBucket, hash, h.effectiveQuota(user))
 	if err != nil {
+		if errors.Is(err, repository.ErrQuotaExceeded) {
+			// The object is already in the cloud but has no row; remove it so a
+			// rejected upload does not leave an orphan consuming space.
+			if delErr := store.Delete(c.Request.Context(), objectKey); delErr != nil {
+				logger.Log.Warn("failed to remove object after quota rejection", "error", delErr, "object_key", objectKey)
+			}
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "storage quota exceeded"})
+			return
+		}
 		logger.Log.Error("failed to save attachment", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save attachment"})
 		return

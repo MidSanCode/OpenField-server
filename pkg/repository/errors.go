@@ -30,6 +30,9 @@ var (
 	ErrDeletedMessage = errors.New("message already deleted")
 	// ErrInvalidAmount reports a wallet amount outside the accepted range.
 	ErrInvalidAmount = errors.New("invalid amount")
+	// ErrQuotaExceeded reports that storing an attachment would push the user's
+	// total usage past their storage quota.
+	ErrQuotaExceeded = errors.New("storage quota exceeded")
 )
 
 // isUniqueViolation detects PostgreSQL unique constraint violations. lib/pq

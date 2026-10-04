@@ -20,8 +20,19 @@ func NewAttachmentRepository() *AttachmentRepository {
 
 // Create inserts an attachment record.
 func (r *AttachmentRepository) Create(userID int64, objectKey, originalName, mimeType string, sizeBytes int64, url, thumbURL, previewURL, visibility, bucket, sha256 string) (*model.Attachment, error) {
+	return createTx(database.DB, userID, objectKey, originalName, mimeType, sizeBytes, url, thumbURL, previewURL, visibility, bucket, sha256)
+}
+
+// execer is satisfied by both *sql.DB and *sql.Tx, letting the insert run
+// standalone or inside the quota transaction.
+type execer interface {
+	QueryRow(query string, args ...any) *sql.Row
+}
+
+// createTx performs the attachment INSERT through the given executor.
+func createTx(ex execer, userID int64, objectKey, originalName, mimeType string, sizeBytes int64, url, thumbURL, previewURL, visibility, bucket, sha256 string) (*model.Attachment, error) {
 	att := &model.Attachment{}
-	err := database.DB.QueryRow(
+	err := ex.QueryRow(
 		"INSERT INTO attachments (user_id, object_key, original_name, mime_type, size_bytes, url, thumb_url, preview_url, visibility, bucket, sha256) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id, user_id, object_key, original_name, mime_type, size_bytes, url, thumb_url, preview_url, visibility, bucket, sha256, created_at",
 		userID, objectKey, originalName, mimeType, sizeBytes, url, thumbURL, previewURL, visibility, bucket, sha256,
 	).Scan(&att.ID, &att.UserID, &att.ObjectKey, &att.OriginalName, &att.MimeType, &att.SizeBytes, &att.URL, &att.ThumbURL, &att.PreviewURL, &att.Visibility, &att.Bucket, &att.SHA256, &att.CreatedAt)
@@ -206,6 +217,69 @@ func (r *AttachmentRepository) SumSizeByUser(userID int64) (int64, error) {
 		return 0, fmt.Errorf("failed to sum user attachments: %w", err)
 	}
 	return total, nil
+}
+
+// LockUserUsage serializes quota accounting for one user within a transaction.
+//
+// Quota was previously read (SUM) and written (INSERT) in two separate
+// statements with a full object-storage upload in between, so N concurrent
+// uploads each sized just under the remaining quota all passed the check and
+// were all committed, letting actual usage reach N times the quota. Taking a
+// per-user advisory lock for the duration of the check-and-insert makes the
+// pair atomic with respect to other uploads by the same user; different users
+// never block each other. The lock is released automatically at commit or
+// rollback.
+//
+// Returns the currently used byte total, measured while the lock is held.
+func (r *AttachmentRepository) LockUserUsage(tx *sql.Tx, userID int64) (int64, error) {
+	if _, err := tx.Exec("SELECT pg_advisory_xact_lock($1)", userID); err != nil {
+		return 0, fmt.Errorf("failed to lock user quota: %w", err)
+	}
+	var used int64
+	if err := tx.QueryRow(
+		"SELECT COALESCE(SUM(size_bytes), 0) FROM attachments WHERE user_id = $1",
+		userID,
+	).Scan(&used); err != nil {
+		return 0, fmt.Errorf("failed to sum user attachments: %w", err)
+	}
+	return used, nil
+}
+
+// CreateWithinQuota inserts the attachment only if doing so keeps the user's
+// total usage at or below quota. The sum and the insert happen in one
+// transaction under LockUserUsage, so concurrent uploads cannot both slip past
+// a stale reading. Returns ErrQuotaExceeded when the insert would exceed it.
+func (r *AttachmentRepository) CreateWithinQuota(
+	userID int64, objectKey, filename, contentType string, sizeBytes int64,
+	url, thumbnailURL, previewURL, visibility, bucket, contentHash string,
+	quota int64,
+) (*model.Attachment, error) {
+	tx, err := database.DB.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin quota transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	used, err := r.LockUserUsage(tx, userID)
+	if err != nil {
+		return nil, err
+	}
+	// A non-positive quota means the account may not store anything. It
+	// previously meant the opposite (unlimited), so a misconfigured or
+	// deliberately zeroed quota silently removed the limit entirely.
+	if quota <= 0 || used+sizeBytes > quota {
+		return nil, ErrQuotaExceeded
+	}
+
+	att, err := createTx(tx, userID, objectKey, filename, contentType, sizeBytes,
+		url, thumbnailURL, previewURL, visibility, bucket, contentHash)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit attachment: %w", err)
+	}
+	return att, nil
 }
 
 // BucketUsage aggregates attachment count and size per storage bucket for a
