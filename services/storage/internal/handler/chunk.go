@@ -96,6 +96,15 @@ func (h *AttachmentHandler) ChunkInit(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "too many chunks"})
 		return
 	}
+	// The declared size must be reachable with the declared chunk count. A
+	// session could otherwise claim size=1 (so the quota check below adds
+	// nothing) while permitting total_chunks * maxChunkBytes of real data —
+	// about 78GB per session. This is a cheap consistency gate; the exact
+	// byte total is verified against the real objects at completion.
+	if req.Size > int64(req.TotalChunks)*maxChunkBytes {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "declared size exceeds chunk capacity"})
+		return
+	}
 
 	user, err := h.userRepo.GetByID(userID)
 	if err != nil {
@@ -300,6 +309,16 @@ func (h *AttachmentHandler) ChunkComplete(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "chunk count mismatch"})
 		return
 	}
+	// The declared size must match what the session reserved at init; a
+	// smaller completion declaration would otherwise understate the upload.
+	if req.Size > session.SizeBytes {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "declared size exceeds session size"})
+		return
+	}
+	if req.Size > int64(req.TotalChunks)*maxChunkBytes {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "declared size exceeds chunk capacity"})
+		return
+	}
 
 	// Verify chunk presence with per-key StatObject, not a prefix listing.
 	// RustFS (the configured backend) does not return freshly PutObject-ed
@@ -361,6 +380,50 @@ func (h *AttachmentHandler) ChunkComplete(c *gin.Context) {
 		visibility = "public"
 	}
 
+	// Verify the REAL uploaded byte total before assembling, charging quota or
+	// writing the attachment row. The client-declared size is not trustworthy:
+	// declaring 1 byte while uploading 10000 * 8MB let a session exceed the
+	// upload cap and the storage quota while `size_bytes` (and therefore
+	// /storage/usage) recorded 1 byte.
+	actualBytes := int64(0)
+	for _, size := range existing {
+		actualBytes += size
+	}
+	if actualBytes > h.cfg.MaxUploadBytes {
+		logger.Log.Warn("chunked upload rejected: actual size exceeds upload cap",
+			"upload_id", uploadID, "user_id", userID,
+			"declared_size", req.Size, "actual_bytes", actualBytes,
+			"max_upload_bytes", h.cfg.MaxUploadBytes)
+		_ = store.DeleteChunks(c.Request.Context(), userID, uploadID)
+		_ = repository.DeleteUploadSession(uploadID)
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "file too large"})
+		return
+	}
+	// Re-check the quota against the real total. The declared size was already
+	// checked at init, but the quota may have been consumed since then (or the
+	// declaration may simply have been a lie).
+	user, err := h.userRepo.GetByID(userID)
+	if err != nil {
+		logger.Log.Error("failed to load user", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to verify quota"})
+		return
+	}
+	allowed, err := h.checkQuotaForActualBytes(c, user, actualBytes, session.SizeBytes)
+	if err != nil {
+		logger.Log.Error("failed to check storage quota", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check storage quota"})
+		return
+	}
+	if !allowed {
+		logger.Log.Warn("chunked upload rejected: actual size exceeds quota",
+			"upload_id", uploadID, "user_id", userID,
+			"declared_size", req.Size, "actual_bytes", actualBytes)
+		_ = store.DeleteChunks(c.Request.Context(), userID, uploadID)
+		_ = repository.DeleteUploadSession(uploadID)
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "storage quota exceeded"})
+		return
+	}
+
 	objectKey, url, assembledHash, err := store.AssembleChunks(c.Request.Context(), userID, uploadID, req.TotalChunks, contentType, req.Filename)
 	if err != nil {
 		logger.Log.Error("failed to assemble chunks", "error", err)
@@ -370,9 +433,11 @@ func (h *AttachmentHandler) ChunkComplete(c *gin.Context) {
 
 	// Read the assembled image once to strip GPS/location metadata and to
 	// generate the thumbnail. Replacement is fail-open: when the sanitized copy
-	// cannot be stored the original object is kept.
+	// cannot be stored the original object is kept. Gate on the verified real
+	// size (not req.Size, which the client controls) so a small declaration
+	// cannot skip location stripping on a large image.
 	cleanData := []byte(nil)
-	if isImageMime(contentType) && req.Size <= maxStripReadBytes {
+	if isImageMime(contentType) && actualBytes <= maxStripReadBytes {
 		if data, gerr := store.GetBytes(c.Request.Context(), objectKey, maxStripReadBytes); gerr == nil {
 			cleanData = imaging.StripImageLocation(data, contentType)
 			if !bytes.Equal(cleanData, data) {
@@ -439,7 +504,11 @@ func (h *AttachmentHandler) ChunkComplete(c *gin.Context) {
 		}
 	}
 
-	attSize := req.Size
+	// Record the real stored size, not the client's declaration: size_bytes
+	// drives SumSizeByUser (i.e. /storage/usage and the quota), so trusting
+	// the declaration here would let a session store hundreds of gigabytes
+	// while reporting one byte.
+	attSize := actualBytes
 	if len(cleanData) > 0 {
 		attSize = int64(len(cleanData))
 	}

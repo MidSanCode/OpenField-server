@@ -59,6 +59,29 @@ func NewAttachmentHandler(store *storage.Manager, cfg config.StorageConfig) *Att
 // their base quota only. Once a membership expires users revert to their base
 // quota, so uploads are denied whenever the effective quota has been exceeded.
 func (h *AttachmentHandler) checkQuota(c *gin.Context, user *model.User, size int64) (bool, error) {
+	return h.checkQuotaExcluding(user, size, 0)
+}
+
+// checkQuotaForActualBytes re-checks the quota at chunked-upload completion
+// against the real assembled byte count rather than the size the client
+// declared at init. alreadyReserved is the size the session charged against
+// the quota when it started; it is subtracted so the bytes are not counted
+// twice. Growing the upload beyond what was reserved is rejected here.
+func (h *AttachmentHandler) checkQuotaForActualBytes(c *gin.Context, user *model.User, actualBytes, alreadyReserved int64) (bool, error) {
+	if actualBytes <= alreadyReserved {
+		// Within what was already accounted for at init.
+		return true, nil
+	}
+	return h.checkQuotaExcluding(user, actualBytes-alreadyReserved, 0)
+}
+
+// checkQuotaExcluding returns true when the user may store size more bytes,
+// treating ignore as already reserved. Members receive a storage bonus while
+// their membership is active, but only while the user is on the default
+// bucket; on non-default buckets they get their base quota only. Once a
+// membership expires users revert to their base quota, so uploads are denied
+// whenever the effective quota has been exceeded.
+func (h *AttachmentHandler) checkQuotaExcluding(user *model.User, size, ignore int64) (bool, error) {
 	if user == nil {
 		return true, nil
 	}
@@ -74,7 +97,10 @@ func (h *AttachmentHandler) checkQuota(c *gin.Context, user *model.User, size in
 	if err != nil {
 		return false, err
 	}
-	return used+size <= effectiveQuota, nil
+	if used < ignore {
+		ignore = 0
+	}
+	return used-ignore+size <= effectiveQuota, nil
 }
 
 // storageAvailable writes a 503 response when object storage is not configured
