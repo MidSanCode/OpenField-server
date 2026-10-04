@@ -497,7 +497,11 @@ func (h *MessageHandler) MarkBurnRead(c *gin.Context) {
 		return
 	}
 
-	msg, stamped, err := h.msgRepo.MarkBurnRead(msgID, userID)
+	// Bind the message to the conversation from the path. Checking membership
+	// of :id alone is not enough — without this, any member of any
+	// conversation could read (and arm the burn on) an arbitrary message id,
+	// including other people's private chats.
+	msg, stamped, err := h.msgRepo.MarkBurnRead(convID, msgID, userID)
 	if err != nil {
 		logger.Log.Error("failed to mark message read", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to mark message read"})

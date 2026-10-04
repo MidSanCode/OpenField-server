@@ -384,12 +384,22 @@ func (r *MessageRepository) Delete(id, userID int64) error {
 // untouched. [stamped] reports whether this call armed the countdown (used by
 // the handler to decide whether to push an updated event). A nil message
 // means the id does not exist.
-func (r *MessageRepository) MarkBurnRead(messageID, readerID int64) (msg *model.Message, stamped bool, err error) {
+// MarkBurnRead arms the burn-after-read countdown of a message on first read
+// by a conversation member other than the sender, returning the message for
+// the reader (stamped reports whether this call armed it).
+//
+// conversationID is required and bound to the message: the caller must be
+// reading the message through the conversation that actually owns it. Passing
+// only the message id let any member of any conversation read — and arm the
+// burn on — an arbitrary message, including other people's private chats.
+// A nil message means the id does not exist or does not belong to
+// conversationID.
+func (r *MessageRepository) MarkBurnRead(conversationID, messageID, readerID int64) (msg *model.Message, stamped bool, err error) {
 	current, err := r.GetByID(messageID)
 	if err != nil {
 		return nil, false, err
 	}
-	if current == nil {
+	if current == nil || current.ConversationID != conversationID {
 		return nil, false, nil
 	}
 	if current.DeletedAt != nil || current.BurnSeconds <= 0 || current.BurnAt != nil || current.SenderID == readerID {
@@ -401,9 +411,9 @@ func (r *MessageRepository) MarkBurnRead(messageID, readerID int64) (msg *model.
 	var burnAt time.Time
 	err = database.DB.QueryRow(
 		`UPDATE messages SET burn_at = NOW() + (burn_seconds * INTERVAL '1 second')
-		 WHERE id = $1 AND burn_seconds > 0 AND burn_at IS NULL AND deleted_at IS NULL AND sender_id <> $2
+		 WHERE id = $1 AND conversation_id = $3 AND burn_seconds > 0 AND burn_at IS NULL AND deleted_at IS NULL AND sender_id <> $2
 		 RETURNING burn_at`,
-		messageID, readerID,
+		messageID, readerID, conversationID,
 	).Scan(&burnAt)
 	if err == sql.ErrNoRows {
 		// Lost a race with another reader (or the row stopped qualifying).
