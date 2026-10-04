@@ -23,8 +23,8 @@ func makePNGWithDeclaredSize(t *testing.T, w, h uint32) []byte {
 	ihdr := make([]byte, 13)
 	binary.BigEndian.PutUint32(ihdr[0:4], w)
 	binary.BigEndian.PutUint32(ihdr[4:8], h)
-	ihdr[8] = 8  // bit depth
-	ihdr[9] = 2  // colour type: truecolour
+	ihdr[8] = 8 // bit depth
+	ihdr[9] = 2 // colour type: truecolour
 	writeChunk(&buf, "IHDR", ihdr)
 
 	// A single empty IDAT is enough for png.DecodeConfig to report the header

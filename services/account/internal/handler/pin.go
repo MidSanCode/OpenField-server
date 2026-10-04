@@ -20,9 +20,9 @@ func NewPinHandler() *PinHandler {
 	return &PinHandler{userRepo: repository.NewUserRepository()}
 }
 
-// SetPin sets (or changes) the user's 6-digit payment PIN. The payment PIN is
-// used only to authorize outgoing payments; it never replaces the login
-// password.
+// SetPin sets the user's 6-digit payment PIN on first use, or replaces it when
+// the current PIN is supplied. The payment PIN authorizes outgoing payments; it
+// never replaces the login password.
 func (h *PinHandler) SetPin(c *gin.Context) {
 	userID, ok := middleware.GetUserID(c)
 	if !ok {
@@ -31,7 +31,8 @@ func (h *PinHandler) SetPin(c *gin.Context) {
 	}
 
 	var req struct {
-		Pin string `json:"pin" binding:"required"`
+		Pin    string `json:"pin" binding:"required"`
+		OldPin string `json:"old_pin"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "pin is required"})
@@ -40,6 +41,29 @@ func (h *PinHandler) SetPin(c *gin.Context) {
 	if !security.ValidPin(req.Pin) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "pin must be 6 digits"})
 		return
+	}
+
+	// Once a PIN exists it may only be replaced by someone who knows it.
+	// Accepting a bare set let a stolen session silently rebind the payment
+	// second factor to an attacker-chosen PIN and then spend from the wallet —
+	// the PIN would have provided no protection at all.
+	currentHash, err := h.userRepo.GetPinHash(userID)
+	if err != nil {
+		logger.Log.Error("failed to load pin hash", "error", err, "user_id", userID)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to set pin"})
+		return
+	}
+	if currentHash != "" {
+		if req.OldPin == "" {
+			c.JSON(http.StatusForbidden, gin.H{
+				"error":            "payment pin already set",
+				"old_pin_required": true,
+			})
+			return
+		}
+		if !checkPaymentPin(c, userID, req.OldPin, currentHash) {
+			return
+		}
 	}
 
 	hash, err := security.HashPin(req.Pin)

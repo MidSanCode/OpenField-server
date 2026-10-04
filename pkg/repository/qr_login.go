@@ -29,9 +29,9 @@ var ErrConflict = errors.New("conflict")
 
 // QrLogin is one scan-to-sign-in handshake.
 type QrLogin struct {
-	Code     string `json:"code"`
-	Status   string `json:"status"` // pending | confirmed | expired
-	UserID   int64  `json:"-"`
+	Code   string `json:"code"`
+	Status string `json:"status"` // pending | confirmed | expired
+	UserID int64  `json:"-"`
 	// AccessToken/RefreshToken are only ever returned to the device that
 	// holds the handshake's poll secret, and only once.
 	AccessToken  string    `json:"-"`
