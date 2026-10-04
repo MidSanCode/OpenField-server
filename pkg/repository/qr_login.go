@@ -1,7 +1,10 @@
 package repository
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
@@ -26,9 +29,11 @@ var ErrConflict = errors.New("conflict")
 
 // QrLogin is one scan-to-sign-in handshake.
 type QrLogin struct {
-	Code         string    `json:"code"`
-	Status       string    `json:"status"` // pending | confirmed | expired
-	UserID       int64     `json:"-"`
+	Code     string `json:"code"`
+	Status   string `json:"status"` // pending | confirmed | expired
+	UserID   int64  `json:"-"`
+	// AccessToken/RefreshToken are only ever returned to the device that
+	// holds the handshake's poll secret, and only once.
 	AccessToken  string    `json:"-"`
 	RefreshToken string    `json:"-"`
 	DeviceLabel  string    `json:"device_label,omitempty"`
@@ -36,15 +41,25 @@ type QrLogin struct {
 	ExpiresAt    time.Time `json:"expires_at"`
 }
 
-// CreateQrLogin mints a fresh pending handshake code.
-func CreateQrLogin(code string, deviceLabel string) error {
+// HashPollSecret derives the stored form of a handshake's poll secret. Like
+// refresh tokens, the raw secret only ever lives in the response body and the
+// requesting device's storage.
+func HashPollSecret(secret string) string {
+	sum := sha256.Sum256([]byte(secret))
+	return hex.EncodeToString(sum[:])
+}
+
+// CreateQrLogin mints a fresh pending handshake code bound to pollSecretHash,
+// which must be the hash of a secret known only to the requesting device.
+func CreateQrLogin(code string, deviceLabel string, pollSecretHash string) error {
 	_, err := database.DB.Exec(
-		`INSERT INTO qr_logins (code, status, device_label, expires_at)
-		 VALUES ($1, 'pending', $2, NOW() + ($3 || ' seconds')::interval)
+		`INSERT INTO qr_logins (code, status, device_label, expires_at, poll_secret_hash)
+		 VALUES ($1, 'pending', $2, NOW() + ($4 || ' seconds')::interval, $3)
 		 ON CONFLICT (code) DO UPDATE
 		   SET status = 'pending', user_id = NULL, access_token = '', refresh_token = '',
-		       device_label = EXCLUDED.device_label, created_at = NOW(), expires_at = EXCLUDED.expires_at`,
-		code, deviceLabel, int(qrLoginTTL.Seconds()),
+		       device_label = EXCLUDED.device_label, created_at = NOW(),
+		       expires_at = EXCLUDED.expires_at, poll_secret_hash = EXCLUDED.poll_secret_hash`,
+		code, deviceLabel, pollSecretHash, int(qrLoginTTL.Seconds()),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create qr login: %w", err)
@@ -90,6 +105,52 @@ func ConfirmQrLogin(code string, userID int64, accessToken, refreshToken string)
 		return ErrConflict
 	}
 	return nil
+}
+
+// CollectQrLoginTokens returns the tokens attached to a confirmed handshake,
+// but only to the holder of the matching poll secret, and only once: the
+// tokens are cleared as part of the same statement, so a code that leaks (for
+// example because an attacker photographed the QR image) cannot be replayed to
+// collect them.
+//
+// Returns ErrNotFound when the code is unknown, ErrForbidden when the secret
+// does not match, and ErrConflict when the handshake is not (or no longer)
+// collectable.
+func CollectQrLoginTokens(code string, pollSecret string) (accessToken, refreshToken string, err error) {
+	if pollSecret == "" {
+		return "", "", ErrForbidden
+	}
+	var secretHash string
+	err = database.DB.QueryRow(
+		`SELECT poll_secret_hash FROM qr_logins WHERE code = $1`, code,
+	).Scan(&secretHash)
+	if err == sql.ErrNoRows {
+		return "", "", ErrNotFound
+	}
+	if err != nil {
+		return "", "", fmt.Errorf("failed to get qr login: %w", err)
+	}
+	if secretHash == "" || subtle.ConstantTimeCompare([]byte(secretHash), []byte(HashPollSecret(pollSecret))) != 1 {
+		return "", "", ErrForbidden
+	}
+
+	// Atomically claim the tokens: only a confirmed, unexpired, not-yet-
+	// collected handshake with a matching secret is updated.
+	err = database.DB.QueryRow(
+		`UPDATE qr_logins
+		    SET access_token = '', refresh_token = '', status = 'consumed'
+		  WHERE code = $1 AND poll_secret_hash = $2
+		    AND status = 'confirmed' AND access_token <> '' AND expires_at > NOW()
+		  RETURNING access_token, refresh_token`,
+		code, secretHash,
+	).Scan(&accessToken, &refreshToken)
+	if err == sql.ErrNoRows {
+		return "", "", ErrConflict
+	}
+	if err != nil {
+		return "", "", fmt.Errorf("failed to collect qr login tokens: %w", err)
+	}
+	return accessToken, refreshToken, nil
 }
 
 // PurgeExpiredQrLogins removes stale handshake rows.

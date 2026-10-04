@@ -646,6 +646,22 @@ var versionedMigrations = []migration{
 			CREATE INDEX IF NOT EXISTS idx_users_oauth2_identity ON users(oauth2_provider, oauth2_id);
 		`,
 	},
+	{
+		// v29 binds a QR login handshake to the device that created it.
+		//
+		// The code is shown as a QR image and is therefore readable by anyone
+		// who can see the screen — "knowing the code" proves nothing. Without
+		// a separate secret held only by the requesting device, an attacker
+		// could mint a code, get a victim to approve it, and then poll the
+		// tokens out of it (QRLJacking). poll_secret_hash stores the SHA-256
+		// of a secret returned once, at creation, to the requesting device;
+		// only the holder of that secret may collect the tokens.
+		version: 29,
+		name:    "qr-login-poll-secret",
+		sql: `
+			ALTER TABLE qr_logins ADD COLUMN IF NOT EXISTS poll_secret_hash VARCHAR(128) NOT NULL DEFAULT '';
+		`,
+	},
 }
 
 // latestMigrationVersion returns the newest schema version the code knows

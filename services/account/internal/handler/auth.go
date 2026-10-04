@@ -999,6 +999,11 @@ func (h *AuthHandler) notifyNewDeviceLogin(userID int64, device, ip string) {
 
 // CreateQrLogin mints a fresh pending handshake code the caller can render as
 // a QR image. The code is single-use and short-lived.
+//
+// The response also carries a poll_secret that the caller must keep private
+// and present when polling for tokens. The code itself is displayed as a QR
+// image, so it is not a secret: without this binding, anyone who could read
+// the QR code could collect the tokens the victim approved (QRLJacking).
 func (h *AuthHandler) CreateQrLogin(c *gin.Context) {
 	var req struct {
 		Device string `json:"device"`
@@ -1009,24 +1014,48 @@ func (h *AuthHandler) CreateQrLogin(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create code"})
 		return
 	}
+	pollSecret, err := randomState()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create code"})
+		return
+	}
 	if req.Device == "" {
 		req.Device = "Unknown Device"
 	}
-	if err := repository.CreateQrLogin(code, req.Device); err != nil {
+	// Bound the operator-supplied label: it is stored and shown on the
+	// approving device's page.
+	if len(req.Device) > maxDeviceLabelLen {
+		req.Device = req.Device[:maxDeviceLabelLen]
+	}
+	if err := repository.CreateQrLogin(code, req.Device, repository.HashPollSecret(pollSecret)); err != nil {
 		logger.Log.Error("failed to create qr login", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create code"})
 		return
 	}
 	// Mirrors repository.qrLoginTTL (5 minutes); the client renders a
 	// countdown and a refresh action from this value.
-	c.JSON(http.StatusOK, gin.H{"code": code, "expires_in": 300})
+	c.JSON(http.StatusOK, gin.H{
+		"code":        code,
+		"poll_secret": pollSecret,
+		"expires_in":  300,
+	})
 }
 
 // PollQrLogin returns the current state of a handshake. Once a phone approves
 // it, the poll response carries the access + refresh tokens that sign the
 // requesting device in.
+//
+// The caller must present the poll secret issued at creation; the tokens are
+// handed over exactly once and then cleared.
 func (h *AuthHandler) PollQrLogin(c *gin.Context) {
 	code := c.Param("code")
+	pollSecret := c.GetHeader(qrPollSecretHeader)
+	if pollSecret == "" {
+		pollSecret = c.Query("poll_secret")
+	}
+
+	// Report the handshake status first, so a client can render progress
+	// without exposing anything: no tokens are included here.
 	qr, err := repository.GetQrLogin(code)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
@@ -1037,14 +1066,39 @@ func (h *AuthHandler) PollQrLogin(c *gin.Context) {
 		return
 	}
 	resp := gin.H{"code": qr.Code, "status": qr.Status}
-	if qr.Status == "confirmed" && qr.AccessToken != "" {
-		resp["access_token"] = qr.AccessToken
-		resp["refresh_token"] = qr.RefreshToken
+	if qr.Status == "confirmed" {
+		accessToken, refreshToken, err := repository.CollectQrLoginTokens(code, pollSecret)
+		if err != nil {
+			switch {
+			case errors.Is(err, repository.ErrForbidden):
+				c.JSON(http.StatusForbidden, gin.H{"error": "invalid poll secret"})
+			case errors.Is(err, repository.ErrConflict):
+				// Already collected, or no longer collectable. Report the
+				// status without tokens rather than failing the poll.
+				c.JSON(http.StatusOK, resp)
+			case errors.Is(err, repository.ErrNotFound):
+				c.JSON(http.StatusNotFound, gin.H{"error": "code not found"})
+			default:
+				logger.Log.Error("failed to collect qr tokens", "error", err)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to poll code"})
+			}
+			return
+		}
+		resp["status"] = "confirmed"
+		resp["access_token"] = accessToken
+		resp["refresh_token"] = refreshToken
 		resp["expires_in"] = h.accessExpiresIn()
 		resp["refresh_expires_in"] = h.refreshExpiresIn()
 	}
 	c.JSON(http.StatusOK, resp)
 }
+
+// maxDeviceLabelLen bounds the device label stored with a handshake and shown
+// on the approving device's confirmation page.
+const maxDeviceLabelLen = 128
+
+// qrPollSecretHeader carries the handshake's poll secret on poll requests.
+const qrPollSecretHeader = "X-QR-Poll-Secret"
 
 // ApproveQrLogin consumes a pending handshake and grants tokens signed for
 // the approving user.
