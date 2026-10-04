@@ -220,20 +220,28 @@ func (r *PostRepository) GetByIDWithViewer(id, viewerID int64) (*model.Post, err
 	return post, nil
 }
 
-// RecordView registers a view of a post. The total counter always increments;
-// unique views are tracked per (post, viewer_key) so repeat visits by the same
-// viewer do not inflate the unique count.
+// RecordView registers a view of a post. The unique-view row is the source of
+// truth: the total counter only increments when this viewer has not been seen
+// before for this post, so repeatedly hitting a public GET cannot inflate
+// view_count, and the insert is bounded by the number of distinct viewers
+// rather than by the number of requests.
 func (r *PostRepository) RecordView(postID int64, viewerKey string) error {
+	res, err := database.DB.Exec(
+		"INSERT INTO post_views (post_id, viewer_key) VALUES ($1, $2) ON CONFLICT (post_id, viewer_key) DO NOTHING",
+		postID, viewerKey,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to record unique view: %w", err)
+	}
+	// Only a genuinely new viewer moves the counter. RowsAffected is 0 when the
+	// (post_id, viewer_key) pair already existed.
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil
+	}
 	if _, err := database.DB.Exec(
 		"UPDATE posts SET view_count = view_count + 1 WHERE id = $1", postID,
 	); err != nil {
 		return fmt.Errorf("failed to increment view count: %w", err)
-	}
-	if _, err := database.DB.Exec(
-		"INSERT INTO post_views (post_id, viewer_key) VALUES ($1, $2) ON CONFLICT (post_id, viewer_key) DO NOTHING",
-		postID, viewerKey,
-	); err != nil {
-		return fmt.Errorf("failed to record unique view: %w", err)
 	}
 	return nil
 }
