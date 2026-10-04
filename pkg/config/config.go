@@ -4,8 +4,10 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -541,16 +543,65 @@ func (c *Config) ServicePort(name string) string {
 }
 
 // DatabaseURLFromEnv parses a DATABASE_URL environment variable.
-func (c *Config) DatabaseURLFromEnv(url string) {
-	// Simple parsing for postgres://user:pass@host:port/dbname format
-	// In production, use a proper URL parser
-	fmt.Sscanf(url, "postgres://%[^:]:%[^@]@%[^:]:%d/%s", &c.Database.User, &c.Database.Password, &c.Database.Host, &c.Database.Port, &c.Database.DBName)
+//
+// This previously used fmt.Sscanf with a pattern that stopped the password at
+// the first '@', so any password containing '@' (or ':' handling in the host)
+// silently produced the wrong credentials, and a non-numeric port failed to
+// scan and left the default in place without a word. A real URL parse handles
+// percent-encoding, IPv6 literals in brackets and credentials containing
+// reserved characters.
+func (c *Config) DatabaseURLFromEnv(raw string) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Scheme == "" {
+		// Not a URL we can parse: leave the config untouched rather than
+		// half-applying a partial parse.
+		return
+	}
+	if u.User != nil {
+		if name := u.User.Username(); name != "" {
+			c.Database.User = name
+		}
+		if pass, ok := u.User.Password(); ok {
+			c.Database.Password = pass
+		}
+	}
+	if host := u.Hostname(); host != "" {
+		c.Database.Host = host
+	}
+	if port := u.Port(); port != "" {
+		if p, convErr := strconv.Atoi(port); convErr == nil {
+			c.Database.Port = p
+		}
+	}
+	if db := strings.TrimPrefix(u.Path, "/"); db != "" {
+		c.Database.DBName = db
+	}
+	// Query parameters such as sslmode are honoured so a DATABASE_URL can
+	// express the transport requirement.
+	if mode := u.Query().Get("sslmode"); mode != "" {
+		c.Database.SSLMode = mode
+	}
 }
 
 // DSN returns the database connection string.
+//
+// Every component is percent-encoded: interpolating them raw meant a password
+// containing '@' truncated the host, and a dbname containing '?' could append
+// its own query parameters — including an sslmode that disables TLS, overriding
+// the configured transport. Escaping keeps each value inside its own slot.
 func (c *Config) DSN() string {
-	return fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
-		c.Database.User, c.Database.Password, c.Database.Host, c.Database.Port, c.Database.DBName, c.Database.SSLMode)
+	u := &url.URL{
+		Scheme: "postgres",
+		User:   url.UserPassword(c.Database.User, c.Database.Password),
+		Host:   net.JoinHostPort(c.Database.Host, strconv.Itoa(c.Database.Port)),
+		Path:   "/" + c.Database.DBName,
+	}
+	if c.Database.SSLMode != "" {
+		q := url.Values{}
+		q.Set("sslmode", c.Database.SSLMode)
+		u.RawQuery = q.Encode()
+	}
+	return u.String()
 }
 
 // Address returns the server address.

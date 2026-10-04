@@ -42,7 +42,12 @@ database:
   user: "postgres"
   password: "postgres"
   dbname: "openfield"
-  sslmode: "disable"
+  # TLS to PostgreSQL. Shipped as "disable" this made a fresh deployment talk to
+  # its database in cleartext, exposing credentials and data to anyone on the
+  # path. "require" is the safer default; use "verify-full" with a CA for
+  # protection against an active attacker. Set "disable" only for a database on
+  # loopback (the local development config does exactly that).
+  sslmode: "require"
   max_open_conns: 25
   max_idle_conns: 5
   # Force a full schema migration at startup. Historically only the account
