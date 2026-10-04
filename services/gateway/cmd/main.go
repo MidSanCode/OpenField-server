@@ -413,6 +413,10 @@ func main() {
 	}
 	r.Use(middleware.Recovery())
 	r.Use(logger.GinLogger())
+	// Transport/browser hardening. HSTS in particular must be sent by the API
+	// itself: without it a client that ever reaches the service over HTTP keeps
+	// doing so, leaving it open to downgrade attacks.
+	r.Use(middleware.SecurityHeaders())
 	// API domains whitelist (server.allowed_hosts): rejects requests whose
 	// Host header is not configured (e.g. api.a.com / api.b.com). No-op when
 	// the list is empty.

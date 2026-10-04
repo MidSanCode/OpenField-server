@@ -39,7 +39,14 @@ func CORS(cfg *config.Config) gin.HandlerFunc {
 
 	return func(c *gin.Context) {
 		origin := c.GetHeader("Origin")
-		allowAll := cfg.Server.AllowAllOrigins || len(allowedOrigins) == 0
+		// Only an explicit allow_all_origins turns on the wildcard. An empty
+		// allow-list used to mean the same thing, which made the safe-looking
+		// configuration (`allowed_origins: []`, the shipped example) permit
+		// every origin. Bearer tokens make that survivable today, but it is one
+		// switch to cookie auth away from a real hole, and it is not what the
+		// config appears to say. An empty list now allows only localhost
+		// development origins.
+		allowAll := cfg.Server.AllowAllOrigins
 
 		if origin != "" {
 			allowed := allowAll || localhostOrigin.MatchString(origin)
