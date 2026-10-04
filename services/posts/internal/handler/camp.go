@@ -333,6 +333,16 @@ func (h *CampHandler) Join(c *gin.Context) {
 		return
 	}
 	if camp == nil {
+		// A hidden camp is indistinguishable from a missing one to a
+		// non-member, matching Get/ListPosts/ListMembers.
+		c.JSON(http.StatusNotFound, gin.H{"error": "camp not found"})
+		return
+	}
+	// A hidden camp is invitation-only by design: its read paths all answer 404
+	// for non-members. Checking only DirectJoin here (which defaults to true)
+	// let any logged-in user join a hidden camp by enumerating its sequential
+	// id, and then read everything inside it.
+	if !camp.IsVisible {
 		c.JSON(http.StatusNotFound, gin.H{"error": "camp not found"})
 		return
 	}
