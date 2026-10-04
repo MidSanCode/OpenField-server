@@ -56,6 +56,48 @@ func (h *UserHandler) SetGameConfig(c config.GameConfig) {
 	h.gameCfg = c
 }
 
+// Pagination bounds for list endpoints. An unbounded limit lets a single
+// unauthenticated request pull an entire table into memory.
+const (
+	defaultPageLimit = 20
+	maxPageLimit     = 100
+)
+
+// clampLimit forces a client-supplied page size into [1, maxPageLimit].
+func clampLimit(limit int) int {
+	if limit <= 0 {
+		return defaultPageLimit
+	}
+	if limit > maxPageLimit {
+		return maxPageLimit
+	}
+	return limit
+}
+
+// clampPage forces a client-supplied page number to be at least 1.
+func clampPage(page int) int {
+	if page < 1 {
+		return 1
+	}
+	return page
+}
+
+// publicUsers projects users onto the public view, filling in the follow stats
+// each entry needs. Public list endpoints must never return raw model.User
+// rows, which carry email, oauth2_* and storage internals.
+func (h *UserHandler) publicUsers(users []model.User, requester int64) []model.PublicUser {
+	out := make([]model.PublicUser, 0, len(users))
+	for i := range users {
+		h.populateFollowStats(&users[i], requester)
+		pub := users[i].PublicView()
+		if requester == users[i].ID {
+			pub.Self = true
+		}
+		out = append(out, *pub)
+	}
+	return out
+}
+
 // requesterID returns the authenticated user id forwarded by the gateway, or 0
 // when the request is anonymous. Works for both protected (context) and public
 // (header) routes.
@@ -247,7 +289,11 @@ func (h *UserHandler) SetMyStorageBucket(c *gin.Context) {
 // SearchUsers searches users by username or nickname.
 func (h *UserHandler) SearchUsers(c *gin.Context) {
 	q := c.Query("q")
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	limit, err := strconv.Atoi(c.DefaultQuery("limit", strconv.Itoa(defaultPageLimit)))
+	if err != nil {
+		limit = defaultPageLimit
+	}
+	limit = clampLimit(limit)
 
 	users, err := h.userRepo.Search(q, limit)
 	if err != nil {
@@ -256,7 +302,7 @@ func (h *UserHandler) SearchUsers(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"users": users})
+	c.JSON(http.StatusOK, gin.H{"users": h.publicUsers(users, requesterID(c)), "limit": limit})
 }
 
 // UpdateProfile updates the current user's nickname and bio. The username
@@ -468,7 +514,14 @@ func (h *UserHandler) GetUser(c *gin.Context) {
 
 	h.populateFollowStats(user, requesterID(c))
 
-	c.JSON(http.StatusOK, user)
+	// This route is public: only the public projection may leave the service.
+	// Returning model.User here leaked email, oauth2_*, storage internals and
+	// moderation state to anonymous callers.
+	public := user.PublicView()
+	if requesterID(c) == user.ID {
+		public.Self = true
+	}
+	c.JSON(http.StatusOK, public)
 }
 
 // FollowUser makes the current user follow the target user.
@@ -507,7 +560,9 @@ func (h *UserHandler) FollowUser(c *gin.Context) {
 	}
 
 	h.populateFollowStats(target, followerID)
-	c.JSON(http.StatusOK, target)
+	// The target is another user: return only the public projection rather
+	// than the whole row (email, oauth2_*, storage internals).
+	c.JSON(http.StatusOK, target.PublicView())
 }
 
 // UnfollowUser makes the current user stop following the target user.
@@ -545,7 +600,8 @@ func (h *UserHandler) ListFollowers(c *gin.Context) {
 	}
 
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", strconv.Itoa(defaultPageLimit)))
+	page, limit = clampPage(page), clampLimit(limit)
 
 	users, err := h.followRepo.ListFollowers(userID, page, limit)
 	if err != nil {
@@ -555,11 +611,7 @@ func (h *UserHandler) ListFollowers(c *gin.Context) {
 	}
 
 	requester := requesterID(c)
-	for i := range users {
-		h.populateFollowStats(&users[i], requester)
-	}
-
-	c.JSON(http.StatusOK, gin.H{"users": users, "page": page, "limit": limit})
+	c.JSON(http.StatusOK, gin.H{"users": h.publicUsers(users, requester), "page": page, "limit": limit})
 }
 
 // ListFollowing returns the users the given user follows.
@@ -574,7 +626,8 @@ func (h *UserHandler) ListFollowing(c *gin.Context) {
 	}
 
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", strconv.Itoa(defaultPageLimit)))
+	page, limit = clampPage(page), clampLimit(limit)
 
 	users, err := h.followRepo.ListFollowing(userID, page, limit)
 	if err != nil {
@@ -584,11 +637,7 @@ func (h *UserHandler) ListFollowing(c *gin.Context) {
 	}
 
 	requester := requesterID(c)
-	for i := range users {
-		h.populateFollowStats(&users[i], requester)
-	}
-
-	c.JSON(http.StatusOK, gin.H{"users": users, "page": page, "limit": limit})
+	c.JSON(http.StatusOK, gin.H{"users": h.publicUsers(users, requester), "page": page, "limit": limit})
 }
 
 // ListFriends returns the users who mutually follow the given user.
@@ -603,7 +652,8 @@ func (h *UserHandler) ListFriends(c *gin.Context) {
 	}
 
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", strconv.Itoa(defaultPageLimit)))
+	page, limit = clampPage(page), clampLimit(limit)
 
 	users, err := h.followRepo.ListFriends(userID, page, limit)
 	if err != nil {
@@ -613,11 +663,7 @@ func (h *UserHandler) ListFriends(c *gin.Context) {
 	}
 
 	requester := requesterID(c)
-	for i := range users {
-		h.populateFollowStats(&users[i], requester)
-	}
-
-	c.JSON(http.StatusOK, gin.H{"users": users, "page": page, "limit": limit})
+	c.JSON(http.StatusOK, gin.H{"users": h.publicUsers(users, requester), "page": page, "limit": limit})
 }
 
 // followListVisible verifies the requester may read userID's follow lists. A

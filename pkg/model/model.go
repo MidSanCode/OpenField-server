@@ -136,6 +136,84 @@ type User struct {
 	Online bool `json:"online,omitempty"`
 }
 
+// PublicUser is the subset of a user that may be shown to anyone, including
+// anonymous callers: it deliberately omits credentials, contact details,
+// identity-provider subject identifiers, storage internals, moderation state
+// and presence timestamps.
+//
+// Never serialize model.User straight to a public endpoint: it carries every
+// private column, and adding a new column would silently start leaking it.
+type PublicUser struct {
+	ID        int64  `json:"id"`
+	Username  string `json:"username"`
+	Nickname  string `json:"nickname"`
+	AvatarURL string `json:"avatar_url"`
+	BannerURL string `json:"banner_url,omitempty"`
+	Bio       string `json:"bio,omitempty"`
+	// Role is the coarse legacy label ("user"/"admin"). It is not a
+	// security boundary — authorization comes from user_groups — but it is
+	// already rendered in the UI and reveals nothing sensitive.
+	Role       string `json:"role,omitempty"`
+	IsVerified bool   `json:"is_verified"`
+	// Exp/Level are the public gamification counters shown on profiles.
+	Exp   int64 `json:"exp,omitempty"`
+	Level int   `json:"level,omitempty"`
+	// MemberLevel is the purchased membership tier, shown as a badge.
+	MemberLevel int64 `json:"member_level,omitempty"`
+	// Cosmetic name styling, applied wherever the name is rendered.
+	NameColor             string        `json:"name_color,omitempty"`
+	NameColorTo           string        `json:"name_color_to,omitempty"`
+	NameDynamic           bool          `json:"name_dynamic,omitempty"`
+	NameColors            NameColorList `json:"name_colors,omitempty"`
+	NameGradientDirection string        `json:"name_gradient_direction,omitempty"`
+	AvatarFrame           string        `json:"avatar_frame,omitempty"`
+	IsBot                 bool          `json:"is_bot,omitempty"`
+	CheckinStreak         int64         `json:"checkin_streak,omitempty"`
+	// Follow counts and viewer-relative flags, populated on profile reads.
+	FollowerCount   int64 `json:"follower_count,omitempty"`
+	FollowingCount  int64 `json:"following_count,omitempty"`
+	HideFollowLists bool  `json:"hide_follow_lists,omitempty"`
+	IsFollowing     bool  `json:"is_following,omitempty"`
+	IsFriend        bool  `json:"is_friend,omitempty"`
+	// Self is true when the caller is this user, so a client knows the
+	// payload is the public projection of its own account.
+	Self bool `json:"self,omitempty"`
+}
+
+// PublicView projects the user onto the fields any caller may see. It returns
+// nil for a nil user so callers can use it directly on lookup results.
+func (u *User) PublicView() *PublicUser {
+	if u == nil {
+		return nil
+	}
+	return &PublicUser{
+		ID:                    u.ID,
+		Username:              u.Username,
+		Nickname:              u.Nickname,
+		AvatarURL:             u.AvatarURL,
+		BannerURL:             u.BannerURL,
+		Bio:                   u.Bio,
+		Role:                  u.Role,
+		IsVerified:            u.IsVerified,
+		Exp:                   u.Exp,
+		Level:                 u.Level,
+		MemberLevel:           u.MemberLevel,
+		NameColor:             u.NameColor,
+		NameColorTo:           u.NameColorTo,
+		NameDynamic:           u.NameDynamic,
+		NameColors:            u.NameColors,
+		NameGradientDirection: u.NameGradientDirection,
+		AvatarFrame:           u.AvatarFrame,
+		IsBot:                 u.IsBot,
+		CheckinStreak:         u.CheckinStreak,
+		FollowerCount:         u.FollowerCount,
+		FollowingCount:        u.FollowingCount,
+		HideFollowLists:       u.HideFollowLists,
+		IsFollowing:           u.IsFollowing,
+		IsFriend:              u.IsFriend,
+	}
+}
+
 // Post represents a text post with optional attachments.
 type Post struct {
 	ID          int64     `json:"id"`
