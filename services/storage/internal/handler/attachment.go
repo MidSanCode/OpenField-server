@@ -54,6 +54,15 @@ func NewAttachmentHandler(store *storage.Manager, cfg config.StorageConfig) *Att
 	}
 }
 
+// Column widths from the attachments schema. Values longer than these make the
+// INSERT fail ("value too long"), which used to strand the already-uploaded
+// object in the bucket with no row pointing at it.
+const (
+	maxVisibilityLen   = 20
+	maxMimeTypeLen     = 100
+	maxOriginalNameLen = 255
+)
+
 // effectiveQuota returns the byte budget applied to a user, including the
 // membership storage bonus on the default bucket. Shared by the cheap
 // pre-check and the authoritative transactional check so the two cannot
@@ -211,6 +220,22 @@ func (h *AttachmentHandler) Upload(c *gin.Context) {
 	visibility := c.PostForm("visibility")
 	if visibility == "" {
 		visibility = "public"
+	}
+	// These land in fixed-width columns. Without a length check an oversized
+	// value makes the INSERT fail after the object is already in the bucket,
+	// which is exactly how orphan objects were produced; rejecting up front is
+	// both cheaper and clearer than a 500.
+	if len(visibility) > maxVisibilityLen {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid visibility"})
+		return
+	}
+	if len(contentType) > maxMimeTypeLen {
+		c.JSON(http.StatusUnsupportedMediaType, gin.H{"error": "content type is too long"})
+		return
+	}
+	if len(header.Filename) > maxOriginalNameLen {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "filename is too long"})
+		return
 	}
 
 	data, err := io.ReadAll(file)

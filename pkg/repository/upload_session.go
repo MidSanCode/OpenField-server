@@ -53,12 +53,34 @@ func DeleteUploadSession(uploadID string) error {
 }
 
 // PurgeStaleUploadSessions removes sessions older than maxAge whose chunks were
-// never completed. The orphaned chunk objects are cleaned by the storage
-// lifecycle rules; this only keeps the table tidy and frees the quota slot.
-func PurgeStaleUploadSessions(maxAge time.Duration) error {
-	_, err := database.DB.Exec(
-		"DELETE FROM upload_sessions WHERE created_at < NOW() - ($1 || ' seconds')::interval",
+// never completed. It returns the purged sessions so the caller can delete the
+// chunk OBJECTS too: those never enter the attachments table, so they are
+// invisible to quota accounting and to every cleanup path that works from the
+// database. The previous version deleted only the rows and relied on bucket
+// lifecycle rules that this repository never configures, so abandoned chunks
+// accumulated forever.
+func PurgeStaleUploadSessions(maxAge time.Duration) ([]UploadSession, error) {
+	rows, err := database.DB.Query(
+		`DELETE FROM upload_sessions
+		  WHERE created_at < NOW() - ($1 || ' seconds')::interval
+		  RETURNING upload_id, user_id, bucket, total_chunks, size_bytes, created_at`,
 		int(maxAge.Seconds()),
 	)
-	return err
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	purged := make([]UploadSession, 0)
+	for rows.Next() {
+		var s UploadSession
+		if err := rows.Scan(&s.UploadID, &s.UserID, &s.Bucket, &s.TotalChunks, &s.SizeBytes, &s.CreatedAt); err != nil {
+			return nil, err
+		}
+		purged = append(purged, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return purged, nil
 }

@@ -52,15 +52,36 @@ func main() {
 
 	attHandler := handler.NewAttachmentHandler(store, cfg.Storage)
 
-	// Background sweeper: drop abandoned chunked-upload sessions so dead
-	// sessions do not accumulate. The chunk objects themselves are removed on
-	// completion; leftovers are harmless temp objects.
+	// Background sweeper: drop abandoned chunked-upload sessions AND the chunk
+	// objects they left behind. Those objects never reach the attachments
+	// table, so they are absent from quota accounting and from every cleanup
+	// path that walks the database — without this they accumulate forever.
 	go func() {
 		ticker := time.NewTicker(6 * time.Hour)
 		defer ticker.Stop()
 		for range ticker.C {
-			if err := repository.PurgeStaleUploadSessions(24 * time.Hour); err != nil {
+			purged, err := repository.PurgeStaleUploadSessions(24 * time.Hour)
+			if err != nil {
 				logger.Log.Error("failed to purge stale upload sessions", "error", err)
+				continue
+			}
+			for _, s := range purged {
+				bucketStore := store.For(s.Bucket)
+				if bucketStore == nil || !bucketStore.Enabled() {
+					bucketStore = store.Default()
+				}
+				if bucketStore == nil || !bucketStore.Enabled() {
+					continue
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+				if delErr := bucketStore.DeleteChunks(ctx, s.UserID, s.UploadID); delErr != nil {
+					logger.Log.Warn("failed to delete chunks of stale session",
+						"error", delErr, "upload_id", s.UploadID, "user_id", s.UserID)
+				}
+				cancel()
+			}
+			if len(purged) > 0 {
+				logger.Log.Info("purged stale upload sessions", "count", len(purged))
 			}
 		}
 	}()
