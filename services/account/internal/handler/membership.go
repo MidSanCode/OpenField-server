@@ -10,7 +10,6 @@ import (
 	"github.com/openfield/server/pkg/logger"
 	"github.com/openfield/server/pkg/middleware"
 	"github.com/openfield/server/pkg/repository"
-	"github.com/openfield/server/pkg/security"
 )
 
 // MembershipHandler handles the membership catalog, wallet purchases and admin
@@ -72,12 +71,9 @@ func (h *MembershipHandler) Purchase(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load payment pin"})
 		return
 	}
-	if pinHash == "" {
-		c.JSON(http.StatusForbidden, gin.H{"error": "payment pin not set"})
-		return
-	}
-	if !security.VerifyPin(req.Pin, pinHash) {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid payment pin"})
+	// Shares the per-user PIN budget with /pin/verify and transfers; without
+	// this the 6-digit PIN could be brute-forced through this endpoint.
+	if !checkPaymentPin(c, userID, req.Pin, pinHash) {
 		return
 	}
 
@@ -148,8 +144,8 @@ func (h *MembershipHandler) SetAutoRenew(c *gin.Context) {
 			c.JSON(http.StatusForbidden, gin.H{"error": "payment pin not set"})
 			return
 		}
-		if !security.VerifyPin(req.Pin, pinHash) {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid payment pin"})
+		// Same shared PIN budget as every other payment-PIN check.
+		if !checkPaymentPin(c, userID, req.Pin, pinHash) {
 			return
 		}
 	}

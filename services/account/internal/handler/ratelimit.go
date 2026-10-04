@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/openfield/server/pkg/ratelimit"
+	"github.com/openfield/server/pkg/security"
 )
 
 // Brute-force protection budgets.
@@ -52,6 +53,34 @@ func clientAddress(c *gin.Context) string {
 // user, so lockouts from /pin/verify also protect outgoing transfers.
 func pinAttemptKey(userID int64) string {
 	return "pin:" + itoa64(userID)
+}
+
+// checkPaymentPin applies the shared per-user PIN budget to a payment-PIN
+// check and reports whether the caller may proceed.
+//
+// Every entry point that verifies a payment PIN must go through this, because
+// the 6-digit keyspace is small enough to exhaust online: a call site that
+// calls security.VerifyPin directly gives an attacker unlimited guesses. When
+// it returns false the response has already been written.
+//
+// pinHash is the stored hash ("" when the user has not set a PIN).
+func checkPaymentPin(c *gin.Context, userID int64, pin, pinHash string) bool {
+	pinKey := pinAttemptKey(userID)
+	if retry := pinLimiter.RetryAfter(pinKey); retry > 0 {
+		lockedResponse(c, retry)
+		return false
+	}
+	if pinHash == "" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "payment pin not set"})
+		return false
+	}
+	if !security.VerifyPin(pin, pinHash) {
+		pinLimiter.Fail(pinKey)
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid payment pin"})
+		return false
+	}
+	pinLimiter.Reset(pinKey)
+	return true
 }
 
 func itoa64(n int64) string {
