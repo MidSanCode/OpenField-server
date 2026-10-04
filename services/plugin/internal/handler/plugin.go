@@ -18,7 +18,27 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/openfield/server/pkg/database"
+	"github.com/openfield/server/pkg/logger"
 )
+
+// withinDataDir reports whether path resolves inside dir. Used before deleting
+// a superseded bundle so a malformed or tampered file_path column can never
+// make the service unlink a file outside its own directory.
+func withinDataDir(dir, path string) bool {
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return false
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(absDir, absPath)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
+}
 
 const (
 	maxBundleBytes = 5 << 20 // 5 MB plugin bundle cap
@@ -215,22 +235,42 @@ func (h *PluginHandler) Upload(c *gin.Context) {
 	perms, _ := json.Marshal(m.Permissions)
 	publish := c.PostForm("publish") == "true"
 
+	// The bundle filename embeds the version, while the table keeps one row per
+	// plugin id. Uploading a new version therefore leaves the previous file
+	// behind at its own path with nothing referencing it, and since there is no
+	// cleanup, every re-upload leaked a zip permanently. Read the old path
+	// first so it can be removed once the new row is committed.
+	var previousPath string
+	if err := db().QueryRow(`SELECT file_path FROM plugins WHERE id = $1`, m.ID).Scan(&previousPath); err != nil && err != sql.ErrNoRows {
+		logger.Log.Warn("failed to read previous plugin path", "error", err, "plugin_id", m.ID)
+	}
+
 	_, err = db().Exec(`
 		INSERT INTO plugins (id, name, version, author, description, permissions,
 			min_app_version, entry, file_path, file_size, sha256, verified, published)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,TRUE,$12)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,FALSE,$12)
 		ON CONFLICT (id) DO UPDATE SET
 			name = EXCLUDED.name, version = EXCLUDED.version, author = EXCLUDED.author,
 			description = EXCLUDED.description, permissions = EXCLUDED.permissions,
 			min_app_version = EXCLUDED.min_app_version, entry = EXCLUDED.entry,
 			file_path = EXCLUDED.file_path, file_size = EXCLUDED.file_size,
-			sha256 = EXCLUDED.sha256, verified = TRUE, published = EXCLUDED.published,
+			sha256 = EXCLUDED.sha256, published = EXCLUDED.published,
 			updated_at = NOW()`,
 		m.ID, m.Name, m.Version, m.Author, m.Description, string(perms),
 		m.MinAppVersion, m.Entry, dstPath, len(buf), shaHex, publish)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save plugin"})
 		return
+	}
+
+	// Only now that the row points at the new file is it safe to drop the old
+	// one. Guard against removing the file we just wrote, which happens when
+	// the same version is re-uploaded, and refuse to touch anything outside the
+	// plugin directory.
+	if previousPath != "" && previousPath != dstPath && withinDataDir(h.dataDir, previousPath) {
+		if rmErr := os.Remove(previousPath); rmErr != nil && !os.IsNotExist(rmErr) {
+			logger.Log.Warn("failed to remove superseded plugin bundle", "error", rmErr, "path", previousPath)
+		}
 	}
 
 	_ = entryCode // validated above; kept for future server-side linting
