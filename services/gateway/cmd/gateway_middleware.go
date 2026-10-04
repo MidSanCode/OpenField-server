@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -42,11 +43,38 @@ func newRateLimiter() *rateLimiter {
 	return rl
 }
 
-// middleware returns the gin middleware enforcing the limit. The real client
-// IP comes from gin's ClientIP (honors trusted proxies).
+// clientKey returns the bucket key for a request: the real TCP peer address,
+// never a value taken from a client-supplied header.
+//
+// c.ClientIP() is only trustworthy once trusted proxies are configured, and
+// even then it reflects the left-most X-Forwarded-For entry when the peer is
+// trusted — which is exactly the entry a client can forge when the gateway is
+// exposed directly. Keying the limiter on the socket peer keeps the bucket
+// unspoofable; a legitimate reverse proxy in front of the gateway collapses
+// all clients onto one bucket, which is why deployments behind a proxy should
+// set server.trusted_proxies and let resolveClientIP handle XFF.
+func (rl *rateLimiter) clientKey(c *gin.Context) string {
+	if c.Request == nil {
+		return "unknown"
+	}
+	return gatewayPeerIP(c.Request)
+}
+
+// gatewayPeerIP extracts the remote address of the TCP peer without consulting
+// any header.
+func gatewayPeerIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
+// middleware returns the gin middleware enforcing the limit. The bucket key is
+// the real TCP peer address.
 func (rl *rateLimiter) middleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		ip := c.ClientIP()
+		ip := rl.clientKey(c)
 		rl.mu.Lock()
 		entry, ok := rl.visitors[ip]
 		if !ok {

@@ -391,6 +391,23 @@ func main() {
 	}
 
 	r := gin.New()
+	// gin trusts every proxy by default (TrustedProxies = 0.0.0.0/0, ::/0),
+	// which makes c.ClientIP() return the left-most X-Forwarded-For value —
+	// a header the client controls. That let an attacker rotate a fake XFF
+	// per request and land in a fresh rate-limit bucket every time, and it
+	// also poisoned the source IP recorded in access logs.
+	//
+	// Default to trusting nothing so ClientIP() is the real TCP peer. Setting
+	// server.trusted_proxies (CIDRs) opts into honoring XFF, but only when
+	// the immediate peer is one of those proxies.
+	if len(cfg.Server.TrustedProxies) > 0 {
+		if err := r.SetTrustedProxies(cfg.Server.TrustedProxies); err != nil {
+			log.Fatalf("invalid server.trusted_proxies: %v", err)
+		}
+		logger.Log.Info("trusting forwarded headers from proxies", "cidrs", cfg.Server.TrustedProxies)
+	} else if err := r.SetTrustedProxies(nil); err != nil {
+		log.Fatalf("failed to configure trusted proxies: %v", err)
+	}
 	r.Use(middleware.Recovery())
 	r.Use(logger.GinLogger())
 	// API domains whitelist (server.allowed_hosts): rejects requests whose
@@ -535,6 +552,16 @@ func main() {
 		} else {
 			c.Request.Header.Del(middleware.UserIDHeader)
 			c.Request.Header.Del(middleware.UserNeedsRegHeader)
+		}
+		// Rewrite the client-address headers before proxying so backends see
+		// a trustworthy value. httputil.ReverseProxy only *appends* to
+		// X-Forwarded-For, so a forged entry sent by the client would survive
+		// and sit to the left of the real peer. Backends read the last hop
+		// (see services/account .../ratelimit.go clientAddress), so replacing
+		// the header with the real peer keeps that contract honest.
+		c.Request.Header.Set("X-Forwarded-For", gatewayPeerIP(c.Request))
+		if c.Request.Header.Get("X-Real-IP") != "" {
+			c.Request.Header.Set("X-Real-IP", gatewayPeerIP(c.Request))
 		}
 		// Ensure the request path keeps the full /api/v1 prefix.
 		best.proxy.ServeHTTP(c.Writer, c.Request)

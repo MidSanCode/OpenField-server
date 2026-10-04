@@ -16,6 +16,12 @@ server:
   # with an unexpected Host header and to accept those hosts as CORS origins
   # automatically. Leave empty to accept any host (development default).
   allowed_hosts: []
+  # Reverse proxies whose X-Forwarded-For header the gateway should trust,
+  # as CIDRs (e.g. ["10.0.0.0/8", "172.16.0.0/12"]). Leave empty when the
+  # gateway is exposed directly: an empty list trusts no proxy, so client
+  # IPs used for rate limiting, logging and IP bans cannot be spoofed with a
+  # forged header. Set this ONLY to the networks you actually control.
+  trusted_proxies: []
 
 # Internal microservice addresses (used by the gateway to route requests)
 services:

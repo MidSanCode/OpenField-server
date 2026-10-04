@@ -25,6 +25,14 @@ type ServerConfig struct {
 	// the API directly on its own domain. Empty keeps today's behavior of
 	// accepting any host.
 	AllowedHosts []string `yaml:"allowed_hosts"`
+	// TrustedProxies lists the CIDRs of reverse proxies sitting in front of
+	// the gateway. X-Forwarded-For is only honored when the immediate TCP
+	// peer falls inside one of these ranges; otherwise the header is ignored
+	// and the real socket peer is used for rate limiting, logging and
+	// auditing. Empty (the default) trusts no proxy at all — correct for a
+	// directly exposed gateway, and the safe choice when unsure, because it
+	// makes client-supplied XFF headers unusable for spoofing.
+	TrustedProxies []string `yaml:"trusted_proxies"`
 }
 
 // DatabaseConfig holds database configuration.
@@ -374,6 +382,20 @@ func (c *Config) validateSecrets() error {
 	return nil
 }
 
+// splitTrimmed splits a comma-separated list, trimming surrounding whitespace
+// and dropping empty entries. CIDR lists are whitespace-sensitive, so entries
+// like "10.0.0.0/8, 172.16.0.0/12" must not keep a leading space.
+func splitTrimmed(v string) []string {
+	parts := strings.Split(v, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // overrideFromEnv overrides config values with environment variables if they are set.
 func (c *Config) overrideFromEnv() {
 	if v := os.Getenv("SERVER_PORT"); v != "" {
@@ -387,6 +409,9 @@ func (c *Config) overrideFromEnv() {
 	}
 	if v := os.Getenv("ALLOWED_HOSTS"); v != "" {
 		c.Server.AllowedHosts = strings.Split(v, ",")
+	}
+	if v := os.Getenv("TRUSTED_PROXIES"); v != "" {
+		c.Server.TrustedProxies = splitTrimmed(v)
 	}
 	if v := os.Getenv("DATABASE_URL"); v != "" {
 		// Parse DATABASE_URL if provided (format: postgres://user:pass@host:port/dbname)
