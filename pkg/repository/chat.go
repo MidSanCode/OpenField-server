@@ -411,14 +411,36 @@ func (r *ConversationRepository) AddMember(conversationID, userID, addedBy int64
 	return nil
 }
 
-// RemoveMember removes a member from a conversation.
+// RemoveMember removes a member from a conversation. The owner is never
+// removable: losing their membership row would lock them out of every
+// owner-only operation on their own group. Returns ErrForbidden when the
+// target is the owner, and ErrNotFound when there was nothing to remove.
 func (r *ConversationRepository) RemoveMember(conversationID, userID int64) error {
-	_, err := database.DB.Exec(
-		"DELETE FROM conversation_members WHERE conversation_id = $1 AND user_id = $2",
+	res, err := database.DB.Exec(
+		"DELETE FROM conversation_members WHERE conversation_id = $1 AND user_id = $2 AND role <> 'owner'",
 		conversationID, userID,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to remove member: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		// Either the target is the owner (excluded above) or not a member.
+		// Distinguish so callers can report the right status.
+		var role string
+		err := database.DB.QueryRow(
+			"SELECT role FROM conversation_members WHERE conversation_id = $1 AND user_id = $2",
+			conversationID, userID,
+		).Scan(&role)
+		if err == sql.ErrNoRows {
+			return ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("failed to inspect member: %w", err)
+		}
+		if role == "owner" {
+			return ErrForbidden
+		}
+		return ErrNotFound
 	}
 	return nil
 }

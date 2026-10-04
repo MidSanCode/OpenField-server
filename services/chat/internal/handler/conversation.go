@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -586,9 +587,37 @@ func (h *ConversationHandler) RemoveMember(c *gin.Context) {
 		return
 	}
 
+	// Check the TARGET's role, not just the actor's (mirroring MuteMember).
+	// Removing the owner would take away their membership, and every
+	// owner-only operation (title, settings, avatar, delete, roles) requires
+	// GetMember(...).Role == "owner" — so the owner would be permanently
+	// locked out of their own group while the admin kept it.
+	target, err := h.convRepo.GetMember(convID, targetID)
+	if err != nil || target == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "member not found"})
+		return
+	}
+	if target.Role == "owner" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "cannot remove the group owner"})
+		return
+	}
+	if actor.Role == "admin" && target.Role == "admin" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "admins cannot remove other admins"})
+		return
+	}
+
 	if err := h.convRepo.RemoveMember(convID, targetID); err != nil {
-		logger.Log.Error("failed to remove member", "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to remove member"})
+		// The repository enforces the same rules in SQL; surface them
+		// faithfully rather than reporting a generic failure.
+		switch {
+		case errors.Is(err, repository.ErrForbidden):
+			c.JSON(http.StatusBadRequest, gin.H{"error": "cannot remove the group owner"})
+		case errors.Is(err, repository.ErrNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": "member not found"})
+		default:
+			logger.Log.Error("failed to remove member", "error", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to remove member"})
+		}
 		return
 	}
 
