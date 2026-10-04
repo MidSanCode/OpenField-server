@@ -669,6 +669,24 @@ func (r *ConversationRepository) PutE2EEKeys(conversationID int64, envelopes map
 	version++
 
 	for targetUserID, ciphertext := range envelopes {
+		// Every envelope must address a current member of THIS conversation.
+		// Without this check a member could store an envelope for an arbitrary
+		// user id, which let an attacker seed a row for a victim in their own
+		// conversation and then rely on the unfiltered outer query to harvest
+		// that victim's envelopes from every other conversation.
+		var isMember bool
+		if err := tx.QueryRow(
+			`SELECT EXISTS (
+			   SELECT 1 FROM conversation_members
+			    WHERE conversation_id = $1 AND user_id = $2 AND status = 'active'
+			 )`,
+			conversationID, targetUserID,
+		).Scan(&isMember); err != nil {
+			return 0, fmt.Errorf("failed to verify e2ee target membership: %w", err)
+		}
+		if !isMember {
+			return 0, ErrForbidden
+		}
 		if _, err := tx.Exec(
 			"INSERT INTO conversation_e2ee_keys (conversation_id, version, target_user_id, ciphertext) VALUES ($1, $2, $3, $4)",
 			conversationID, version, targetUserID, ciphertext,
@@ -695,7 +713,8 @@ func (r *ConversationRepository) ListE2EEKeyEnvelopes(conversationID int64) ([]m
 		   FROM conversation_e2ee_keys
 		   WHERE conversation_id = $1
 		   GROUP BY target_user_id
-		 ) latest ON latest.target_user_id = e.target_user_id AND latest.version = e.version`,
+		 ) latest ON latest.target_user_id = e.target_user_id AND latest.version = e.version
+		 WHERE e.conversation_id = $1`,
 		conversationID,
 	)
 	if err != nil {

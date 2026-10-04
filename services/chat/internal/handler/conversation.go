@@ -1317,6 +1317,14 @@ func (h *ConversationHandler) PutE2EEKeys(c *gin.Context) {
 
 	version, err := h.convRepo.PutE2EEKeys(convID, req.Envelopes)
 	if err != nil {
+		// The repository refuses an envelope addressed to someone who is not an
+		// active member of this conversation.
+		if errors.Is(err, repository.ErrForbidden) {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "every envelope must target an active member of this conversation",
+			})
+			return
+		}
 		logger.Log.Error("failed to store e2ee keys", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to store e2ee keys"})
 		return
