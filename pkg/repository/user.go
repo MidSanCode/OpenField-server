@@ -61,9 +61,16 @@ func (r *UserRepository) GetByUsername(username string) (*model.User, error) {
 	return user, nil
 }
 
-// GetByEmail retrieves a user by email.
+// GetByEmail retrieves a user by email. Matching is case-insensitive (email
+// addresses are in practice) and excludes soft-deleted accounts, mirroring the
+// users_email_lower_key unique index so this lookup can never be ambiguous.
+// The ORDER BY is a belt-and-braces determinism guard for databases that still
+// carry duplicate addresses from before that index existed.
 func (r *UserRepository) GetByEmail(email string) (*model.User, error) {
-	user, err := scanUser(database.DB.QueryRow("SELECT "+userColumns+" FROM users WHERE email = $1", email))
+	user, err := scanUser(database.DB.QueryRow(
+		"SELECT "+userColumns+" FROM users WHERE LOWER(email) = LOWER($1) AND deleted_at IS NULL ORDER BY id LIMIT 1",
+		email,
+	))
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}

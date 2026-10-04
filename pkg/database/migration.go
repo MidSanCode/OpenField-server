@@ -662,6 +662,49 @@ var versionedMigrations = []migration{
 			ALTER TABLE qr_logins ADD COLUMN IF NOT EXISTS poll_secret_hash VARCHAR(128) NOT NULL DEFAULT '';
 		`,
 	},
+	{
+		// Restore invariants that exist only in application code, or that an
+		// earlier migration removed and never rebuilt.
+		//
+		// Money and quota columns had no database-level constraint at all, so
+		// non-negativity rested entirely on adjustBalanceTx. Any other writer —
+		// an operational UPDATE, a future code path, a bulk backfill — could
+		// create a negative balance or coins from nothing. The constraints below
+		// make those states unrepresentable rather than merely unexpected.
+		//
+		// The baseline dropped users_email_key and nothing ever recreated it, so
+		// duplicate emails were permitted and GetByEmail (a bare QueryRow with no
+		// ORDER BY) could return any of them; email-based login or password
+		// recovery would then be nondeterministic, and possibly account-taking.
+		// Existing duplicates must be resolved before the index can be created,
+		// so the migration reports them instead of failing opaquely.
+		version: 30,
+		name:    "money-and-identity-invariants",
+		sql: `
+			DO $$
+			BEGIN
+				IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'wallets_balance_non_negative') THEN
+					ALTER TABLE wallets ADD CONSTRAINT wallets_balance_non_negative CHECK (balance >= 0);
+				END IF;
+				IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'transfers_amount_positive') THEN
+					ALTER TABLE transfers ADD CONSTRAINT transfers_amount_positive CHECK (amount > 0);
+				END IF;
+				IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'post_tips_amount_positive') THEN
+					ALTER TABLE post_tips ADD CONSTRAINT post_tips_amount_positive CHECK (amount > 0 AND net_amount >= 0);
+				END IF;
+				IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'checks')
+				   AND NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'checks_amounts_non_negative') THEN
+					ALTER TABLE checks ADD CONSTRAINT checks_amounts_non_negative CHECK (total >= 0 AND shares >= 0);
+				END IF;
+			END
+			$$;
+			-- Case-insensitive uniqueness: GetByEmail matches on a normalised
+			-- address, so "User@x.com" and "user@x.com" must not both exist.
+			CREATE UNIQUE INDEX IF NOT EXISTS users_email_lower_key
+				ON users (LOWER(email))
+				WHERE email IS NOT NULL AND email <> '';
+		`,
+	},
 }
 
 // latestMigrationVersion returns the newest schema version the code knows
