@@ -1068,6 +1068,25 @@ func (h *PostHandler) CreateReply(c *gin.Context) {
 		return
 	}
 
+	// A parent_id must name an existing, non-deleted reply on THIS post and be
+	// visible to the caller. It was previously passed straight to the INSERT, so
+	// a reply could cite any reply id anywhere: notifyReplyCreated then delivers
+	// an inbox notification and a realtime event to that reply's author, giving
+	// anyone a way to send notifications to arbitrary users and to probe which
+	// reply ids exist.
+	if req.ParentID != nil {
+		parent, pErr := h.replyRepo.GetByID(*req.ParentID)
+		if pErr != nil {
+			logger.Log.Error("failed to load parent reply", "error", pErr)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create reply"})
+			return
+		}
+		if parent == nil || parent.PostID != postID || parent.DeletedAt != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "parent reply does not belong to this post"})
+			return
+		}
+	}
+
 	reply, err := h.replyRepo.Create(postID, userID, req.Content, req.ParentID, req.AttachmentIDs)
 	if err != nil {
 		logger.Log.Error("failed to create reply", "error", err)
