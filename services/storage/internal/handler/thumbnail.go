@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"fmt"
 	"image"
 	"image/gif"
 	"image/jpeg"
@@ -20,6 +21,42 @@ const maxThumbDim = 512
 // stripped on upload. Larger uploads keep their bytes untouched (the thumbnail
 // still discards all metadata).
 const maxStripReadBytes = 64 * 1024 * 1024
+
+// maxImagePixels bounds the decoded pixel count of any image we are willing to
+// decode. The byte limits above bound only the COMPRESSED size, while decode
+// memory is decided by the dimensions declared in the header: a few-hundred-KB
+// PNG whose IHDR claims 60000x60000 makes png.Decode allocate ~14GB. The Go
+// decoders check for overflow but impose no absolute pixel ceiling, and the mime
+// type that selects the decoder comes from the client. 50 MP comfortably covers
+// a 8000x6000 camera photo while refusing a bomb.
+const maxImagePixels = 50_000_000
+
+// maxImageDim additionally rejects an extreme aspect ratio that would keep the
+// pixel product under the cap while still allocating a huge single row.
+const maxImageDim = 20_000
+
+// checkImageDimensions reads only the header and rejects an image whose
+// declared size would make decoding allocate an unreasonable amount of memory.
+// It must be called BEFORE the full decode, because that is what allocates.
+func checkImageDimensions(data []byte, mimeType string) error {
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		// An unreadable header is not necessarily fatal here: fall through and
+		// let the real decode produce the authoritative error. The pixel guard
+		// only needs to succeed when the header IS readable.
+		return nil
+	}
+	if cfg.Width <= 0 || cfg.Height <= 0 {
+		return fmt.Errorf("image has invalid dimensions %dx%d", cfg.Width, cfg.Height)
+	}
+	if cfg.Width > maxImageDim || cfg.Height > maxImageDim {
+		return fmt.Errorf("image dimensions %dx%d exceed the %d px limit", cfg.Width, cfg.Height, maxImageDim)
+	}
+	if cfg.Width*cfg.Height > maxImagePixels {
+		return fmt.Errorf("image has too many pixels (%dx%d)", cfg.Width, cfg.Height)
+	}
+	return nil
+}
 
 // decodeImage decodes an image based on its mime type, with PNG fallback.
 func decodeImage(r io.Reader, mimeType string) (image.Image, error) {
@@ -52,6 +89,11 @@ func isImageMime(mimeType string) bool {
 // generateThumbnail downscales an image to at most maxThumbDim on its longest
 // edge and encodes it as JPEG. Returns nil if the input cannot be decoded.
 func generateThumbnail(data []byte, mimeType string) ([]byte, error) {
+	// Reject an oversized image BEFORE decoding, which is where the memory is
+	// allocated.
+	if err := checkImageDimensions(data, mimeType); err != nil {
+		return nil, err
+	}
 	img, err := decodeImage(bytes.NewReader(data), mimeType)
 	if err != nil {
 		return nil, err
@@ -109,6 +151,9 @@ const maxPreviewDim = 1440
 // is a uniformly light rendition, and JPEG quality 82 alone typically halves
 // a camera original. Returns nil if the input cannot be decoded.
 func generatePreview(data []byte, mimeType string) ([]byte, error) {
+	if err := checkImageDimensions(data, mimeType); err != nil {
+		return nil, err
+	}
 	img, err := decodeImage(bytes.NewReader(data), mimeType)
 	if err != nil {
 		return nil, err
