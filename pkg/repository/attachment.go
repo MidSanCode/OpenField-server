@@ -325,16 +325,38 @@ func (r *AttachmentRepository) DeleteByID(id int64) error {
 }
 
 // ArmBurn stamps the burn-after-view deadline of an attachment the first time
-// someone OTHER than the uploader views it. The conditional UPDATE makes the
-// arm idempotent and race-safe: concurrent viewers collapse into one stamp.
+// a recipient OTHER than the uploader views it. The conditional UPDATE makes
+// the arm idempotent and race-safe: concurrent viewers collapse into one stamp.
+//
+// Only a genuine recipient may arm a burn. The caller must be a member of the
+// conversation carrying a burn-after-view message that includes this
+// attachment, and must not be that message's sender. Earlier versions checked
+// only "this attachment is not mine", which let any authenticated user walk
+// attachment ids and irreversibly destroy other people's files.
+//
 // Returns the (possibly pre-existing) burn_at. When the attachment does not
-// exist, or belongs to the caller (the uploader never triggers the burn), the
-// returned found flag is false.
+// exist, is not part of a burn message addressed to the caller, or belongs to
+// the caller, the returned found flag is false.
 func (r *AttachmentRepository) ArmBurn(id, viewerID int64, burnSeconds int) (burnAt *time.Time, found bool, err error) {
 	res, err := database.DB.Exec(
-		`UPDATE attachments
+		`UPDATE attachments a
 		    SET burn_at = NOW() + ($2 * INTERVAL '1 second')
-		  WHERE id = $1 AND user_id <> $3 AND burn_at IS NULL`,
+		  WHERE a.id = $1
+		    AND a.user_id <> $3
+		    AND a.burn_at IS NULL
+		    AND EXISTS (
+		        SELECT 1
+		          FROM message_attachments ma
+		          JOIN messages m ON m.id = ma.message_id
+		          JOIN conversation_members cm
+		            ON cm.conversation_id = m.conversation_id
+		           AND cm.user_id = $3
+		           AND cm.status = 'active'
+		         WHERE ma.attachment_id = a.id
+		           AND m.deleted_at IS NULL
+		           AND m.burn_seconds > 0
+		           AND m.sender_id <> $3
+		    )`,
 		id, burnSeconds, viewerID,
 	)
 	if err != nil {
@@ -347,10 +369,31 @@ func (r *AttachmentRepository) ArmBurn(id, viewerID int64, burnSeconds int) (bur
 		}
 		return &t, true, nil
 	}
-	// No row updated: either someone else armed it first, or it does not
-	// exist / belongs to the caller. Report the existing state, if any.
+
+	// No row updated. Report an existing burn state only when the caller could
+	// legitimately have armed it, so this cannot be used as an existence
+	// oracle over other people's attachments. Otherwise report not found.
 	var existing *time.Time
-	err = database.DB.QueryRow(`SELECT burn_at FROM attachments WHERE id = $1 AND user_id <> $2`, id, viewerID).Scan(&existing)
+	err = database.DB.QueryRow(
+		`SELECT a.burn_at
+		   FROM attachments a
+		  WHERE a.id = $1
+		    AND a.user_id <> $2
+		    AND EXISTS (
+		        SELECT 1
+		          FROM message_attachments ma
+		          JOIN messages m ON m.id = ma.message_id
+		          JOIN conversation_members cm
+		            ON cm.conversation_id = m.conversation_id
+		           AND cm.user_id = $2
+		           AND cm.status = 'active'
+		         WHERE ma.attachment_id = a.id
+		           AND m.deleted_at IS NULL
+		           AND m.burn_seconds > 0
+		           AND m.sender_id <> $2
+		    )`,
+		id, viewerID,
+	).Scan(&existing)
 	if err == sql.ErrNoRows {
 		return nil, false, nil
 	}
