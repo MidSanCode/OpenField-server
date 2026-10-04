@@ -1153,6 +1153,40 @@ func (h *PostHandler) ListReplies(c *gin.Context) {
 	})
 }
 
+// replyBelongsToPost verifies that the reply named in the path really is a
+// child of the post named in the path, writing a 404 and returning false when
+// it is not. Routes like /posts/:id/replies/:reply_id read only the reply id
+// before this existed, so the post id in the URL was never checked and the
+// parent's visibility check was skipped entirely.
+func (h *PostHandler) replyBelongsToPost(c *gin.Context, replyID int64, postIDParam string) bool {
+	postID, err := strconv.ParseInt(postIDParam, 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid post ID"})
+		return false
+	}
+	post, err := h.postRepo.GetByID(postID)
+	if err != nil {
+		logger.Log.Error("failed to get post", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load post"})
+		return false
+	}
+	if post == nil || !canViewPost(post, requesterID(c)) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "reply not found"})
+		return false
+	}
+	reply, err := h.replyRepo.GetByID(replyID)
+	if err != nil {
+		logger.Log.Error("failed to get reply", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load reply"})
+		return false
+	}
+	if reply == nil || reply.PostID != postID || reply.DeletedAt != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "reply not found"})
+		return false
+	}
+	return true
+}
+
 // UpdateReply updates a reply's content (owner only).
 func (h *PostHandler) UpdateReply(c *gin.Context) {
 	userID, ok := middleware.GetUserID(c)
@@ -1164,6 +1198,13 @@ func (h *PostHandler) UpdateReply(c *gin.Context) {
 	replyID, err := strconv.ParseInt(c.Param("reply_id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid reply ID"})
+		return
+	}
+	// The path names both a post and a reply; the post id must actually be the
+	// reply's parent. Without this the :id segment was decorative — a reply
+	// could be edited through any post's URL — and the visibility check that
+	// belongs to the parent was skipped along with it.
+	if !h.replyBelongsToPost(c, replyID, c.Param("id")) {
 		return
 	}
 
@@ -1214,6 +1255,11 @@ func (h *PostHandler) DeleteReply(c *gin.Context) {
 	replyID, err := strconv.ParseInt(c.Param("reply_id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid reply ID"})
+		return
+	}
+	// Same parent binding as UpdateReply: the reply must belong to the post
+	// named in the path.
+	if !h.replyBelongsToPost(c, replyID, c.Param("id")) {
 		return
 	}
 
