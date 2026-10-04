@@ -54,6 +54,14 @@ func main() {
 	campHandler := handler.NewCampHandler(store)
 
 	r := gin.New()
+	// Internal services sit behind the gateway on loopback and are never called
+	// directly by clients, so no proxy is trusted here: c.ClientIP() must be the
+	// real TCP peer, never a client-supplied X-Forwarded-For value. Gin trusts
+	// every proxy by default, which made the IP in these services' logs
+	// attacker-chosen and left the audit trail worthless.
+	if err := r.SetTrustedProxies(nil); err != nil {
+		log.Fatalf("failed to configure trusted proxies: %v", err)
+	}
 	r.Use(middleware.Recovery())
 	r.Use(logger.GinLogger())
 	r.NoRoute(middleware.NotFound())
