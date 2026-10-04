@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/lib/pq"
@@ -67,11 +68,13 @@ func hashRefreshToken(token string) string {
 // ValidateRefreshToken checks if a refresh token is valid and returns its user id.
 func ValidateRefreshToken(token string) (int64, error) {
 	var userID int64
-	// Match both hashed tokens (current) and legacy plaintext rows written by
-	// older versions, so existing sessions keep working after upgrade.
+	// Only the hashed form is ever stored, so only the hashed form may match.
+	// An "OR token = $2" plaintext branch used to live here and silently kept
+	// legacy plaintext rows usable; call MigrateRefreshTokenHashes once to
+	// convert any that remain instead of matching them at request time.
 	err := database.DB.QueryRow(
-		"SELECT user_id FROM refresh_tokens WHERE (token = $1 OR token = $2) AND expires_at > NOW()",
-		hashRefreshToken(token), token,
+		"SELECT user_id FROM refresh_tokens WHERE token = $1 AND expires_at > NOW()",
+		hashRefreshToken(token),
 	).Scan(&userID)
 	if err != nil {
 		return 0, err
@@ -79,16 +82,60 @@ func ValidateRefreshToken(token string) (int64, error) {
 	return userID, nil
 }
 
-// StoreRefreshToken persists a refresh token for a user.
-func StoreRefreshToken(userID int64, token string, expiresInSeconds int) error {
-	_, err := database.DB.Exec(
-		"INSERT INTO refresh_tokens (user_id, token, expires_at) VALUES ($1, $2, NOW() + ($3 || ' seconds')::interval)",
-		userID, hashRefreshToken(token), expiresInSeconds,
+// MigrateRefreshTokenHashes rewrites legacy plaintext refresh-token rows as
+// their SHA-256 hashes. Rows are only rewritten when no hashed row already
+// holds that digest, so the token column's UNIQUE constraint is respected.
+// Safe to run repeatedly; returns the number of rows converted.
+func MigrateRefreshTokenHashes() (int64, error) {
+	rows, err := database.DB.Query(
+		`SELECT id, token FROM refresh_tokens
+		  WHERE token !~ '^[0-9a-f]{64}$'`,
 	)
 	if err != nil {
-		return err
+		return 0, fmt.Errorf("failed to scan plaintext refresh tokens: %w", err)
 	}
-	return nil
+	type legacyRow struct {
+		id    int64
+		token string
+	}
+	legacy := []legacyRow{}
+	for rows.Next() {
+		var r legacyRow
+		if err := rows.Scan(&r.id, &r.token); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("failed to scan plaintext refresh token: %w", err)
+		}
+		legacy = append(legacy, r)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, fmt.Errorf("failed to scan plaintext refresh tokens: %w", err)
+	}
+	rows.Close()
+
+	var converted int64
+	for _, r := range legacy {
+		res, err := database.DB.Exec(
+			`UPDATE refresh_tokens SET token = $2
+			  WHERE id = $1
+			    AND NOT EXISTS (SELECT 1 FROM refresh_tokens other WHERE other.token = $2)`,
+			r.id, hashRefreshToken(r.token),
+		)
+		if err != nil {
+			return converted, fmt.Errorf("failed to hash refresh token %d: %w", r.id, err)
+		}
+		if affected, _ := res.RowsAffected(); affected > 0 {
+			converted += affected
+		} else {
+			// A hashed twin already exists (the same token was written twice
+			// by different code paths); the plaintext row is redundant, so
+			// drop it rather than leaving the credential readable.
+			if _, err := database.DB.Exec(`DELETE FROM refresh_tokens WHERE id = $1`, r.id); err != nil {
+				return converted, fmt.Errorf("failed to drop duplicate plaintext refresh token %d: %w", r.id, err)
+			}
+		}
+	}
+	return converted, nil
 }
 
 // RotateRefreshToken invalidates an old refresh token and persists a new one,
@@ -101,8 +148,8 @@ func RotateRefreshToken(oldToken, newToken string, userID int64, expiresInSecond
 	defer tx.Rollback()
 
 	res, err := tx.Exec(
-		"DELETE FROM refresh_tokens WHERE (token = $1 OR token = $2) AND user_id = $3 AND expires_at > NOW()",
-		hashRefreshToken(oldToken), oldToken, userID,
+		"DELETE FROM refresh_tokens WHERE token = $1 AND user_id = $2 AND expires_at > NOW()",
+		hashRefreshToken(oldToken), userID,
 	)
 	if err != nil {
 		return err

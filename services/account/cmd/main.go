@@ -55,6 +55,15 @@ func main() {
 		log.Fatalf("failed to run database migrations: %v", err)
 	}
 
+	// Convert any refresh tokens left in plaintext by older versions. The
+	// validation path only matches hashed tokens now, so without this an
+	// existing session would stop working at upgrade.
+	if n, err := repository.MigrateRefreshTokenHashes(); err != nil {
+		log.Fatalf("failed to hash legacy refresh tokens: %v", err)
+	} else if n > 0 {
+		logger.Log.Info("rewrote legacy plaintext refresh tokens", "count", n)
+	}
+
 	if *migrateOnly {
 		logger.Log.Info("database migrations completed (migrate-only mode)")
 		return

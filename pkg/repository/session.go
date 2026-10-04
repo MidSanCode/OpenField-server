@@ -24,6 +24,9 @@ type Session struct {
 // CreateSession stores a refresh token together with its device metadata and
 // reports whether this user already had a session on the same device label
 // before (used to raise "new device login" notifications).
+//
+// Only the SHA-256 of the token is persisted, so a database leak does not hand
+// out usable session credentials.
 func CreateSession(userID int64, token string, expiresInSeconds int, deviceLabel, ip string) (knownDevice bool, err error) {
 	var prior int
 	if err := database.DB.QueryRow(
@@ -35,7 +38,7 @@ func CreateSession(userID int64, token string, expiresInSeconds int, deviceLabel
 	if _, err := database.DB.Exec(
 		`INSERT INTO refresh_tokens (user_id, token, expires_at, device_label, last_used_at, last_ip)
 		 VALUES ($1, $2, NOW() + ($3 || ' seconds')::interval, $4, NOW(), $5)`,
-		userID, token, expiresInSeconds, deviceLabel, ip,
+		userID, hashRefreshToken(token), expiresInSeconds, deviceLabel, ip,
 	); err != nil {
 		return false, fmt.Errorf("failed to create session: %w", err)
 	}
@@ -46,7 +49,7 @@ func CreateSession(userID int64, token string, expiresInSeconds int, deviceLabel
 func TouchSession(token string, ip string) error {
 	_, err := database.DB.Exec(
 		"UPDATE refresh_tokens SET last_used_at = NOW(), last_ip = $2 WHERE token = $1",
-		token, ip,
+		hashRefreshToken(token), ip,
 	)
 	return err
 }
@@ -94,7 +97,7 @@ func DeleteSession(userID, sessionID int64) error {
 func DeleteOtherSessions(userID int64, keepToken string) (int64, error) {
 	res, err := database.DB.Exec(
 		"DELETE FROM refresh_tokens WHERE user_id = $1 AND token <> $2 AND expires_at > NOW()",
-		userID, keepToken,
+		userID, hashRefreshToken(keepToken),
 	)
 	if err != nil {
 		return 0, fmt.Errorf("failed to delete other sessions: %w", err)
