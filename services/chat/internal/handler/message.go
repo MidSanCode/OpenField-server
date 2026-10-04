@@ -581,6 +581,41 @@ func (h *MessageHandler) publishMessageEvent(ctx context.Context, typ string, co
 	events.Publish(ctx, typ, recipients, msg)
 }
 
+// messageInConversation verifies that the message named in the path belongs to
+// the conversation named in the path, and that the caller is a member of that
+// conversation. Writes a 404 and returns false otherwise. Both handlers below
+// used to read only the message id, leaving the conversation id in the URL
+// unchecked.
+func (h *MessageHandler) messageInConversation(c *gin.Context, msgID, userID int64) bool {
+	convID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid conversation ID"})
+		return false
+	}
+	isMember, err := h.convRepo.IsMember(convID, userID)
+	if err != nil {
+		logger.Log.Error("failed to check conversation membership", "error", err, "conversation_id", convID)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check conversation membership"})
+		return false
+	}
+	if !isMember {
+		// Do not reveal whether the conversation exists.
+		c.JSON(http.StatusNotFound, gin.H{"error": "message not found"})
+		return false
+	}
+	msg, err := h.msgRepo.GetByID(msgID)
+	if err != nil {
+		logger.Log.Error("failed to get message", "error", err, "message_id", msgID)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load message"})
+		return false
+	}
+	if msg == nil || msg.ConversationID != convID {
+		c.JSON(http.StatusNotFound, gin.H{"error": "message not found"})
+		return false
+	}
+	return true
+}
+
 // Update edits a message's content (owner only).
 func (h *MessageHandler) Update(c *gin.Context) {
 	userID, ok := middleware.GetUserID(c)
@@ -592,6 +627,12 @@ func (h *MessageHandler) Update(c *gin.Context) {
 	msgID, err := strconv.ParseInt(c.Param("message_id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid message ID"})
+		return
+	}
+	// The path names both a conversation and a message; the conversation id
+	// was previously ignored, so an author could edit their message through
+	// any conversation's URL — including one they had been removed from.
+	if !h.messageInConversation(c, msgID, userID) {
 		return
 	}
 
@@ -643,6 +684,13 @@ func (h *MessageHandler) Delete(c *gin.Context) {
 	msgID, err := strconv.ParseInt(c.Param("message_id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid message ID"})
+		return
+	}
+	// Same binding as Update. This also matters for the delete event below: it
+	// was published to the conversation the message ACTUALLY belongs to, so
+	// addressing the request through an unrelated conversation produced correct
+	// recipients only by accident.
+	if !h.messageInConversation(c, msgID, userID) {
 		return
 	}
 
