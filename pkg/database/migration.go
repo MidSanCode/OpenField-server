@@ -1158,21 +1158,110 @@ func execMigrationStatements(ctx context.Context, tx *sql.Tx, label string, stat
 
 // splitMigrationSQL breaks a migration's multi-statement SQL into individual
 // statements so each can be retried/skipped independently when it collides
-// with an already-applied schema change. Splitting is on semicolons outside
-// of dollar-quoted or single-quoted strings, which covers every statement
-// style used in this file (no embedded semicolons inside string literals).
+// with an already-applied schema change.
+//
+// A semicolon only ends a statement when it sits in the outer scope: the
+// scanner tracks single-quoted string literals and dollar-quoted bodies
+// ($$ ... $$ and $tag$ ... $tag$), so the semicolons inside a PL/pgSQL
+// "DO $$ BEGIN ... END $$" block — v30's constraint guard — no longer
+// shred the block into pieces that PostgreSQL rejects as an unterminated
+// dollar-quoted string.
+//
+// The ";" must still be followed by a newline (or end the input) to split,
+// which keeps this identical to the previous behaviour for every migration
+// that has no embedded semicolon: a bare ";" elsewhere stays part of the
+// statement, exactly as before.
 func splitMigrationSQL(script string) []string {
-	parts := strings.Split(script, ";\n")
-	statements := make([]string, 0, len(parts))
-	for _, part := range parts {
-		trimmed := strings.TrimSpace(part)
-		trimmed = strings.TrimSuffix(trimmed, ";")
-		trimmed = strings.TrimSpace(trimmed)
-		if trimmed != "" {
-			statements = append(statements, trimmed)
+	var (
+		statements []string
+		current    strings.Builder
+		inSingle   bool
+		dollarTag  string // non-empty while inside a $$/$tag$ body
+	)
+	for i := 0; i < len(script); i++ {
+		ch := script[i]
+
+		if dollarTag != "" {
+			if ch == '$' && strings.HasPrefix(script[i:], dollarTag) {
+				current.WriteString(dollarTag)
+				i += len(dollarTag) - 1
+				dollarTag = ""
+				continue
+			}
+			current.WriteByte(ch)
+			continue
+		}
+
+		if inSingle {
+			// A doubled '' is an escaped quote; toggling twice leaves the
+			// scanner in the right state either way.
+			current.WriteByte(ch)
+			if ch == '\'' {
+				inSingle = false
+			}
+			continue
+		}
+
+		switch ch {
+		case '\'':
+			inSingle = true
+			current.WriteByte(ch)
+		case '$':
+			if tag, ok := dollarQuoteTag(script[i:]); ok {
+				dollarTag = tag
+				current.WriteString(tag)
+				i += len(tag) - 1
+				continue
+			}
+			current.WriteByte(ch)
+		case ';':
+			if i+1 >= len(script) || script[i+1] == '\n' || script[i+1] == '\r' {
+				if stmt := normalizeMigrationStatement(current.String()); stmt != "" {
+					statements = append(statements, stmt)
+				}
+				current.Reset()
+				continue
+			}
+			current.WriteByte(ch)
+		default:
+			current.WriteByte(ch)
 		}
 	}
+	if stmt := normalizeMigrationStatement(current.String()); stmt != "" {
+		statements = append(statements, stmt)
+	}
 	return statements
+}
+
+// normalizeMigrationStatement trims a raw statement fragment and drops one
+// trailing semicolon, matching the historical per-statement cleanup.
+func normalizeMigrationStatement(fragment string) string {
+	trimmed := strings.TrimSpace(fragment)
+	trimmed = strings.TrimSuffix(trimmed, ";")
+	return strings.TrimSpace(trimmed)
+}
+
+// dollarQuoteTag reports whether s starts with a dollar-quote delimiter
+// ($$ or $tag$) and returns it. A bound parameter such as $1 is not a
+// delimiter because no closing $ follows.
+func dollarQuoteTag(s string) (string, bool) {
+	if len(s) < 2 || s[0] != '$' {
+		return "", false
+	}
+	for i := 1; i < len(s); i++ {
+		c := s[i]
+		if c == '$' {
+			return s[:i+1], true
+		}
+		isTagChar := c == '_' ||
+			(c >= 'a' && c <= 'z') ||
+			(c >= 'A' && c <= 'Z') ||
+			(c >= '0' && c <= '9')
+		if !isTagChar {
+			return "", false
+		}
+	}
+	return "", false
 }
 
 // applyPending applies every missing migration up to the latest version,
