@@ -265,6 +265,17 @@ func main() {
 		{http.MethodPut, "/api/v1/camps/:id/members/:user_id/role", cfg.Services.Posts, authRequired, ""},
 		{http.MethodDelete, "/api/v1/camps/:id/members/:user_id", cfg.Services.Posts, authRequired, ""},
 		{http.MethodPut, "/api/v1/camps/:id/posts/:post_id/pin", cfg.Services.Posts, authRequired, ""},
+		// Subgroups: the list answers 404 to non-members of the parent camp
+		// inside the handler (private by construction), so the gateway only
+		// decides whether the request needs a token.
+		{http.MethodGet, "/api/v1/camps/:id/subgroups", cfg.Services.Posts, authPublic, ""},
+		{http.MethodPost, "/api/v1/camps/:id/subgroups", cfg.Services.Posts, authRequired, ""},
+
+		// ---- moderation reports (account service) ----
+		// Any signed-in user may report a post, a chat message or a user; the
+		// queue is reviewed in the admin dashboard.
+		{http.MethodPost, "/api/v1/reports", cfg.Services.Account, authRequired, ""},
+		{http.MethodGet, "/api/v1/reports/mine", cfg.Services.Account, authRequired, ""},
 
 		// ---- group announcements / todos / files (chat service) ----
 		{http.MethodGet, "/api/v1/conversations/:id/announcements", cfg.Services.Chat, authPermission, "chat.view"},

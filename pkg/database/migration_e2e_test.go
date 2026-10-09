@@ -77,6 +77,8 @@ func TestFreshDatabaseMigrationE2E(t *testing.T) {
 		{"posts", "pinned"}, {"posts", "camp_id"}, {"posts", "quoted_post_id"},
 		{"posts", "camp_pinned"},
 		{"camps", "member_post"}, {"camps", "member_pin"}, {"camps", "announcement"},
+		{"camps", "parent_camp_id"},
+		{"reports", "target_type"}, {"reports", "status"}, {"reports", "reviewer_username"},
 		{"attachments", "preview_url"}, {"attachments", "burn_at"},
 		{"messages", "check_id"}, {"messages", "burn_at"},
 		{"conversations", "is_public"}, {"conversation_members", "notify_level"},

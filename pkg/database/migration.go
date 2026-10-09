@@ -705,6 +705,56 @@ var versionedMigrations = []migration{
 				WHERE email IS NOT NULL AND email <> '';
 		`,
 	},
+	{
+		// v31 introduces camp subgroups (群组子群).
+		//
+		// camps.parent_camp_id nests a camp under a parent camp (NULL =
+		// top-level). Subgroups are private by construction — the handlers
+		// force is_visible=false and direct_join=false, so they never appear
+		// in the public list and cannot be self-joined — and they die with
+		// their parent via ON DELETE CASCADE ("主群删了子群也没了").
+		version: 31,
+		name:    "camp-subgroups",
+		sql: `
+			ALTER TABLE camps ADD COLUMN IF NOT EXISTS parent_camp_id BIGINT REFERENCES camps(id) ON DELETE CASCADE;
+			CREATE INDEX IF NOT EXISTS idx_camps_parent ON camps(parent_camp_id) WHERE parent_camp_id IS NOT NULL;
+		`,
+	},
+	{
+		// v32 introduces the moderation report inbox (举报).
+		//
+		// A user flags a post, a chat message or another user; the admin
+		// dashboard reviews the queue and marks each report reviewed or
+		// dismissed. The target is polymorphic (target_type/target_id) with
+		// no foreign key, because the three kinds live in three tables and a
+		// deleted target must not take its report history with it.
+		//
+		// idx_reports_one_open keeps a single open (pending) report per
+		// reporter+target, so one account cannot flood the queue by re-filing
+		// the same complaint; resolving it lets the same target be reported
+		// again. idx_reports_queue serves the default queue read
+		// (pending, newest first).
+		version: 32,
+		name:    "moderation-reports",
+		sql: `
+			CREATE TABLE IF NOT EXISTS reports (
+				id BIGSERIAL PRIMARY KEY,
+				reporter_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+				target_type TEXT NOT NULL CHECK (target_type IN ('post','message','user')),
+				target_id BIGINT NOT NULL,
+				reason TEXT NOT NULL DEFAULT '',
+				status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','reviewed','dismissed')),
+				reviewer_id BIGINT NOT NULL DEFAULT 0,
+				reviewer_username TEXT NOT NULL DEFAULT '',
+				review_note TEXT NOT NULL DEFAULT '',
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+				reviewed_at TIMESTAMPTZ
+			);
+			CREATE INDEX IF NOT EXISTS idx_reports_queue ON reports(status, created_at DESC);
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_reports_one_open
+				ON reports(reporter_id, target_type, target_id) WHERE status = 'pending';
+		`,
+	},
 }
 
 // latestMigrationVersion returns the newest schema version the code knows

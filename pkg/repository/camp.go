@@ -17,30 +17,57 @@ func NewCampRepository() *CampRepository {
 	return &CampRepository{}
 }
 
-const campCols = `c.id, c.name, c.description, c.creator_id, c.is_visible, c.direct_join, c.member_post, c.member_pin, c.announcement,
+const campCols = `c.id, c.name, c.description, c.creator_id, c.is_visible, c.direct_join, COALESCE(c.parent_camp_id, 0) AS parent_camp_id, c.member_post, c.member_pin, c.announcement,
 		(SELECT COUNT(*) FROM camp_members cm WHERE cm.camp_id = c.id) AS member_count,
 		(SELECT COUNT(*) FROM posts p WHERE p.camp_id = c.id) AS post_count,
 		c.created_at, c.updated_at`
 
-const campScan = `&c.ID, &c.Name, &c.Description, &c.CreatorID, &c.IsVisible, &c.DirectJoin, &c.MemberPost, &c.MemberPin, &c.Announcement,
+const campScan = `&c.ID, &c.Name, &c.Description, &c.CreatorID, &c.IsVisible, &c.DirectJoin, &c.ParentCampID, &c.MemberPost, &c.MemberPin, &c.Announcement,
 		&c.MemberCount, &c.PostCount, &c.CreatedAt, &c.UpdatedAt`
 
 // Create inserts a camp and adds the creator as its owner. memberPost/
-// memberPin seed the camp's permission switches.
-func (r *CampRepository) Create(creatorID int64, name, description string, isVisible, directJoin, memberPost, memberPin bool) (*model.Camp, error) {
+// memberPin seed the camp's permission switches. A non-zero parentCampID
+// creates a subgroup of that camp: subgroups are always private
+// (is_visible=false, direct_join=false) so they stay hidden from the public
+// list and cannot be self-joined, and they die with their parent via the
+// parent_camp_id ON DELETE CASCADE.
+func (r *CampRepository) Create(creatorID, parentCampID int64, name, description string, isVisible, directJoin, memberPost, memberPin bool) (*model.Camp, error) {
 	tx, err := database.DB.Begin()
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin camp create: %w", err)
 	}
 	defer tx.Rollback()
 
+	// parentArg is NULL for a top-level camp: the column's FK points at
+	// camps(id), so 0 would be a dangling reference rather than "no parent".
+	var parentArg interface{}
+	isSubgroup := parentCampID > 0
+	if isSubgroup {
+		// Subgroups are forced hidden and non-joinable; callers cannot opt
+		// into a public subgroup.
+		isVisible = false
+		directJoin = false
+		// The parent must already exist, and nesting is one level deep: a
+		// subgroup can never be the parent of another subgroup.
+		var parentIsTopLevel bool
+		if err := tx.QueryRow(
+			"SELECT EXISTS (SELECT 1 FROM camps WHERE id = $1 AND parent_camp_id IS NULL)", parentCampID,
+		).Scan(&parentIsTopLevel); err != nil {
+			return nil, fmt.Errorf("failed to check parent camp: %w", err)
+		}
+		if !parentIsTopLevel {
+			return nil, ErrNotFound
+		}
+		parentArg = parentCampID
+	}
+
 	camp := &model.Camp{}
 	err = tx.QueryRow(
-		`INSERT INTO camps (name, description, creator_id, is_visible, direct_join, member_post, member_pin)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7)
-		 RETURNING id, name, description, creator_id, is_visible, direct_join, member_post, member_pin, announcement, created_at, updated_at`,
-		name, description, creatorID, isVisible, directJoin, memberPost, memberPin,
-	).Scan(&camp.ID, &camp.Name, &camp.Description, &camp.CreatorID, &camp.IsVisible, &camp.DirectJoin, &camp.MemberPost, &camp.MemberPin, &camp.Announcement, &camp.CreatedAt, &camp.UpdatedAt)
+		`INSERT INTO camps (name, description, creator_id, is_visible, direct_join, parent_camp_id, member_post, member_pin)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		 RETURNING id, name, description, creator_id, is_visible, direct_join, COALESCE(parent_camp_id, 0), member_post, member_pin, announcement, created_at, updated_at`,
+		name, description, creatorID, isVisible, directJoin, parentArg, memberPost, memberPin,
+	).Scan(&camp.ID, &camp.Name, &camp.Description, &camp.CreatorID, &camp.IsVisible, &camp.DirectJoin, &camp.ParentCampID, &camp.MemberPost, &camp.MemberPin, &camp.Announcement, &camp.CreatedAt, &camp.UpdatedAt)
 	if err != nil {
 		if isUniqueViolation(err) {
 			// camps.name is UNIQUE — surface a 409-worthy sentinel instead
@@ -69,7 +96,7 @@ func (r *CampRepository) GetByID(id, userID int64) (*model.Camp, error) {
 	c := &model.Camp{}
 	err := database.DB.QueryRow(
 		"SELECT "+campCols+" FROM camps c WHERE c.id = $1", id,
-	).Scan([]interface{}{&c.ID, &c.Name, &c.Description, &c.CreatorID, &c.IsVisible, &c.DirectJoin, &c.MemberPost, &c.MemberPin, &c.Announcement, &c.MemberCount, &c.PostCount, &c.CreatedAt, &c.UpdatedAt}...)
+	).Scan([]interface{}{&c.ID, &c.Name, &c.Description, &c.CreatorID, &c.IsVisible, &c.DirectJoin, &c.ParentCampID, &c.MemberPost, &c.MemberPin, &c.Announcement, &c.MemberCount, &c.PostCount, &c.CreatedAt, &c.UpdatedAt}...)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -110,14 +137,17 @@ func scanCampRowExtras(c *model.Camp, userID int64) error {
 	return nil
 }
 
-// List returns visible camps (all of them for members/admins pass-through is
-// not tracked here: hidden camps are simply excluded from the public list).
+// List returns visible top-level camps (all of them for members/admins
+// pass-through is not tracked here: hidden camps are simply excluded from the
+// public list, and subgroups exist only below their parent so they are never
+// listed here — parent_camp_id IS NOT NULL is implicit because subgroups are
+// always hidden).
 // userID personalizes IsMember.
 func (r *CampRepository) List(userID int64, query string, limit int) ([]model.Camp, error) {
 	if limit < 1 || limit > 100 {
 		limit = 50
 	}
-	sqlText := "SELECT " + campCols + " FROM camps c WHERE c.is_visible = TRUE"
+	sqlText := "SELECT " + campCols + " FROM camps c WHERE c.is_visible = TRUE AND c.parent_camp_id IS NULL"
 	args := []interface{}{}
 	if query != "" {
 		sqlText += " AND c.name ILIKE $1"
@@ -133,7 +163,7 @@ func (r *CampRepository) List(userID int64, query string, limit int) ([]model.Ca
 	out := []model.Camp{}
 	for rows.Next() {
 		c := model.Camp{}
-		if err := rows.Scan([]interface{}{&c.ID, &c.Name, &c.Description, &c.CreatorID, &c.IsVisible, &c.DirectJoin, &c.MemberPost, &c.MemberPin, &c.Announcement, &c.MemberCount, &c.PostCount, &c.CreatedAt, &c.UpdatedAt}...); err != nil {
+		if err := rows.Scan([]interface{}{&c.ID, &c.Name, &c.Description, &c.CreatorID, &c.IsVisible, &c.DirectJoin, &c.ParentCampID, &c.MemberPost, &c.MemberPin, &c.Announcement, &c.MemberCount, &c.PostCount, &c.CreatedAt, &c.UpdatedAt}...); err != nil {
 			return nil, fmt.Errorf("failed to scan camp: %w", err)
 		}
 		out = append(out, c)
@@ -173,9 +203,9 @@ func (r *CampRepository) List(userID int64, query string, limit int) ([]model.Ca
 	return out, nil
 }
 
-// ListMine returns camps the user belongs to (including hidden ones). The
-// creator is included even when their roster row is missing, matching
-// GetByID's creator-is-owner rule.
+// ListMine returns camps the user belongs to (including hidden ones and
+// subgroups). The creator is included even when their roster row is missing,
+// matching GetByID's creator-is-owner rule.
 func (r *CampRepository) ListMine(userID int64, limit int) ([]model.Camp, error) {
 	if limit < 1 || limit > 100 {
 		limit = 50
@@ -194,7 +224,7 @@ func (r *CampRepository) ListMine(userID int64, limit int) ([]model.Camp, error)
 	out := []model.Camp{}
 	for rows.Next() {
 		c := model.Camp{}
-		if err := rows.Scan([]interface{}{&c.ID, &c.Name, &c.Description, &c.CreatorID, &c.IsVisible, &c.DirectJoin, &c.MemberPost, &c.MemberPin, &c.Announcement, &c.MemberCount, &c.PostCount, &c.CreatedAt, &c.UpdatedAt}...); err != nil {
+		if err := rows.Scan([]interface{}{&c.ID, &c.Name, &c.Description, &c.CreatorID, &c.IsVisible, &c.DirectJoin, &c.ParentCampID, &c.MemberPost, &c.MemberPin, &c.Announcement, &c.MemberCount, &c.PostCount, &c.CreatedAt, &c.UpdatedAt}...); err != nil {
 			return nil, fmt.Errorf("failed to scan camp: %w", err)
 		}
 		c.IsMember = true
@@ -247,6 +277,13 @@ func (r *CampRepository) Update(id, actorID int64, name, description *string, is
 	if (memberPost != nil || memberPin != nil) && rank < model.CampRoleRank(model.CampRoleOwner) {
 		return ErrForbidden
 	}
+	// Subgroups are private by construction: their owner may never publish
+	// them to the public list or open self-joining.
+	if camp.ParentCampID > 0 {
+		falseVal := false
+		isVisible = &falseVal
+		directJoin = &falseVal
+	}
 	res, err := database.DB.Exec(
 		`UPDATE camps SET
 			name = COALESCE($3, name),
@@ -295,16 +332,124 @@ func (r *CampRepository) SetAnnouncement(campID, actorID int64, announcement str
 	return nil
 }
 
-// Delete removes a camp (creator only).
+// Delete removes a camp (creator only). Subgroups of the camp are removed by
+// the parent_camp_id ON DELETE CASCADE — deleting the main camp also deletes
+// its subgroups ("主群删了子群也没了").
+//
+// posts.camp_id is ON DELETE SET NULL, so a naive camp delete would turn the
+// camp's posts into global feed posts. That is only acceptable for a public
+// camp. For a private camp (a hidden camp or any subgroup) the content must
+// die with the camp instead of surfacing publicly, so those posts are removed
+// explicitly here — including the posts of every subgroup of a deleted parent.
 func (r *CampRepository) Delete(id, creatorID int64) error {
-	res, err := database.DB.Exec("DELETE FROM camps WHERE id = $1 AND creator_id = $2", id, creatorID)
+	tx, err := database.DB.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin camp delete: %w", err)
+	}
+	defer tx.Rollback()
+
+	var isVisible bool
+	if err := tx.QueryRow(
+		"SELECT is_visible FROM camps WHERE id = $1", id,
+	).Scan(&isVisible); err != nil {
+		if err == sql.ErrNoRows {
+			return ErrNotFound
+		}
+		return fmt.Errorf("failed to load camp: %w", err)
+	}
+
+	// Subgroup ids must be collected before the cascade removes them.
+	var subgroupIDs []int64
+	rows, err := tx.Query("SELECT id FROM camps WHERE parent_camp_id = $1", id)
+	if err != nil {
+		return fmt.Errorf("failed to list subgroups: %w", err)
+	}
+	for rows.Next() {
+		var sid int64
+		if err := rows.Scan(&sid); err != nil {
+			rows.Close()
+			return fmt.Errorf("failed to scan subgroup: %w", err)
+		}
+		subgroupIDs = append(subgroupIDs, sid)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	// A subgroup's content is always private; a hidden camp's content is
+	// private too. Delete those posts rather than let the FK push them into
+	// the public global feed.
+	if len(subgroupIDs) > 0 || !isVisible {
+		ids := append([]int64{}, subgroupIDs...)
+		if !isVisible {
+			ids = append(ids, id)
+		}
+		if _, err := tx.Exec("DELETE FROM posts WHERE camp_id = ANY($1)", pq.Array(ids)); err != nil {
+			return fmt.Errorf("failed to remove private camp posts: %w", err)
+		}
+	}
+
+	res, err := tx.Exec("DELETE FROM camps WHERE id = $1 AND creator_id = $2", id, creatorID)
 	if err != nil {
 		return fmt.Errorf("failed to delete camp: %w", err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrNotFound
 	}
-	return nil
+	return tx.Commit()
+}
+
+// ListSubgroups returns the subgroups of a parent camp, ordered newest first.
+// Subgroups are private, so only the parent camp's members (and the subgroup's
+// own members, who must be parent members to have been added) ever call this;
+// the handler gates access.
+func (r *CampRepository) ListSubgroups(parentID, userID int64, limit int) ([]model.Camp, error) {
+	if limit < 1 || limit > 100 {
+		limit = 50
+	}
+	rows, err := database.DB.Query(
+		"SELECT "+campCols+" FROM camps c WHERE c.parent_camp_id = $1 ORDER BY c.updated_at DESC LIMIT "+fmt.Sprintf("%d", limit),
+		parentID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list subgroups: %w", err)
+	}
+	defer rows.Close()
+
+	out := []model.Camp{}
+	for rows.Next() {
+		c := model.Camp{}
+		if err := rows.Scan([]interface{}{&c.ID, &c.Name, &c.Description, &c.CreatorID, &c.IsVisible, &c.DirectJoin, &c.ParentCampID, &c.MemberPost, &c.MemberPin, &c.Announcement, &c.MemberCount, &c.PostCount, &c.CreatedAt, &c.UpdatedAt}...); err != nil {
+			return nil, fmt.Errorf("failed to scan subgroup: %w", err)
+		}
+		out = append(out, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if userID > 0 && len(out) > 0 {
+		ids := make([]int64, 0, len(out))
+		for _, c := range out {
+			ids = append(ids, c.ID)
+		}
+		mine, err := memberCampIDs(userID, ids)
+		if err == nil {
+			set := make(map[int64]bool, len(mine))
+			for _, id := range mine {
+				set[id] = true
+			}
+			for i := range out {
+				out[i].IsMember = set[out[i].ID] || out[i].CreatorID == userID
+				if out[i].IsMember {
+					if role, err := r.GetRole(out[i].ID, userID); err == nil {
+						out[i].MyRole = role
+					}
+				}
+			}
+		}
+	}
+	return out, nil
 }
 
 // IsMember reports membership.
@@ -422,7 +567,28 @@ func (r *CampRepository) ListMembers(campID int64, limit int) ([]model.CampMembe
 
 // AddMember inserts a roster row (admin invite). Returns false when the user
 // was already a member, and ErrMemberLimitReached when the camp is full.
+// For subgroups the invite is restricted to members of the parent camp:
+// subgroups are private sub-communities and only the parent camp's roster may
+// be pulled in ("拉群成员进入").
 func (r *CampRepository) AddMember(campID, userID int64, role string) (bool, error) {
+	var parentID int64
+	if err := database.DB.QueryRow(
+		"SELECT COALESCE(parent_camp_id, 0) FROM camps WHERE id = $1", campID,
+	).Scan(&parentID); err != nil {
+		return false, fmt.Errorf("failed to check camp parent: %w", err)
+	}
+	if parentID > 0 {
+		var isParentMember bool
+		if err := database.DB.QueryRow(
+			"SELECT EXISTS (SELECT 1 FROM camp_members WHERE camp_id = $1 AND user_id = $2)",
+			parentID, userID,
+		).Scan(&isParentMember); err != nil {
+			return false, fmt.Errorf("failed to check parent membership: %w", err)
+		}
+		if !isParentMember {
+			return false, ErrForbidden
+		}
+	}
 	// An invite must respect the same ceiling as a self-join, otherwise the
 	// cap is trivially bypassed by inviting instead of joining.
 	var exists bool

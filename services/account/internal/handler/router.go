@@ -9,7 +9,7 @@ import (
 
 // RegisterRoutes registers all account service routes.
 // Public auth endpoints and protected user endpoints.
-func RegisterRoutes(r *gin.Engine, authHandler *AuthHandler, userHandler *UserHandler, walletHandler *WalletHandler, capabilitiesHandler *CapabilitiesHandler, taskHandler *TaskHandler, transferHandler *TransferHandler, pinHandler *PinHandler, membershipHandler *MembershipHandler, punishmentHandler *PunishmentHandler, checkHandler *CheckHandler, botHandler *BotHandler) {
+func RegisterRoutes(r *gin.Engine, authHandler *AuthHandler, userHandler *UserHandler, walletHandler *WalletHandler, capabilitiesHandler *CapabilitiesHandler, taskHandler *TaskHandler, transferHandler *TransferHandler, pinHandler *PinHandler, membershipHandler *MembershipHandler, punishmentHandler *PunishmentHandler, checkHandler *CheckHandler, botHandler *BotHandler, reportHandler *ReportHandler) {
 	api := r.Group("/api/v1")
 	{
 		// Public capabilities introspection — unauthenticated so the client
@@ -193,6 +193,16 @@ func RegisterRoutes(r *gin.Engine, authHandler *AuthHandler, userHandler *UserHa
 		{
 			annAdmin.POST("", annHandler.Create)
 			annAdmin.PUT("/:id", annHandler.Update)
+		}
+
+		// Moderation reports (举报): any signed-in user may flag a post, a
+		// chat message or another user. The queue is reviewed by the admin
+		// dashboard; here a user can only file and read back their own.
+		reports := api.Group("/reports")
+		reports.Use(middleware.GatewayAuthMiddleware())
+		{
+			reports.POST("", reportHandler.Create)
+			reports.GET("/mine", reportHandler.ListMine)
 		}
 	}
 }

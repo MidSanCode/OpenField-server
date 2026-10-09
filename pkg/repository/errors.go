@@ -36,6 +36,13 @@ var (
 	// ErrMemberLimitReached reports that a group chat or camp is at its member
 	// ceiling and cannot accept another member.
 	ErrMemberLimitReached = errors.New("member limit reached")
+	// ErrAlreadyReported reports that the caller already has a pending (open)
+	// report against the same target; one open report per reporter+target is
+	// enforced by a partial unique index.
+	ErrAlreadyReported = errors.New("target already reported")
+	// ErrReportRateLimit reports that the caller exceeded the per-user report
+	// submission budget (anti spam).
+	ErrReportRateLimit = errors.New("too many reports, slow down")
 )
 
 // isUniqueViolation detects PostgreSQL unique constraint violations. lib/pq

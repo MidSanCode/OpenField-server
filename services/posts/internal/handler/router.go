@@ -19,10 +19,12 @@ func RegisterRoutes(r *gin.Engine, postHandler *PostHandler, campHandler *CampHa
 
 		// Camps (贴吧-style communities). Listing visible camps and reading a
 		// visible camp is public; hidden camps reveal themselves to members
-		// inside the handlers.
+		// inside the handlers. Subgroups are private: the list answers 404 to
+		// anyone who is not a member of the parent camp.
 		api.GET("/camps", campHandler.List)
 		api.GET("/camps/:id", campHandler.Get)
 		api.GET("/camps/:id/posts", campHandler.ListPosts)
+		api.GET("/camps/:id/subgroups", campHandler.ListSubgroups)
 
 		auth := api.Group("")
 		auth.Use(middleware.GatewayAuthMiddleware())
@@ -45,6 +47,7 @@ func RegisterRoutes(r *gin.Engine, postHandler *PostHandler, campHandler *CampHa
 			auth.GET("/users/:user_id/favorites/replies", postHandler.ListFavoriteReplies)
 
 			auth.POST("/camps", campHandler.Create)
+			auth.POST("/camps/:id/subgroups", campHandler.CreateSubgroup)
 			auth.PUT("/camps/:id", campHandler.Update)
 			auth.PUT("/camps/:id/announcement", campHandler.SetAnnouncement)
 			auth.DELETE("/camps/:id", campHandler.Delete)

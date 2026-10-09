@@ -292,6 +292,11 @@ type Camp struct {
 	CreatorName string `json:"creator_name,omitempty"`
 	IsVisible   bool   `json:"is_visible"`
 	DirectJoin  bool   `json:"direct_join"`
+	// ParentCampID nests this camp under a parent camp (0 = top-level camp).
+	// Subgroups are private by construction (is_visible=false,
+	// direct_join=false) and disappear when the parent camp is deleted via
+	// ON DELETE CASCADE.
+	ParentCampID int64 `json:"parent_camp_id,omitempty"`
 	// MemberPost allows plain members to publish posts into the camp; when
 	// false only the owner and admins may post. Defaults to true.
 	MemberPost bool `json:"member_post"`
@@ -342,6 +347,40 @@ func CampRoleRank(role string) int {
 		return 1
 	}
 	return 0
+}
+
+// Report target types. A report flags one of these kinds of content; the
+// target_id names the specific row (post, message or user).
+const (
+	ReportTargetPost    = "post"
+	ReportTargetMessage = "message"
+	ReportTargetUser    = "user"
+)
+
+// Report statuses. Pending reports await admin review; reviewed means the
+// moderator acted on the target, dismissed means the report was rejected.
+const (
+	ReportStatusPending   = "pending"
+	ReportStatusReviewed  = "reviewed"
+	ReportStatusDismissed = "dismissed"
+)
+
+// Report is a moderation report (举报) filed by one user against a post, a
+// chat message or another user. The admin dashboard reviews pending reports
+// and marks them reviewed or dismissed.
+type Report struct {
+	ID               int64      `json:"id"`
+	ReporterID       int64      `json:"reporter_id"`
+	ReporterName     string     `json:"reporter_name,omitempty"`
+	TargetType       string     `json:"target_type"` // post | message | user
+	TargetID         int64      `json:"target_id"`
+	Reason           string     `json:"reason"`
+	Status           string     `json:"status"` // pending | reviewed | dismissed
+	ReviewerID       int64      `json:"reviewer_id,omitempty"`
+	ReviewerUsername string     `json:"reviewer_username,omitempty"`
+	ReviewNote       string     `json:"review_note,omitempty"`
+	CreatedAt        time.Time  `json:"created_at"`
+	ReviewedAt       *time.Time `json:"reviewed_at,omitempty"`
 }
 
 // GroupAnnouncement is a manage-scoped notice shown to conversation members.

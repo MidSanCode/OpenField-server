@@ -174,7 +174,7 @@ func (h *CampHandler) Create(c *gin.Context) {
 	if req.MemberPin != nil {
 		memberPin = *req.MemberPin
 	}
-	camp, err := h.repo.Create(userID, req.Name, req.Description, isVisible, directJoin, memberPost, memberPin)
+	camp, err := h.repo.Create(userID, 0, req.Name, req.Description, isVisible, directJoin, memberPost, memberPin)
 	if err != nil {
 		if errors.Is(err, repository.ErrCampNameTaken) {
 			c.JSON(http.StatusConflict, gin.H{"error": "camp name already taken"})
@@ -185,6 +185,103 @@ func (h *CampHandler) Create(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusCreated, camp)
+}
+
+// CreateSubgroup mints a hidden subgroup under a parent camp. Only the
+// parent camp's owner and admins may create subgroups; the subgroup is
+// private by construction (not in the public list, no self-joining), and its
+// members are pulled in from the parent camp's roster via AddMember.
+func (h *CampHandler) CreateSubgroup(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	parentID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid camp ID"})
+		return
+	}
+	var req struct {
+		Name        string `json:"name" binding:"required"`
+		Description string `json:"description"`
+		MemberPost  *bool  `json:"member_post"`
+		MemberPin   *bool  `json:"member_pin"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+	req.Name = strings.TrimSpace(req.Name)
+	if req.Name == "" || len([]rune(req.Name)) > 60 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "camp name must be 1-60 characters"})
+		return
+	}
+	if len([]rune(req.Description)) > 500 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "description too long (max 500)"})
+		return
+	}
+	// Subgroup creation is a governance act on the parent camp: owner/admins
+	// only, mirroring SetAnnouncement.
+	if _, _, ok := h.requireCampRole(c, parentID, userID, model.CampRoleAdmin); !ok {
+		return
+	}
+	memberPost := true
+	if req.MemberPost != nil {
+		memberPost = *req.MemberPost
+	}
+	memberPin := false
+	if req.MemberPin != nil {
+		memberPin = *req.MemberPin
+	}
+	camp, err := h.repo.Create(userID, parentID, req.Name, req.Description, false, false, memberPost, memberPin)
+	if err != nil {
+		if errors.Is(err, repository.ErrCampNameTaken) {
+			c.JSON(http.StatusConflict, gin.H{"error": "camp name already taken"})
+			return
+		}
+		if err == repository.ErrNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"error": "camp not found"})
+			return
+		}
+		logger.Log.Error("failed to create subgroup", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create subgroup"})
+		return
+	}
+	c.JSON(http.StatusCreated, camp)
+}
+
+// ListSubgroups returns the private subgroups of a camp. Only the parent
+// camp's members may see that its subgroups exist; everyone else gets the
+// same 404 a hidden camp answers.
+func (h *CampHandler) ListSubgroups(c *gin.Context) {
+	userID := requesterID(c)
+	parentID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid camp ID"})
+		return
+	}
+	parent, err := h.repo.GetByID(parentID, userID)
+	if err != nil {
+		logger.Log.Error("failed to get camp", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list subgroups"})
+		return
+	}
+	if parent == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "camp not found"})
+		return
+	}
+	if !parent.IsMember {
+		c.JSON(http.StatusNotFound, gin.H{"error": "camp not found"})
+		return
+	}
+	subs, err := h.repo.ListSubgroups(parentID, userID, 50)
+	if err != nil {
+		logger.Log.Error("failed to list subgroups", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list subgroups"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"subgroups": subs})
 }
 
 // Update mutates camp settings. Admins may change the basics; the
@@ -504,6 +601,10 @@ func (h *CampHandler) AddMember(c *gin.Context) {
 	if err != nil {
 		if errors.Is(err, repository.ErrMemberLimitReached) {
 			c.JSON(http.StatusConflict, gin.H{"error": "this camp has reached its member limit"})
+			return
+		}
+		if errors.Is(err, repository.ErrForbidden) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "subgroup members must already be members of the parent camp"})
 			return
 		}
 		logger.Log.Error("failed to add camp member", "error", err)

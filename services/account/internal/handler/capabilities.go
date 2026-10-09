@@ -26,16 +26,16 @@ func NewCapabilitiesHandler(version string) *CapabilitiesHandler {
 // client can detect missing pieces.
 var ServerCapabilities = map[string]bool{
 	// Auth & identity
-	"auth.password_login":    true,
-	"auth.oidc_login":        true,
+	"auth.password_login":     true,
+	"auth.oidc_login":         true,
 	"auth.oidc_multi_account": true,
-	"user.password_register": true,
-	"user.e2ee_key":          true,
-	"user.exp_levels":        true,
-	"user.daily_bonus":       true,
-	"user.adjust_exp":        true,
-	"user.exp_history":       true,
-	"user.membership":        true,
+	"user.password_register":  true,
+	"user.e2ee_key":           true,
+	"user.exp_levels":         true,
+	"user.daily_bonus":        true,
+	"user.adjust_exp":         true,
+	"user.exp_history":        true,
+	"user.membership":         true,
 	// Chat features
 	"chat.private_chat":      true,
 	"chat.group_chat":        true,
@@ -51,6 +51,12 @@ var ServerCapabilities = map[string]bool{
 	"posts.reactions":  true,
 	"posts.favorites":  true,
 	"posts.visibility": true,
+	// Camps (贴吧-style communities)
+	"camps.create":            true,
+	"camps.subgroups":         true,
+	"camps.member_management": true,
+	// Moderation
+	"moderation.reports": true,
 	// Storage
 	"storage.uploads":         true,
 	"storage.chunked_uploads": true,
