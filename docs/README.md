@@ -13,6 +13,11 @@
 - [Token refresh](token-refresh.md) — refresh-token rotation flow.
 - [Storage buckets](storage-buckets.md) — physical multi-bucket object storage.
 - [Punishments](punishments.md) — moderation actions and ban history.
+- [Moderation reports](reports.md) — the 举报 queue for posts, chat messages and
+  users.
+- [Bots](bots.md) — bot development guide: creating automated accounts,
+  authenticating with an `ofb_` token, the permission model, the callable API
+  surface, realtime events and the limits that apply.
 
 ## Configuration
 

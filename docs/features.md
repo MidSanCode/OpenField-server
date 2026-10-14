@@ -23,6 +23,9 @@ for the service layout and [wallet.md](wallet.md) for the wallet in detail.
 | Follow & friends           | `services/account/internal/handler/user.go`                  | mutual follows |
 | Posts & replies            | `services/posts`                                             | reactions, favorites, views, pins |
 | Camps                      | `services/posts/internal/handler/camp.go`                    | 贴吧-style communities, quotas |
+| Camp subgroups             | `services/posts/internal/handler/camp.go`, `pkg/repository/camp.go` | private nested camps, cascade delete |
+| Moderation reports         | `services/account/internal/handler/report.go`                | report posts / messages / users |
+| Bots (automated accounts)  | `services/account/internal/handler/bot.go`, `pkg/repository/bot.go` | `ofb_` static token, inherits the default group |
 | App announcements          | `services/account/internal/handler/app_announcement.go`      | startup notices, admin-published |
 | Attachments / storage      | `services/storage`                                           | RustFS, quota, previews |
 | Chat & consent             | `services/chat`                                              | E2E, groups, mentions |
@@ -297,6 +300,35 @@ rather than the global feed. Code: `services/posts/internal/handler/camp.go`
   permission switches (owner); `DELETE /camps/:id` removes a camp and is
   **creator-only**. Clients surface both from the camp directory row menu and
   from the camp feed's settings sheet.
+- **Subgroups (子群)**: `camps.parent_camp_id` (v31) nests a camp under another
+  camp. A subgroup is **private by construction**, not by configuration:
+  creation forces `is_visible=false` and `direct_join=false`, and `PUT /camps/:id`
+  re-forces both, so nobody can publish one or open it to self-service joining.
+  The existing hidden-camp rules then do the rest — non-members get 404 from
+  `GET /camps/:id`, and `POST /camps/:id/join` refuses hidden camps outright.
+  Subgroups are also excluded from `GET /camps` (which filters on
+  `parent_camp_id IS NULL`).
+  - **Create**: `POST /camps/:id/subgroups` with `name` + optional
+    `description`; **owner/admin of the parent camp only** (the announcement
+    rule). The parent must be top-level, so nesting is exactly one level deep
+    and a subgroup can never acquire subgroups. The creator becomes the
+    subgroup's owner. Camp creation quotas do not apply — a subgroup is bounded
+    by its parent's roster instead.
+  - **List**: `GET /camps/:id/subgroups` (the parent camp's members only;
+    anyone else gets the same 404 a hidden camp answers). Payloads carry
+    `my_role` for the caller.
+  - **Members are pulled from the parent**: `POST /camps/:id/members/:user_id`
+    on a subgroup refuses a target who is not already a member of the parent
+    camp (**403**). That is what keeps a subgroup a sub-community of the main
+    group rather than a second, unrelated group. Every other member rule
+    (roles, kick, leave) is unchanged and inherited from camps.
+  - **Cascade delete**: `parent_camp_id` is `ON DELETE CASCADE`, so deleting
+    the main camp deletes its subgroups. `DELETE` additionally runs in a
+    transaction that **removes the posts of a private camp and of every
+    subgroup** before the cascade fires: `posts.camp_id` is
+    `ON DELETE SET NULL`, so a bare delete would republish a private camp's
+    posts into the global feed. A *public* camp keeps its existing behaviour
+    (its posts become global feed posts).
 
 ## App Announcements
 
@@ -393,6 +425,52 @@ auth level (`authPublic` / `authRequired` / `authPermission` + permission key).
   a down service no longer masquerades as a missing route (404).
 - **Unmatched routes** still return a real `404`, so client routing bugs and
   backend outages are distinguishable at a glance.
+
+## Moderation Reports
+
+Any signed-in user can flag a post, a chat message or another user for review.
+Details in [reports.md](reports.md); code:
+`services/account/internal/handler/report.go` + `pkg/repository/report.go`.
+
+- **File**: `POST /reports` with `target_type` (`post`/`message`/`user`),
+  `target_id` and a required `reason` (1–500 chars). The target must exist
+  (**404** otherwise) and reporting yourself is rejected (**400**).
+- **Read back**: `GET /reports/mine` lists the caller's own reports.
+- **One open report per target**: a partial unique index admits a single
+  `pending` report per reporter+target (**409** on a duplicate); resolving it
+  frees the slot.
+- **Rate limit**: at most 20 reports per user per hour (**429**).
+- **Review**: operators work the queue in the admin panel (`/reports`,
+  capability `reports.manage`) and mark each report `reviewed` or `dismissed`
+  with an optional note. Resolving is bookkeeping and does not itself delete
+  content or punish anyone — see [punishments.md](punishments.md).
+
+## Bots (automated accounts)
+
+An owner-facing way to run an automated account without a password: create it
+once, keep the static `ofb_` token and drive the ordinary API with it.
+
+- **Model**: a bot is an ordinary `users` row with `is_bot` (drives the robot
+  badge) and `bot_owner_id` (cascades its deletion with the owner). Its
+  password hash is random garbage, so it can never log in interactively
+  (`pkg/database/migration.go`, v17 `bots`).
+- **API**: `POST /bots` (create, returns the plaintext token exactly once),
+  `GET /bots`, `POST /bots/:id/regenerate`, `DELETE /bots/:id` — all with the
+  **owner's** credentials; at most 10 bots per owner, and a bot may not create
+  bots.
+- **Token**: `ofb_` + 32 random bytes as hex; only the SHA-256 hash is stored
+  (`bot_tokens`, one row per bot). The gateway recognises the prefix, resolves
+  it to the bot's own user id and forwards that as `X-User-ID`, so no service
+  needs bot-specific handling. Regenerating revokes the old token immediately;
+  a banned bot fails resolution and gets `401`.
+- **Permissions**: a new bot joins the default "everyone" group, so it holds
+  every non-administrative permission — ordinary use, no authority over other
+  accounts or server-wide state.
+- **Client**: managed from the account page ("我的机器人"), which shows the
+  token once and warns that it cannot be recovered.
+
+The full developer guide — authentication, the callable API surface, realtime
+events, the E2EE caveat and the limits — is [bots.md](bots.md).
 
 ## Admin Panel
 
