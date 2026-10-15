@@ -5,11 +5,14 @@
 OpenField uses a **short-lived access token + long-lived refresh token** pair to
 keep sessions secure without forcing the user to log in frequently.
 
-- **Access token** (JWT) — valid for 1 hour by default (`jwt.expiry_hours: 1`).
-  Sent as `Authorization: Bearer <jwt>` on every API call.
+- **Access token** (JWT) — valid for `jwt.expiry_hours` hours, **24** in the
+  shipped configs. Sent as `Authorization: Bearer <jwt>` on every API call.
+  There is no code fallback: the value is passed straight to the token manager, so
+  an unset `expiry_hours` yields tokens that are already expired.
 - **Refresh token** — a random 256-bit opaque string stored server-side in the
-  `refresh_tokens` table. Valid for 30 days by default
-  (`jwt.refresh_expiry_days: 30`). Rotated on every use (single-use).
+  `refresh_tokens` table. Valid for `jwt.refresh_expiry_days` days, defaulting to
+  **30** when the key is unset or non-positive
+  (`AuthHandler.refreshExpiresIn`). Rotated on every use (single-use).
 
 ## Flow
 
@@ -31,7 +34,9 @@ Login / OIDC callback
 1. On login (password or OIDC) the account service generates a new access token
    and refresh token, stores the refresh token, and returns both to the client.
 2. The Flutter client persists both plus `access_expires_at` (computed from
-   `expires_in`) in SharedPreferences.
+   `expires_in`) in platform secure storage (`SecureKV` on top of
+   `flutter_secure_storage`) — not in plain `SharedPreferences`; see
+   [security-hardening.md](security-hardening.md).
 3. A `Timer.periodic` (60 s) checks the remaining access-token lifetime. When
    less than 5 minutes remain, the client calls `/auth/refresh`.
 4. The server validates the presented refresh token against `refresh_tokens`,
@@ -59,11 +64,14 @@ Response `200`:
 {
   "access_token": "jwt",
   "refresh_token": "rotated",
-  "expires_in": 3600,
+  "expires_in": 86400,
   "refresh_expires_in": 2592000,
   "user": { ... }
 }
 ```
+
+(`86400` = the default 24-hour access lifetime, `2592000` = the default 30-day
+refresh lifetime.)
 
 Response `401` — refresh token missing, revoked, expired, or unknown.
 

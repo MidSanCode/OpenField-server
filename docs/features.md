@@ -16,6 +16,7 @@ for the service layout and [wallet.md](wallet.md) for the wallet in detail.
 | Permissions (groups)       | gateway auth + `pkg/repository/permission.go`                | route-level checks |
 | Wallet & transfers          | `services/account/internal/handler/wallet.go`, `transfer.go` | cents storage |
 | Payment PIN                | `services/account/internal/handler/pin.go`                   | authorizes payments |
+| Checks (red packets)       | `services/account/internal/handler/check.go`                 | escrowed money, claims, expiry refunds |
 | Tasks & experience         | `services/account/internal/handler/task.go`                  | daily login, daily activity milestones, one-time codes |
 | Exp history                | `services/account/internal/handler/task.go`                  | level derivation |
 | Membership                 | `services/account/internal/handler/membership.go`            | tiers, multiplier, storage, quotas |
@@ -31,6 +32,7 @@ for the service layout and [wallet.md](wallet.md) for the wallet in detail.
 | Chat & consent             | `services/chat`                                              | E2E, groups, mentions |
 | Group extras               | `services/chat/internal/handler/group_features.go`           | announcements, todos, files |
 | Realtime push              | `services/push`                                              | WebSocket gateway |
+| Plugin store               | `services/plugin/internal/handler/plugin.go`                 | optional service behind `plugin.manage` |
 | API gateway                | `services/gateway/cmd/main.go`                               | routing, auth, rate limiting |
 | Admin panel                | `admin/app.py`                                               | users, groups, grants |
 
@@ -84,17 +86,27 @@ request ever reaches an internal service.
 
 | Domain   | Keys |
 |----------|------|
-| account  | `account.view`, `account.profile.edit`, `account.avatar.edit`, `account.banner.edit`, `account.follow` |
+| account  | `account.view`, `account.profile.edit`, `account.avatar.edit`, `account.banner.edit`, `account.verify`, `account.follow` |
+| user     | `user.adjust_exp`, `user.membership.grant`, `user.punish` |
 | storage  | `storage.upload`, `storage.list`, `storage.get`, `storage.delete` |
-| posts    | `posts.create`, `posts.edit`, `posts.delete`, `posts.reply.create`, `posts.reply.edit`, `posts.reply.delete`, `posts.react`, `posts.favorite` |
+| posts    | `posts.view`, `posts.create`, `posts.edit`, `posts.delete`, `posts.reply.create`, `posts.reply.edit`, `posts.reply.delete`, `posts.react`, `posts.favorite` |
 | chat     | `chat.view`, `chat.send`, `chat.edit`, `chat.delete`, `chat.request.send`, `chat.request.approve`, `chat.group.create`, `chat.group.invite`, `chat.group.manage`, `chat.group.nickname`, `chat.note.edit` |
 | wallet   | `wallet.view`, `wallet.manage` |
-| admin    | `user.adjust_exp`, `user.membership.grant` |
+| plugin   | `plugin.manage` |
 | app      | `app.announcements.manage` |
 
-Keys are seeded by `seedPermissions()` in `pkg/database/migration.go`. Today
-the default `everyone` group holds the full set; tightening group grants is a
-follow-up.
+The authoritative list is `pkg/permission/permission.go`; the same table with the
+administrative keys marked is in
+[architecture.md](architecture.md#permission-model).
+
+Keys are seeded by `seedPermissions()` in `pkg/database/migration.go`. The default
+`everyone` group does **not** hold the full set: it receives
+`DefaultGroupPermissions()` — every key except the seven administrative ones
+(`account.verify`, `user.adjust_exp`, `user.membership.grant`, `user.punish`,
+`wallet.manage`, `plugin.manage`, `app.announcements.manage`), which is why an
+ordinary account cannot adjust other users' exp, punish anyone or manage plugins.
+Adding an administrative key without listing it in `AdminPermissions()` hands it
+to every registered user, so the two lists must stay in sync.
 
 `GET /users/me/permissions` returns the caller's effective permissions and
 groups without requiring any permission itself (so registration can finish).
@@ -405,10 +417,16 @@ a group creates a request the target must accept or decline.
 
 ## Realtime Push
 
-The push service (`services/push`) holds WebSocket connections (authed via
-`GET /api/v1/ws`) and fans out chat events, typing indicators and notification
-messages to connected clients. It is the single bidirectional channel; all
-other traffic is plain REST.
+The push service (`services/push`) holds WebSocket connections and fans out chat
+events, typing indicators and notification messages to connected clients. It is
+the single bidirectional channel; all other traffic is plain REST.
+
+Connecting is two steps: `POST /api/v1/ws` (Bearer-authenticated) returns a
+single-use ticket that expires in 30 seconds, then `GET /api/v1/ws?ticket=…`
+upgrades the connection. A bare `GET /api/v1/ws` carrying a bearer token is
+rejected — the gateway deletes identity headers on that route, and the push
+service redeems the ticket instead (see [security-hardening.md](security-hardening.md)
+and [bots.md](bots.md) § 8).
 
 ## API Gateway
 
@@ -417,8 +435,11 @@ Every internal route must be registered in its explicit route table with an
 auth level (`authPublic` / `authRequired` / `authPermission` + permission key).
 
 - **Rate limiting**: a per-IP token bucket (120 req/min, burst 240) runs
-  ahead of auth and covers every proxied route; sustained flooding is
-  rejected with `429`. `/api/v1/health` is exempt.
+  ahead of auth and covers every request the gateway serves, `/api/v1/health`
+  included; over-limit requests wait briefly for a token and sustained flooding
+  is rejected with `429`. The bucket is keyed on the real TCP peer, not on a
+  client-supplied header. The *internal* `/healthz` probes the health handler
+  fans out to do not pass through it.
 - **503 on dead backends**: when a proxied backend is unreachable
   (connection refused, timeout, DNS), the proxy's `ErrorHandler` answers
   `503 {"error":"service temporarily unavailable"}` and logs the failure —

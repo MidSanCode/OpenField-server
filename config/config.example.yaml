@@ -28,12 +28,18 @@ server:
   trusted_proxies: []
 
 # Internal microservice addresses (used by the gateway to route requests)
+# Every service the gateway routes to needs an entry: its listen port is derived
+# from the URL below (see Config.ServicePort), and a missing URL makes those
+# routes fail at request time rather than being skipped.
 services:
   account: "http://127.0.0.1:8081"
   storage: "http://127.0.0.1:8082"
   chat: "http://127.0.0.1:8083"
   posts: "http://127.0.0.1:8084"
   push: "http://127.0.0.1:8085"
+  # Optional plugin service. Not started by scripts/start.sh; needed for the
+  # /api/v1/plugins routes.
+  plugin: "http://127.0.0.1:8086"
 
 
 database:

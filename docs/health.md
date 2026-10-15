@@ -10,7 +10,7 @@ can see at a glance which parts of the platform are currently working.
 
 ### `GET /healthz` (internal port, unauthenticated)
 
-Mounted by account, chat, posts, push and storage. Returns HTTP 200 with a
+Mounted by account, chat, posts, push, storage and plugin. Returns HTTP 200 with a
 JSON body (the body carries the state, so simple TCP/HTTP probes can also use
 the status code of the aggregate endpoint):
 
@@ -34,8 +34,9 @@ the status code of the aggregate endpoint):
 
 ### `GET /api/v1/health` (public)
 
-Served by the gateway itself; fans out concurrently to every configured
-backend's `/healthz` and measures per-service latency.
+Served by the gateway itself; fans out concurrently to every **configured**
+backend's `/healthz` — `account`, `chat`, `posts`, `push`, `storage`, `plugin` —
+and measures per-service latency.
 
 Response `200` when everything is healthy, `503` otherwise — the body is
 always parseable:
@@ -48,14 +49,16 @@ always parseable:
     "gateway": { "status": "up", "latency_ms": 0, "details": { "database": "up" } },
     "account": { "status": "up", "latency_ms": 3, "details": { "database": "up" } },
     "chat":    { "status": "up", "latency_ms": 2, "details": { "database": "up" } },
-    "posts":   { "status": "down", "latency_ms": 3001, "error": "context deadline exceeded" }
+    "posts":   { "status": "down", "latency_ms": 3001, "error": "context deadline exceeded" },
+    "plugin":  { "status": "unknown", "latency_ms": 0, "error": "not configured" }
   }
 }
 ```
 
 Each entry carries `status`, `latency_ms` and either upstream `details` or an
-`error`. Unconfigured service URLs report `unknown`.
+`error`. A service whose URL is not configured reports `unknown` with
+`"not configured"` rather than failing the aggregate.
 
 The endpoint requires no authentication and is safe to poll (each call costs
-one DB ping plus five local HTTP GETs); keep polling intervals modest
+one DB ping plus six local HTTP GETs); keep polling intervals modest
 (≥ 30 seconds).

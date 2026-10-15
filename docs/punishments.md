@@ -53,11 +53,26 @@ permission bans.
 
 ## Auth integration
 
-`users.status` / `users.banned_until` gate login:
+`users.status` / `users.banned_until` gate login and every subsequent request:
 
 - Login, OIDC callback and refresh-token flows reject users whose status is
   `banned`.
 - For `temp_ban`, the ban is lifted automatically once `banned_until` is in
   the past (the banned check compares against `NOW()`).
-- An active token does not stop working on ban (the ban targets new logins);
-  revoking a session token is out of scope for this feature.
+- **A ban also takes effect on the live request path.** The gateway checks the
+  status once per authenticated request (`IsBannedCached`, `gateway_ban.go`) and
+  answers `403 {"error":"account is banned","banned":true}` without contacting the
+  backend. The result is cached for 30 seconds, so a fresh ban starts biting
+  within half a minute instead of waiting for the next login.
+- **A few routes stay reachable** so a banned account can learn why and leave:
+  `GET /users/me`, `GET /users/me/punishments`, `POST /auth/logout` and
+  `POST /auth/refresh` (refresh is allowed so a client can observe the ban, but it
+  will not mint a token for a banned user).
+- Public routes (`authPublic`) are **not** ban-checked: a banned account can still
+  read public content, and its token is still honoured there for personalization.
+  The ban stops actions, not reads.
+- A banned **bot** behaves differently again: its static token fails to resolve at
+  all, so every request — public routes included — answers
+  `401 {"error":"invalid bot token"}` (see [bots.md](bots.md)).
+- An already-issued *access token* is not revoked; the ban is enforced by this
+  status check on every request rather than by invalidating tokens.

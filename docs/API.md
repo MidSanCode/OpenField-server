@@ -5,8 +5,20 @@
 http://localhost:8080/api/v1
 ```
 
-All requests are proxied through the **gateway**, which validates JWTs and enforces
-permissions before forwarding to the internal services.
+All requests are proxied through the **gateway**, which validates the caller's
+credential — a JWT, or a bot's static `ofb_` token — and enforces permissions
+before forwarding to the internal services. Two paths do not go through the route
+table: `GET /api/v1/health` is served by the gateway itself, and
+`GET /api/v1/files/...` is proxied from the gateway's `NoRoute` handler with JWT
+resolution only (a bot token is treated as anonymous there).
+
+> **Coverage.** This file documents the core resources in detail. Features added
+> later are documented in their own guides rather than duplicated here:
+> camps and their private subgroups ([features.md](features.md)), moderation
+> reports ([reports.md](reports.md)), bots ([bots.md](bots.md)), service health
+> ([health.md](health.md)), storage buckets
+> ([storage-buckets.md](storage-buckets.md)) and red packets / checks
+> ([checks.md](checks.md)).
 
 ## Authentication
 
@@ -21,7 +33,8 @@ to set a unique username and a nickname before using the app.
   is automatically granted the `admin` role.
 - Permissions are checked at the gateway. A permission is granted either by the
   user's role or by an explicit permission grant. Permission keys are dot-namespaced,
-  e.g. `posts.view`, `chat.send`.
+  e.g. `posts.view`, `chat.send`; the complete list is in
+  [architecture.md](architecture.md#permission-model).
 
 ### Get Available Providers
 ```
