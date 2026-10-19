@@ -801,6 +801,24 @@ var versionedMigrations = []migration{
 			);
 		`,
 	},
+	{
+		// v34 gives the call sweeper an index.
+		//
+		// The sweeper runs every 2 seconds for the life of the process and looks
+		// for `state = 'ringing' AND created_at < ...`. idx_calls_live is keyed
+		// on conversation_id, so it cannot serve a created_at range filter, and
+		// call_sessions only grows (every call keeps its history) — without this
+		// index the sweep becomes a sequential scan that gets slower forever.
+		//
+		// The partial predicate keeps the index tiny: at any moment it holds only
+		// the calls currently ringing.
+		version: 34,
+		name:    "call-sweeper-index",
+		sql: `
+			CREATE INDEX IF NOT EXISTS idx_calls_ringing
+				ON call_sessions(created_at) WHERE state = 'ringing';
+		`,
+	},
 }
 
 // latestMigrationVersion returns the newest schema version the code knows

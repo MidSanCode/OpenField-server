@@ -212,6 +212,7 @@ GET /api/v1/conversations/:id/call
 
 - 振铃超时 **45 秒**（`repository.RingTimeout`），与客户端保持一致。
 - chat 服务启动一个 **2 秒** 周期的 sweeper（`CallHandler.StartSweeper`），把超时的 `ringing` 通话置为 `ended`（`end_reason = timeout`）并推送 `call.ended`。
+- sweeper 的查询由部分索引 `idx_calls_ringing`（v34，`created_at WHERE state = 'ringing'`）支撑：该索引只包含当前正在响铃的少量行，避免每 2 秒对不断增长的通话历史做全表扫描。
 - 没有这个 sweeper，主叫杀进程后对端会**一直响铃**，同时 `idx_calls_live` 会让该会话**再也打不通电话**。
 
 ---
