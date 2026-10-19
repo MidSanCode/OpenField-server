@@ -755,6 +755,52 @@ var versionedMigrations = []migration{
 				ON reports(reporter_id, target_type, target_id) WHERE status = 'pending';
 		`,
 	},
+	{
+		// v33 introduces peer-to-peer voice/video calls.
+		//
+		// call_sessions is the entire server-side footprint of a call: who
+		// started it, in which conversation, whether it is ringing/active/ended
+		// and why it ended. Media never reaches the server and signalling
+		// payloads are relayed then dropped, so nothing stored here is content.
+		//
+		// idx_calls_live is the concurrency guarantee: at most one live
+		// (ringing or active) call per conversation, so a second dial cannot
+		// ring a callee twice. Ended calls are excluded, so history accumulates
+		// freely.
+		//
+		// call_participants is the roster. The initiator is inserted as
+		// 'accepted' because they are on the call by definition; invitees start
+		// as 'invited'. Both tables cascade from their parents, so deleting a
+		// conversation or a user takes the call with it.
+		version: 33,
+		name:    "call-sessions",
+		sql: `
+			CREATE TABLE IF NOT EXISTS call_sessions (
+				id BIGSERIAL PRIMARY KEY,
+				conversation_id BIGINT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+				initiator_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+				mode TEXT NOT NULL DEFAULT 'audio' CHECK (mode IN ('audio','video')),
+				state TEXT NOT NULL DEFAULT 'ringing' CHECK (state IN ('ringing','active','ended')),
+				end_reason TEXT NOT NULL DEFAULT '',
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+				answered_at TIMESTAMPTZ,
+				ended_at TIMESTAMPTZ
+			);
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_calls_live
+				ON call_sessions(conversation_id) WHERE state <> 'ended';
+			CREATE INDEX IF NOT EXISTS idx_calls_conversation
+				ON call_sessions(conversation_id, id DESC);
+
+			CREATE TABLE IF NOT EXISTS call_participants (
+				call_id BIGINT NOT NULL REFERENCES call_sessions(id) ON DELETE CASCADE,
+				user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+				state TEXT NOT NULL DEFAULT 'invited' CHECK (state IN ('invited','accepted','declined','left')),
+				joined_at TIMESTAMPTZ,
+				left_at TIMESTAMPTZ,
+				PRIMARY KEY (call_id, user_id)
+			);
+		`,
+	},
 }
 
 // latestMigrationVersion returns the newest schema version the code knows

@@ -43,6 +43,10 @@ var (
 	// ErrReportRateLimit reports that the caller exceeded the per-user report
 	// submission budget (anti spam).
 	ErrReportRateLimit = errors.New("too many reports, slow down")
+	// ErrCallAlreadyActive reports that a conversation already has a ringing or
+	// active call; call_sessions carries a partial unique index (idx_calls_live)
+	// so a second call cannot ring two phones at once.
+	ErrCallAlreadyActive = errors.New("a call is already in progress in this conversation")
 )
 
 // isUniqueViolation detects PostgreSQL unique constraint violations. lib/pq

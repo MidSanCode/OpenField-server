@@ -608,6 +608,26 @@ Authorization: Bearer <access_token>
 ```
 Responds `204 No Content`.
 
+## Calls (voice / video)
+
+Peer-to-peer calls inside a one-to-one conversation. The server keeps the call
+state machine and relays signalling; media never passes through it. Requires the
+`chat.call` permission. Full details, event payloads and the TURN requirement are
+in [calls.md](calls.md).
+
+```
+POST   /calls                        Body: { "conversation_id": 1, "mode": "audio" }  → 201
+GET    /calls/:id                                                                     → 200
+POST   /calls/:id/answer                                                              → 200
+POST   /calls/:id/decline                                                             → 200
+POST   /calls/:id/hangup                                                              → 200
+POST   /calls/:id/signal             Body: { "type": "offer|answer|candidate", "payload": {...} } → 200
+```
+
+Errors worth knowing: `409` when the conversation already has a live call or the
+call is no longer ringing; `400` for group conversations (unsupported) and
+bot-initiated calls; `413` when a signalling payload exceeds 6000 bytes.
+
 ## Health Check
 ```
 GET /health

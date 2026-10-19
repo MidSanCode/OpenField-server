@@ -31,6 +31,7 @@ for the service layout and [wallet.md](wallet.md) for the wallet in detail.
 | Attachments / storage      | `services/storage`                                           | RustFS, quota, previews |
 | Chat & consent             | `services/chat`                                              | E2E, groups, mentions |
 | Group extras               | `services/chat/internal/handler/group_features.go`           | announcements, todos, files |
+| P2P calls                  | `services/chat/internal/handler/call.go`, `pkg/repository/call.go` | voice/video signalling, 1:1 only, no media on the server |
 | Realtime push              | `services/push`                                              | WebSocket gateway |
 | Plugin store               | `services/plugin/internal/handler/plugin.go`                 | optional service behind `plugin.manage` |
 | API gateway                | `services/gateway/cmd/main.go`                               | routing, auth, rate limiting |
@@ -90,7 +91,7 @@ request ever reaches an internal service.
 | user     | `user.adjust_exp`, `user.membership.grant`, `user.punish` |
 | storage  | `storage.upload`, `storage.list`, `storage.get`, `storage.delete` |
 | posts    | `posts.view`, `posts.create`, `posts.edit`, `posts.delete`, `posts.reply.create`, `posts.reply.edit`, `posts.reply.delete`, `posts.react`, `posts.favorite` |
-| chat     | `chat.view`, `chat.send`, `chat.edit`, `chat.delete`, `chat.request.send`, `chat.request.approve`, `chat.group.create`, `chat.group.invite`, `chat.group.manage`, `chat.group.nickname`, `chat.note.edit` |
+| chat     | `chat.view`, `chat.send`, `chat.call`, `chat.edit`, `chat.delete`, `chat.request.send`, `chat.request.approve`, `chat.group.create`, `chat.group.invite`, `chat.group.manage`, `chat.group.nickname`, `chat.note.edit` |
 | wallet   | `wallet.view`, `wallet.manage` |
 | plugin   | `plugin.manage` |
 | app      | `app.announcements.manage` |

@@ -24,6 +24,7 @@ const (
 	// Chat
 	ChatView           = "chat.view"
 	ChatSend           = "chat.send"
+	ChatCall           = "chat.call"
 	ChatEdit           = "chat.edit"
 	ChatDelete         = "chat.delete"
 	ChatRequestSend    = "chat.request.send"
@@ -110,7 +111,7 @@ func All() []string {
 	return []string{
 		AccountView, AccountProfileEdit, AccountAvatarEdit, AccountBannerEdit, AccountVerify, AccountFollow, UserAdjustExp, UserMembershipGrant, UserPunish,
 		StorageUpload, StorageList, StorageGet, StorageDelete,
-		ChatView, ChatSend, ChatEdit, ChatDelete, ChatRequestSend, ChatRequestApprove,
+		ChatView, ChatSend, ChatCall, ChatEdit, ChatDelete, ChatRequestSend, ChatRequestApprove,
 		ChatGroupCreate, ChatGroupInvite, ChatGroupManage, ChatNoteEdit, ChatGroupNickname,
 		PostsView, PostsCreate, PostsEdit, PostsDelete, PostsReplyCreate, PostsReplyEdit, PostsReplyDelete, PostsReact, PostsFavorite,
 		WalletView, WalletManage,

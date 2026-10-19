@@ -55,6 +55,7 @@ func main() {
 	extrasHandler := handler.NewGroupExtrasHandler(store)
 	consentHandler := handler.NewConsentHandler()
 	msgHandler := handler.NewMessageHandler(store)
+	callHandler := handler.NewCallHandler()
 
 	r := gin.New()
 	// Internal services sit behind the gateway on loopback and are never called
@@ -72,11 +73,16 @@ func main() {
 
 	r.GET("/healthz", health.Handler(nil))
 
-	handler.RegisterRoutes(r, convHandler, consentHandler, msgHandler, extrasHandler)
+	handler.RegisterRoutes(r, convHandler, consentHandler, msgHandler, extrasHandler, callHandler)
 
 	// Burn-after-read sweeper: soft-deletes armed messages once their
 	// countdown expires and pushes chat.message.deleted to every member.
 	msgHandler.StartBurnSweeper(2 * time.Second)
+
+	// Call sweeper: cancels calls that ring longer than repository.RingTimeout
+	// and pushes call.ended, so an abandoned outgoing call does not leave the
+	// callee ringing and the conversation blocked by idx_calls_live.
+	callHandler.StartSweeper(2 * time.Second)
 
 	addr := "127.0.0.1:" + cfg.ServicePort("CHAT")
 	logger.Log.Info("chat service starting", "address", addr)

@@ -8,7 +8,7 @@ import (
 )
 
 // RegisterRoutes registers all chat service routes.
-func RegisterRoutes(r *gin.Engine, convHandler *ConversationHandler, consentHandler *ConsentHandler, msgHandler *MessageHandler, extrasHandler *GroupExtrasHandler) {
+func RegisterRoutes(r *gin.Engine, convHandler *ConversationHandler, consentHandler *ConsentHandler, msgHandler *MessageHandler, extrasHandler *GroupExtrasHandler, callHandler *CallHandler) {
 	api := r.Group("/api/v1")
 	api.Use(middleware.GatewayAuthMiddleware())
 	{
@@ -72,6 +72,18 @@ func RegisterRoutes(r *gin.Engine, convHandler *ConversationHandler, consentHand
 			msgs.POST("/:message_id/read", msgHandler.MarkBurnRead)
 			msgs.PUT("/:message_id", msgHandler.Update)
 			msgs.DELETE("/:message_id", msgHandler.Delete)
+		}
+
+		// Calls: the state machine and the signalling relay for peer-to-peer
+		// voice/video. Media never passes through here (see docs/calls.md).
+		calls := api.Group("/calls")
+		{
+			calls.POST("", callHandler.Start)
+			calls.GET("/:id", callHandler.Get)
+			calls.POST("/:id/answer", callHandler.Answer)
+			calls.POST("/:id/decline", callHandler.Decline)
+			calls.POST("/:id/hangup", callHandler.Hangup)
+			calls.POST("/:id/signal", callHandler.Signal)
 		}
 	}
 }

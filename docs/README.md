@@ -27,6 +27,8 @@
   surface, realtime events and the limits that apply.
 - [Service health checks](health.md) — per-service `/healthz` probes and the
   gateway's aggregate endpoint.
+- [P2P voice/video calls](calls.md) — the call state machine, signalling relay,
+  `chat.call` permission, call events and the TURN requirement for production.
 - [Security hardening](security-hardening.md) — audit record of the 2026-08
   hardening pass, newest items first.
 
@@ -122,6 +124,9 @@ The full feature guide lives in [features.md](features.md). Highlights:
 - Service health probes plus a public aggregate endpoint.
 - RustFS-backed attachments with per-user storage quotas.
 - Consent-based chat with E2E encryption, groups and mentions.
+- Peer-to-peer voice/video calls inside one-to-one chats: the server runs the
+  call state machine and relays signalling, media goes straight between peers —
+  see [calls.md](calls.md).
 - A Flask admin panel managing users, groups, permissions and wallets.
 
 ## Database

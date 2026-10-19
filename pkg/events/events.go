@@ -62,4 +62,15 @@ const (
 	// ChatE2EEKeysUpdated fires when new group-key envelopes are stored for a
 	// conversation (after enabling encryption or adding members).
 	ChatE2EEKeysUpdated = "chat.e2ee.keys.updated"
+
+	// Call events. Voice/video calls are peer-to-peer: the server only carries
+	// signalling and the call state machine, never media. Signalling rides the
+	// same push channel as chat traffic because the WebSocket is downstream-only
+	// — clients cannot write frames up it, so negotiation goes over REST and the
+	// resulting events come back down here (see docs/calls.md).
+	CallInvited  = "call.invited"
+	CallAccepted = "call.accepted"
+	CallDeclined = "call.declined"
+	CallEnded    = "call.ended"
+	CallSignal   = "call.signal"
 )
