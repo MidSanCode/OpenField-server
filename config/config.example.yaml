@@ -146,3 +146,21 @@ storage:
   #     default_quota: 5368709120  # 5 GB
   #     min_member_level: 4
   #     is_default: false
+
+# Peer-to-peer voice/video calls (see docs/calls.md).
+#
+# The server relays signalling only; media goes straight between peers, so it
+# needs no bandwidth here. What it does hand out is the ICE configuration, which
+# clients fetch from GET /api/v1/calls/ice — set it once here instead of asking
+# every user to fill in a settings field.
+# call:
+#   # Overrides the built-in public STUN list (stun.l.google.com). Keep this
+#   # empty unless the deployment must not contact third-party servers.
+#   stun_urls:
+#     - "stun:stun.example.com:3478"
+#   # TURN relays media when two peers cannot reach each other directly
+#   # (symmetric NAT, corporate firewall). Without it, such calls fail with the
+#   # UI stuck on "connecting".
+#   turn_url: "turn:turn.example.com:3478"
+#   turn_username: "openfield"
+#   turn_credential: "change-me"

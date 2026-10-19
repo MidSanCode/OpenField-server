@@ -617,6 +617,7 @@ in [calls.md](calls.md).
 
 ```
 POST   /calls                        Body: { "conversation_id": 1, "mode": "audio" }  → 201
+GET    /calls/ice                    ICE servers this deployment hands out          → 200
 GET    /calls/:id                                                                     → 200
 GET    /conversations/:id/call       live call of a conversation, or null             → 200
 POST   /calls/:id/answer                                                              → 200
@@ -628,6 +629,13 @@ POST   /calls/:id/signal             Body: { "type": "offer|answer|candidate", "
 Errors worth knowing: `409` when the conversation already has a live call or the
 call is no longer ringing; `400` for group conversations (unsupported) and
 bot-initiated calls; `413` when a signalling payload exceeds 6000 bytes.
+
+`GET /calls/ice` returns `{"ice_servers": [...], "turn": bool}`, configured once in
+the server's `call:` config section. `turn: false` means no relay is configured,
+so calls between two peers behind symmetric NATs cannot connect.
+
+A finished call also leaves a message in the conversation with `kind: "call"` and a
+`call` payload (`outcome`, `duration_seconds`); see section 10 of [calls.md](calls.md).
 
 ## Health Check
 ```

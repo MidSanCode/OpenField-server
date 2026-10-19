@@ -217,9 +217,18 @@ GET /api/v1/conversations/:id/call
 
 ---
 
-## 8. 客户端接入要点（尚未实现）
+## 8. 客户端接入（已实现）
 
-服务端已就绪，客户端需要：
+Flutter 客户端（`openfield/`）已按下列流程接完：
+
+| 文件 | 作用 |
+|---|---|
+| `lib/data/services/call_service.dart` | 客户端状态机 + WebRTC：发起/接听/挂断、offer/answer/candidate 收发、`call.*` 事件路由、漏推恢复 |
+| `lib/widgets/call_overlay.dart` | 全屏通话浮层，挂在 `MaterialApp` 之上而不是路由里，所以导航不会把通话界面顶掉 |
+| `lib/data/services/call_native_service.dart` | 平台桥：Android 前台服务、iOS CallKit |
+| `lib/data/models/call_{session,record,ice_config}.dart` | 数据模型 |
+
+流程：
 
 1. **依赖** `flutter_webrtc`（当前 `pubspec.yaml` 没有 WebRTC 相关依赖）；
 2. 收到 `call.invited` → 展示来电界面 → `POST /calls/:id/answer`；
@@ -232,36 +241,80 @@ GET /api/v1/conversations/:id/call
 
 平台注意事项（6 个构建目标）：
 
-| 平台 | 注意点 |
+| 平台 | 状态 |
 |---|---|
-| Android | 相机/麦克风运行时权限；后台通话需前台服务与通知渠道 |
-| iOS | `Info.plist` 用途描述 + 后台 `audio` 模式；锁屏来电需要 CallKit/PushKit（工作量大，可后置） |
+| Android | 已接入。通话期间由 `CallForegroundService`（`foregroundServiceType="microphone"` + 常驻通知）保持后台存活 |
+| iOS | 已接入 CallKit（`ios/Runner/AppDelegate.swift` 的 `CallKitBridge`）：来电进入系统通话 UI，锁屏可接听/挂断。**App 被杀死时收不到来电**——那需要 PushKit + APNs VoIP 证书，见第 11 节 |
 | Web | 必须 HTTPS（secure context），麦克风需用户手势触发；依赖网关 CORS 配置 |
-| Windows / macOS | 打包 WebRTC 运行库，安装包体积增加；macOS 需 entitlements |
-| Linux | `flutter_webrtc` 的平台支持最弱，建议先做一次构建验证，必要时首版标记为实验性 |
+| Windows / macOS | 依赖 flutter_webrtc 的预编译 libwebrtc（构建机需能访问 GitHub Releases）；macOS 已补 `NSMicrophoneUsageDescription` 与 `device.audio-input` entitlement |
+| Linux | flutter_webrtc 的平台支持最弱，建议先做一次构建验证，必要时首版标记为实验性 |
 
 ---
 
-## 9. TURN（生产环境必需）
+## 9. TURN 与 ICE 配置
 
-只在同一局域网或宽松 NAT 下，STUN 才够用。对称 NAT、企业防火墙、部分移动网络下必须靠 TURN 中继，否则表现为**一直"连接中"最后失败**。
+配置在服务端写一次，客户端通过 `GET /api/v1/calls/ice` 取用，用户不需要任何设置：
 
-- 组件：coturn，开放 `3478/udp`、`3478/tcp`、`5349/tls` 与中继端口段；
-- 鉴权：**不要**使用静态用户名密码，用 `use-auth-secret` + 服务端按 `user_id` 和过期时间签发短期凭证；
-- 容量：只有中继的流量计费，经验比例 10%～20%；
+```yaml
+call:
+  stun_urls: ["stun:stun.example.com:3478"]   # 省略则用内置公共 STUN 列表
+  turn_url: "turn:turn.example.com:3478"
+  turn_username: "openfield"
+  turn_credential: "change-me"
+```
+
+环境变量同样生效：`CALL_STUN_URLS`（逗号分隔）、`CALL_TURN_URL`、`CALL_TURN_USERNAME`、`CALL_TURN_CREDENTIAL`。
+
+`GET /api/v1/calls/ice` 响应：
+
+```json
+{
+  "ice_servers": [
+    {"urls": "stun:stun.l.google.com:19302"},
+    {"urls": "turn:turn.example.com:3478", "username": "openfield", "credential": "change-me"}
+  ],
+  "turn": true
+}
+```
+
+`turn: false` 表示没有配中继：此时对称 NAT、企业防火墙、部分移动网络下**必然**连不通，表现为一直"连接中"然后失败。客户端应据此提示，而不是让用户干等。
+
+部署 coturn 的要点：
+
+- 开放 `3478/udp`、`3478/tcp`、`5349/tls` 与中继端口段；
+- 生产**不要**用静态用户名密码，用 `use-auth-secret` 由服务端按 `user_id` + 过期时间签发短期凭证（当前配置只支持静态凭据，按用户签发是后续工作）；
+- 只有中继的流量计费，经验比例 10%～20%；
 - 媒体加密：P2P 下由 **DTLS-SRTP** 保证端到端加密，媒体不经过服务器。但**信令与元数据**（谁打给谁、时间、时长）对服务端可见，文档与产品文案不应声称"完全不可见"。
 
 ---
 
-## 10. 已知限制
+## 10. 通话记录消息
 
+每次通话结束——接通、拒接、响铃超时、主叫取消——都会在会话里留下一条 `kind = "call"` 的消息，两端的消息流与会话列表都能看到。
+
+- 只在状态真正从 `ringing`/`active` 迁到 `ended` 时写入：`CallRepository.End` 的条件更新决定胜负，所以挂断重试、sweeper 与人工挂断并发都不会重复写；
+- `content` 为空，结果与时长放在 `call_meta`（JSONB），措辞由客户端本地化——同一行对主叫和被叫读法不同：
+
+  ```json
+  {"call_id": 42, "mode": "audio", "outcome": "answered", "duration_seconds": 201, "initiator_id": 7}
+  ```
+
+- `outcome` 取值：`answered`（已接通，带时长）、`declined`（被叫拒接）、`missed`（响铃超时）、`cancelled`（未接通即挂断）；
+- 写入后照常广播 `chat.message.created`，客户端即时插入，不需要额外刷新；
+- 超时未接由 sweeper（2s 一轮）写入 `missed`。
+
+---
+
+## 11. 已知限制
+
+- **App 被杀死时收不到来电**：iOS 只有在 App 存活（前台或后台）时才能把来电投进 CallKit。要覆盖被杀死的情况需要 PushKit VoIP 推送，它要求 APNs VoIP 证书与付费开发者账号；服务端也需要新增 VoIP 推送通道。这是当前最大的缺口。
 - **群组通话未实现**：`type = group` 的会话直接返回 `400`。要支持需要 mesh（两两建连，上行带宽随人数线性增长）或 SFU（新增有状态媒体服务），是另一个量级的工作。
 - **bot 不能发起通话**：bot 没有媒体端点，发起的通话只会让对方无意义响铃，因此 `POST /calls` 对 bot 返回 `403`。反之，用户给 **bot** 打电话会正常响铃然后 45 秒后超时——目前不额外拦截，如需更友好的提示可加一条"对端是 bot"的预检。
 - **多端精确投递**：见第 6 节，`call.signal` 会投递到被叫所有设备，需要客户端按 `call_id` 过滤。
-- **无事件重放**：推送是尽力而为，客户端必须靠 `GET /conversations/:id/call` 与 `GET /calls/:id` 兜底对齐状态。
-- **无通话记录消息**：目前通话结束后不会在会话里插入"通话 2 分 13 秒"的横幅。若要，可复用 `messages` 的系统消息（参考 `system.join`），需要客户端支持新的 `kind`。
+- **无事件重放**：推送是尽力而为，客户端必须靠 `GET /conversations/:id/call` 与 `GET /calls/:id` 兜底对齐状态。重连后已接通但未重协商的通话无法恢复，客户端只在 `ringing` 时接管。
+- **TURN 凭据是静态的**：配置里只有一个用户名密码，所有用户共用。按用户签发短期凭证尚未实现。
 
-## 11. 排障
+## 12. 排障
 
 | 现象 | 排查方向 |
 |---|---|
