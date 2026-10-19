@@ -320,6 +320,25 @@ type GameConfig struct {
 	Timezone string `yaml:"timezone"`
 }
 
+// CallConfig holds the ICE configuration handed to WebRTC clients.
+//
+// The server owns it so an operator configures the relay once instead of
+// asking every user to fill in a settings field. STUN only discovers a peer's
+// address; it cannot relay media, so a deployment without TURN will fail to
+// connect calls between two peers that both sit behind a symmetric NAT or a
+// restrictive corporate network.
+type CallConfig struct {
+	// STUNURLs overrides the built-in public STUN list. Mostly useful when the
+	// deployment must not contact third-party servers.
+	STUNURLs []string `yaml:"stun_urls"`
+	// TURNURL is the relay, e.g. "turn:turn.example.com:3478" or
+	// "turns:turn.example.com:5349" for TLS. Empty disables relaying.
+	TURNURL string `yaml:"turn_url"`
+	// TURNUsername and TURNCredential authenticate against TURNURL.
+	TURNUsername   string `yaml:"turn_username"`
+	TURNCredential string `yaml:"turn_credential"`
+}
+
 // Config holds all configuration for the server.
 type Config struct {
 	Server   ServerConfig   `yaml:"server"`
@@ -330,6 +349,7 @@ type Config struct {
 	Storage  StorageConfig  `yaml:"storage"`
 	Services ServicesConfig `yaml:"services"`
 	Game     GameConfig     `yaml:"game"`
+	Call     CallConfig     `yaml:"call"`
 }
 
 // Load reads configuration from a YAML file, with environment variable overrides.
@@ -507,6 +527,62 @@ func (c *Config) overrideFromEnv() {
 	if v := os.Getenv("GAME_TIMEZONE"); v != "" {
 		c.Game.Timezone = v
 	}
+	if v := os.Getenv("CALL_STUN_URLS"); v != "" {
+		c.Call.STUNURLs = splitTrimmed(v)
+	}
+	if v := os.Getenv("CALL_TURN_URL"); v != "" {
+		c.Call.TURNURL = v
+	}
+	if v := os.Getenv("CALL_TURN_USERNAME"); v != "" {
+		c.Call.TURNUsername = v
+	}
+	if v := os.Getenv("CALL_TURN_CREDENTIAL"); v != "" {
+		c.Call.TURNCredential = v
+	}
+}
+
+// ICEServers converts the call configuration into the ICE server list WebRTC
+// clients expect ({"urls": ...} entries, with credentials on the TURN one).
+//
+// When no STUN list is configured the public defaults are used, so a deployment
+// that only adds a relay still gets address discovery.
+func (c CallConfig) ICEServers() []map[string]string {
+	stun := c.STUNURLs
+	if len(stun) == 0 {
+		stun = defaultSTUNURLs
+	}
+	servers := make([]map[string]string, 0, len(stun)+1)
+	for _, raw := range stun {
+		url := strings.TrimSpace(raw)
+		if url == "" {
+			continue
+		}
+		servers = append(servers, map[string]string{"urls": url})
+	}
+	if url := strings.TrimSpace(c.TURNURL); url != "" {
+		turn := map[string]string{"urls": url}
+		if c.TURNUsername != "" {
+			turn["username"] = c.TURNUsername
+		}
+		if c.TURNCredential != "" {
+			turn["credential"] = c.TURNCredential
+		}
+		servers = append(servers, turn)
+	}
+	return servers
+}
+
+// HasTURN reports whether a relay is configured. Without one, clients behind a
+// symmetric NAT cannot connect.
+func (c CallConfig) HasTURN() bool {
+	return strings.TrimSpace(c.TURNURL) != ""
+}
+
+// defaultSTUNURLs is the public STUN list used when the operator configures no
+// servers of their own.
+var defaultSTUNURLs = []string{
+	"stun:stun.l.google.com:19302",
+	"stun:stun1.l.google.com:19302",
 }
 
 // ServicePort returns the listen port for a named internal service.

@@ -611,6 +611,10 @@ type Message struct {
 	// it and the chat service sweeper soft-deletes the row once it passes.
 	BurnSeconds int        `json:"burn_seconds,omitempty"`
 	BurnAt      *time.Time `json:"burn_at,omitempty"`
+	// Call carries the structured payload of a call history entry (kind "call"),
+	// so clients can localize the outcome and show the duration. Nil on every
+	// other message kind.
+	Call *CallRecord `json:"call,omitempty"`
 }
 
 // E2EEKeyEnvelope is a group key encrypted to a single member's public key.

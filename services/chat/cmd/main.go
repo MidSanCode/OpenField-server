@@ -55,7 +55,7 @@ func main() {
 	extrasHandler := handler.NewGroupExtrasHandler(store)
 	consentHandler := handler.NewConsentHandler()
 	msgHandler := handler.NewMessageHandler(store)
-	callHandler := handler.NewCallHandler()
+	callHandler := handler.NewCallHandler(cfg)
 
 	r := gin.New()
 	// Internal services sit behind the gateway on loopback and are never called

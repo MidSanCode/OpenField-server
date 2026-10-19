@@ -64,3 +64,35 @@ type CallParticipant struct {
 	JoinedAt *time.Time `json:"joined_at,omitempty"`
 	LeftAt   *time.Time `json:"left_at,omitempty"`
 }
+
+// CallRecordKind is the message kind used for call history entries.
+//
+// Unlike the system.* kinds, a call entry carries data a client cannot derive
+// from the kind alone (outcome, duration), so it keeps a structured payload
+// beside it — see CallRecord.
+const CallRecordKind = "call"
+
+// Call outcomes stored on a call history message.
+const (
+	// CallOutcomeAnswered means the callee picked up.
+	CallOutcomeAnswered = "answered"
+	// CallOutcomeDeclined means the callee rejected the invitation.
+	CallOutcomeDeclined = "declined"
+	// CallOutcomeMissed means the invitation rang out without an answer.
+	CallOutcomeMissed = "missed"
+	// CallOutcomeCancelled means the caller gave up while it was still ringing.
+	CallOutcomeCancelled = "cancelled"
+)
+
+// CallRecord is the structured payload of a call history message (kind "call").
+//
+// It exists so the wording lives in the client's translation files rather than
+// in a sentence the server composes: both parties see the same row, but "Missed
+// call" reads differently depending on who is looking at it.
+type CallRecord struct {
+	CallID          int64  `json:"call_id"`
+	Mode            string `json:"mode"`    // audio | video
+	Outcome         string `json:"outcome"` // one of the CallOutcome constants
+	DurationSeconds int    `json:"duration_seconds"`
+	InitiatorID     int64  `json:"initiator_id"`
+}

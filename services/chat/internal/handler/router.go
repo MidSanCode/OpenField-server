@@ -80,6 +80,9 @@ func RegisterRoutes(r *gin.Engine, convHandler *ConversationHandler, consentHand
 		calls := api.Group("/calls")
 		{
 			calls.POST("", callHandler.Start)
+			// Static segment: gin prefers it over the ":id" route below, so the
+			// client can ask for ICE servers without a call existing.
+			calls.GET("/ice", callHandler.IceServers)
 			calls.GET("/:id", callHandler.Get)
 			calls.POST("/:id/answer", callHandler.Answer)
 			calls.POST("/:id/decline", callHandler.Decline)

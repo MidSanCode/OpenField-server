@@ -16,6 +16,7 @@ import (
 	"github.com/openfield/server/pkg/database"
 	"github.com/openfield/server/pkg/logger"
 	"github.com/openfield/server/pkg/middleware"
+	"github.com/openfield/server/pkg/model"
 	"github.com/openfield/server/pkg/repository"
 )
 
@@ -137,7 +138,7 @@ func TestCallHTTPE2E(t *testing.T) {
 	// The object store is the only dependency these routes do not need; nil is
 	// fine because no call endpoint touches attachments.
 	RegisterRoutes(r, NewConversationHandler(), NewConsentHandler(), NewMessageHandler(nil),
-		NewGroupExtrasHandler(nil), NewCallHandler())
+		NewGroupExtrasHandler(nil), NewCallHandler(nil))
 
 	// ---- auth ----
 	if w := callRequest(t, r, http.MethodPost, "/api/v1/calls", 0, map[string]any{"conversation_id": conv.ID}); w.Code != http.StatusUnauthorized {
@@ -249,6 +250,8 @@ func TestCallHTTPE2E(t *testing.T) {
 	}
 
 	// ---- hangup and the final state ----
+	// Let a second elapse so the recorded duration is measurably non-zero.
+	time.Sleep(time.Second)
 	if w := callRequest(t, r, http.MethodPost, fmt.Sprintf("/api/v1/calls/%d/hangup", callID), caller, nil); w.Code != http.StatusOK {
 		t.Errorf("hangup: status = %d, want 200", w.Code)
 	}
@@ -284,6 +287,51 @@ func TestCallHTTPE2E(t *testing.T) {
 	w = callRequest(t, r, http.MethodGet, fmt.Sprintf("/api/v1/calls/%d", secondID), caller, nil)
 	if declined := decodeCall(t, w); declined["state"] != "ended" || declined["end_reason"] != "declined" {
 		t.Errorf("declined call = %v/%v, want ended/declined", declined["state"], declined["end_reason"])
+	}
+
+	// ---- call history entries ----
+	// Every finished call leaves one message of kind "call" in the thread. The
+	// content stays empty and the outcome travels in the payload, so clients can
+	// phrase it themselves (and differently for caller and callee).
+	msgs, err := repository.NewMessageRepository().ListByConversation(conv.ID, 0, 50)
+	if err != nil {
+		t.Fatalf("listing messages after the calls failed: %v", err)
+	}
+	records := make([]*model.CallRecord, 0, 2)
+	for i := range msgs {
+		if msgs[i].Kind != model.CallRecordKind {
+			continue
+		}
+		if msgs[i].Call == nil {
+			t.Fatalf("call message %d carries no payload", msgs[i].ID)
+		}
+		if msgs[i].Content != "" {
+			t.Errorf("call message %d content = %q, want empty", msgs[i].ID, msgs[i].Content)
+		}
+		records = append(records, msgs[i].Call)
+	}
+	if len(records) != 2 {
+		t.Fatalf("call history entries = %d, want 2", len(records))
+	}
+	// Index by outcome rather than by position: the thread is returned in
+	// chronological order, which is an implementation detail this test has no
+	// business pinning.
+	byOutcome := make(map[string]*model.CallRecord, len(records))
+	for _, record := range records {
+		byOutcome[record.Outcome] = record
+	}
+	answered, declinedRecord := byOutcome[model.CallOutcomeAnswered], byOutcome[model.CallOutcomeDeclined]
+	if answered == nil || declinedRecord == nil {
+		t.Fatalf("call outcomes = %v, want one answered and one declined", byOutcome)
+	}
+	if declinedRecord.DurationSeconds != 0 {
+		t.Errorf("declined call duration = %ds, want 0", declinedRecord.DurationSeconds)
+	}
+	if answered.DurationSeconds < 1 {
+		t.Errorf("answered call duration = %ds, want at least 1", answered.DurationSeconds)
+	}
+	if answered.InitiatorID != caller {
+		t.Errorf("call record initiator = %d, want %d", answered.InitiatorID, caller)
 	}
 }
 

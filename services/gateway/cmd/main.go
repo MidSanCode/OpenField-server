@@ -365,6 +365,9 @@ func main() {
 		// straight between peers. chat.call is a separate key so calls can be
 		// withdrawn from a group without touching the rest of chat.
 		{http.MethodPost, "/api/v1/calls", cfg.Services.Chat, authPermission, "chat.call"},
+		// ICE servers come from the server config so a deployment configures its
+		// TURN relay once instead of every user filling in a settings field.
+		{http.MethodGet, "/api/v1/calls/ice", cfg.Services.Chat, authPermission, "chat.call"},
 		{http.MethodGet, "/api/v1/conversations/:id/call", cfg.Services.Chat, authPermission, "chat.call"},
 		{http.MethodGet, "/api/v1/calls/:id", cfg.Services.Chat, authPermission, "chat.call"},
 		{http.MethodPost, "/api/v1/calls/:id/answer", cfg.Services.Chat, authPermission, "chat.call"},

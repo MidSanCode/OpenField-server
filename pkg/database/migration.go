@@ -819,6 +819,19 @@ var versionedMigrations = []migration{
 				ON call_sessions(created_at) WHERE state = 'ringing';
 		`,
 	},
+
+	// Version 35 stores the structured payload of a call history message on the
+	// message row. A call entry is an ordinary message with kind = 'call', so it
+	// appears in the thread and in last-message previews like any other message;
+	// the payload lets each client localize the wording (outcome + duration)
+	// instead of parsing a sentence composed by the server.
+	{
+		version: 35,
+		name:    "message-call-record",
+		sql: `
+			ALTER TABLE messages ADD COLUMN IF NOT EXISTS call_meta JSONB;
+		`,
+	},
 }
 
 // latestMigrationVersion returns the newest schema version the code knows

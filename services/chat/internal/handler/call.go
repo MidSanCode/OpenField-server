@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/openfield/server/pkg/config"
 	"github.com/openfield/server/pkg/events"
 	"github.com/openfield/server/pkg/logger"
 	"github.com/openfield/server/pkg/middleware"
@@ -30,14 +31,47 @@ import (
 type CallHandler struct {
 	convRepo *repository.ConversationRepository
 	callRepo *repository.CallRepository
+	msgRepo  *repository.MessageRepository
+	// iceServers is the operator's ICE configuration, resolved once at startup
+	// from the call section of the config file.
+	iceServers []map[string]string
+	turnSet    bool
 }
 
-// NewCallHandler creates a new CallHandler.
-func NewCallHandler() *CallHandler {
-	return &CallHandler{
+// NewCallHandler creates a new CallHandler. A nil config is allowed and yields
+// the built-in STUN defaults, which keeps tests and single-binary runs working
+// without a config file.
+func NewCallHandler(cfg *config.Config) *CallHandler {
+	h := &CallHandler{
 		convRepo: repository.NewConversationRepository(),
 		callRepo: repository.NewCallRepository(),
+		msgRepo:  repository.NewMessageRepository(),
 	}
+	if cfg != nil {
+		h.iceServers = cfg.Call.ICEServers()
+		h.turnSet = cfg.Call.HasTURN()
+	} else {
+		h.iceServers = config.CallConfig{}.ICEServers()
+	}
+	return h
+}
+
+// IceServers reports the ICE configuration clients should use for their peer
+// connections.
+//
+// The server owns this so an operator configures the relay once instead of every
+// user filling in a settings field. A response without a TURN entry means calls
+// will fail between two peers that both sit behind a symmetric NAT — the client
+// is told so it can warn instead of leaving the user staring at "connecting".
+func (h *CallHandler) IceServers(c *gin.Context) {
+	servers := h.iceServers
+	if servers == nil {
+		servers = []map[string]string{}
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"ice_servers": servers,
+		"turn":        h.turnSet,
+	})
 }
 
 // callSignalTypes are the only signalling messages a client may relay. They are
@@ -417,6 +451,9 @@ func (h *CallHandler) StartSweeper(interval time.Duration) {
 					"end_reason":       call.EndReason,
 					"duration_seconds": call.DurationSeconds,
 				})
+				// A ringing call that ran out of time is a missed call on both
+				// sides, so it gets a history entry like any other finished call.
+				h.recordCall(context.Background(), &call, model.CallOutcomeMissed)
 			}
 		}
 	}()
@@ -451,6 +488,65 @@ func (h *CallHandler) endCall(ctx context.Context, callID int64, reason string) 
 		"end_reason":       call.EndReason,
 		"duration_seconds": call.DurationSeconds,
 	})
+	h.recordCall(ctx, call, callOutcome(call))
+}
+
+// callOutcome classifies how a finished call ended, for its history entry.
+func callOutcome(call *model.CallSession) string {
+	if call.DurationSeconds > 0 || call.AnsweredAt != nil {
+		return model.CallOutcomeAnswered
+	}
+	switch call.EndReason {
+	case "declined":
+		return model.CallOutcomeDeclined
+	case "timeout":
+		return model.CallOutcomeMissed
+	default:
+		// "cancelled" and a "hung_up" that never reached an answer share one
+		// wording: the call did not take place and nobody rejected it.
+		return model.CallOutcomeCancelled
+	}
+}
+
+// recordCall appends a call history message to the conversation and pushes it to
+// the members.
+//
+// Failures are logged but never surfaced: a missing history entry must not turn
+// a successful hangup into an error for the caller.
+func (h *CallHandler) recordCall(ctx context.Context, call *model.CallSession, outcome string) {
+	if h.msgRepo == nil || call == nil {
+		return
+	}
+	record := model.CallRecord{
+		CallID:          call.ID,
+		Mode:            call.Mode,
+		Outcome:         outcome,
+		DurationSeconds: int(call.DurationSeconds),
+		InitiatorID:     call.InitiatorID,
+	}
+	msg, err := h.msgRepo.CreateCallRecord(call.ConversationID, call.InitiatorID, record)
+	if err != nil {
+		logger.Log.Warn("failed to record the finished call", "error", err, "call_id", call.ID)
+		return
+	}
+	h.publishToConversation(ctx, events.ChatMessageCreated, call.ConversationID, msg)
+}
+
+// publishToConversation pushes an event to every active member of a conversation,
+// mirroring what the HTTP message handlers do after a write.
+func (h *CallHandler) publishToConversation(ctx context.Context, typ string, convID int64, payload interface{}) {
+	members, err := h.convRepo.ListMembers(convID)
+	if err != nil {
+		logger.Log.Warn("failed to list members for push", "error", err, "conversation_id", convID)
+		return
+	}
+	recipients := make([]int64, 0, len(members))
+	for _, m := range members {
+		if m.Status == "active" {
+			recipients = append(recipients, m.UserID)
+		}
+	}
+	events.Publish(ctx, typ, recipients, payload)
 }
 
 // publishToParticipants pushes an event to the whole call roster.

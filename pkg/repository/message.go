@@ -35,6 +35,20 @@ func parseMentions(data []byte) ([]int64, error) {
 	return mentions, nil
 }
 
+// parseCallRecord decodes the JSONB payload of a call history message. Every
+// other message kind stores NULL there, which scans as an empty slice and
+// yields a nil record.
+func parseCallRecord(data []byte) (*model.CallRecord, error) {
+	if len(data) == 0 {
+		return nil, nil
+	}
+	var record model.CallRecord
+	if err := json.Unmarshal(data, &record); err != nil {
+		return nil, err
+	}
+	return &record, nil
+}
+
 // Create inserts a new message with optional attachments and returns it with sender info.
 // [mentions] is the list of explicitly mentioned user IDs, plus -1 when
 // @everyone is used; an empty/nil slice means no mentions. When [checkID] > 0
@@ -105,7 +119,7 @@ func (r *MessageRepository) ListByConversation(conversationID int64, beforeID in
 	if limit < 1 || limit > 100 {
 		limit = 50
 	}
-	query := `SELECT m.id, m.conversation_id, m.sender_id, m.kind, COALESCE(m.check_id, 0) AS check_id, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at, m.mentions, m.burn_seconds, m.burn_at,
+	query := `SELECT m.id, m.conversation_id, m.sender_id, m.kind, COALESCE(m.check_id, 0) AS check_id, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at, m.mentions, m.burn_seconds, m.burn_at, m.call_meta,
 	                 COALESCE(NULLIF(u.nickname, ''), u.username) AS sender_name, u.avatar_url, u.is_verified` + authorMemberCols + `
 	          FROM messages m
 	          JOIN users u ON m.sender_id = u.id
@@ -127,14 +141,17 @@ func (r *MessageRepository) ListByConversation(conversationID int64, beforeID in
 	var msgIDs []int64
 	for rows.Next() {
 		var m model.Message
-		var mentionsData []byte
-		if err := rows.Scan(&m.ID, &m.ConversationID, &m.SenderID, &m.Kind, &m.CheckID, &m.Content, &m.ReplyToID, &m.EditedAt, &m.DeletedAt, &m.CreatedAt, &mentionsData, &m.BurnSeconds, &m.BurnAt, &m.SenderName, &m.SenderAvatar, &m.SenderVerified, &m.SenderIsBot, &m.SenderMemberLevel, &m.SenderMemberExpiresAt, &m.SenderNameColor, &m.SenderNameColorTo, &m.SenderNameDynamic, &m.SenderNameColors, &m.SenderNameGradientDirection, &m.SenderAvatarFrame); err != nil {
+		var mentionsData, callMetaData []byte
+		if err := rows.Scan(&m.ID, &m.ConversationID, &m.SenderID, &m.Kind, &m.CheckID, &m.Content, &m.ReplyToID, &m.EditedAt, &m.DeletedAt, &m.CreatedAt, &mentionsData, &m.BurnSeconds, &m.BurnAt, &callMetaData, &m.SenderName, &m.SenderAvatar, &m.SenderVerified, &m.SenderIsBot, &m.SenderMemberLevel, &m.SenderMemberExpiresAt, &m.SenderNameColor, &m.SenderNameColorTo, &m.SenderNameDynamic, &m.SenderNameColors, &m.SenderNameGradientDirection, &m.SenderAvatarFrame); err != nil {
 			return nil, fmt.Errorf("failed to scan message: %w", err)
 		}
 		applyMemberStatus(&m.SenderMemberLevel, &m.SenderMemberExpiresAt, &m.SenderMemberActive)
 		m.Mentions, err = parseMentions(mentionsData)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse message mentions: %w", err)
+		}
+		if m.Call, err = parseCallRecord(callMetaData); err != nil {
+			return nil, fmt.Errorf("failed to parse call record: %w", err)
 		}
 		msgs = append(msgs, m)
 		msgIDs = append(msgIDs, m.ID)
@@ -178,7 +195,7 @@ func (r *MessageRepository) Search(conversationID int64, f MessageSearchFilter, 
 	if limit < 1 || limit > 100 {
 		limit = 50
 	}
-	query := `SELECT m.id, m.conversation_id, m.sender_id, m.kind, COALESCE(m.check_id, 0) AS check_id, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at, m.mentions, m.burn_seconds, m.burn_at,
+	query := `SELECT m.id, m.conversation_id, m.sender_id, m.kind, COALESCE(m.check_id, 0) AS check_id, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at, m.mentions, m.burn_seconds, m.burn_at, m.call_meta,
 	                 COALESCE(NULLIF(u.nickname, ''), u.username) AS sender_name, u.avatar_url, u.is_verified` + authorMemberCols + `
 	          FROM messages m
 	          JOIN users u ON m.sender_id = u.id
@@ -220,14 +237,17 @@ func (r *MessageRepository) Search(conversationID int64, f MessageSearchFilter, 
 	var msgIDs []int64
 	for rows.Next() {
 		var m model.Message
-		var mentionsData []byte
-		if err := rows.Scan(&m.ID, &m.ConversationID, &m.SenderID, &m.Kind, &m.CheckID, &m.Content, &m.ReplyToID, &m.EditedAt, &m.DeletedAt, &m.CreatedAt, &mentionsData, &m.BurnSeconds, &m.BurnAt, &m.SenderName, &m.SenderAvatar, &m.SenderVerified, &m.SenderIsBot, &m.SenderMemberLevel, &m.SenderMemberExpiresAt, &m.SenderNameColor, &m.SenderNameColorTo, &m.SenderNameDynamic, &m.SenderNameColors, &m.SenderNameGradientDirection, &m.SenderAvatarFrame); err != nil {
+		var mentionsData, callMetaData []byte
+		if err := rows.Scan(&m.ID, &m.ConversationID, &m.SenderID, &m.Kind, &m.CheckID, &m.Content, &m.ReplyToID, &m.EditedAt, &m.DeletedAt, &m.CreatedAt, &mentionsData, &m.BurnSeconds, &m.BurnAt, &callMetaData, &m.SenderName, &m.SenderAvatar, &m.SenderVerified, &m.SenderIsBot, &m.SenderMemberLevel, &m.SenderMemberExpiresAt, &m.SenderNameColor, &m.SenderNameColorTo, &m.SenderNameDynamic, &m.SenderNameColors, &m.SenderNameGradientDirection, &m.SenderAvatarFrame); err != nil {
 			return nil, fmt.Errorf("failed to scan message: %w", err)
 		}
 		applyMemberStatus(&m.SenderMemberLevel, &m.SenderMemberExpiresAt, &m.SenderMemberActive)
 		m.Mentions, err = parseMentions(mentionsData)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse message mentions: %w", err)
+		}
+		if m.Call, err = parseCallRecord(callMetaData); err != nil {
+			return nil, fmt.Errorf("failed to parse call record: %w", err)
 		}
 		msgs = append(msgs, m)
 		msgIDs = append(msgIDs, m.ID)
@@ -248,15 +268,15 @@ func (r *MessageRepository) Search(conversationID int64, f MessageSearchFilter, 
 
 func (r *MessageRepository) getWithSender(id int64) (*model.Message, error) {
 	msg := &model.Message{}
-	var mentionsData []byte
+	var mentionsData, callMetaData []byte
 	err := database.DB.QueryRow(
-		`SELECT m.id, m.conversation_id, m.sender_id, m.kind, COALESCE(m.check_id, 0) AS check_id, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at, m.mentions, m.burn_seconds, m.burn_at,
+		`SELECT m.id, m.conversation_id, m.sender_id, m.kind, COALESCE(m.check_id, 0) AS check_id, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at, m.mentions, m.burn_seconds, m.burn_at, m.call_meta,
 		        COALESCE(NULLIF(u.nickname, ''), u.username) AS sender_name, u.avatar_url, u.is_verified`+authorMemberCols+`
 		 FROM messages m
 		 JOIN users u ON m.sender_id = u.id
 		 WHERE m.id = $1`,
 		id,
-	).Scan(&msg.ID, &msg.ConversationID, &msg.SenderID, &msg.Kind, &msg.CheckID, &msg.Content, &msg.ReplyToID, &msg.EditedAt, &msg.DeletedAt, &msg.CreatedAt, &mentionsData, &msg.BurnSeconds, &msg.BurnAt, &msg.SenderName, &msg.SenderAvatar, &msg.SenderVerified, &msg.SenderIsBot, &msg.SenderMemberLevel, &msg.SenderMemberExpiresAt, &msg.SenderNameColor, &msg.SenderNameColorTo, &msg.SenderNameDynamic, &msg.SenderNameColors, &msg.SenderNameGradientDirection, &msg.SenderAvatarFrame)
+	).Scan(&msg.ID, &msg.ConversationID, &msg.SenderID, &msg.Kind, &msg.CheckID, &msg.Content, &msg.ReplyToID, &msg.EditedAt, &msg.DeletedAt, &msg.CreatedAt, &mentionsData, &msg.BurnSeconds, &msg.BurnAt, &callMetaData, &msg.SenderName, &msg.SenderAvatar, &msg.SenderVerified, &msg.SenderIsBot, &msg.SenderMemberLevel, &msg.SenderMemberExpiresAt, &msg.SenderNameColor, &msg.SenderNameColorTo, &msg.SenderNameDynamic, &msg.SenderNameColors, &msg.SenderNameGradientDirection, &msg.SenderAvatarFrame)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get message: %w", err)
 	}
@@ -264,6 +284,9 @@ func (r *MessageRepository) getWithSender(id int64) (*model.Message, error) {
 	msg.Mentions, err = parseMentions(mentionsData)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse message mentions: %w", err)
+	}
+	if msg.Call, err = parseCallRecord(callMetaData); err != nil {
+		return nil, fmt.Errorf("failed to parse call record: %w", err)
 	}
 
 	if err := r.populateReplyPreview(msg); err != nil {
@@ -308,6 +331,43 @@ func (r *MessageRepository) CreateSystem(conversationID, actorID int64, kind str
 	).Scan(&msg.ID, &msg.ConversationID, &msg.SenderID, &msg.Kind, &msg.Content, &msg.ReplyToID, &msg.EditedAt, &msg.DeletedAt, &msg.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create system message: %w", err)
+	}
+
+	if _, err := database.DB.Exec(
+		"UPDATE conversations SET updated_at = NOW() WHERE id = $1",
+		conversationID,
+	); err != nil {
+		return nil, fmt.Errorf("failed to touch conversation: %w", err)
+	}
+
+	msg, err = r.getWithSender(msg.ID)
+	if err != nil {
+		return nil, err
+	}
+	return msg, nil
+}
+
+// CreateCallRecord inserts a call history entry (kind "call") for a finished
+// call and returns it with sender info.
+//
+// The content stays empty on purpose: the payload in [model.CallRecord] is what
+// clients render, so the server does not compose a sentence that would then
+// have to be translated in every client.
+func (r *MessageRepository) CreateCallRecord(conversationID, senderID int64, record model.CallRecord) (*model.Message, error) {
+	payload, err := json.Marshal(record)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode call record: %w", err)
+	}
+
+	msg := &model.Message{}
+	err = database.DB.QueryRow(
+		`INSERT INTO messages (conversation_id, sender_id, kind, content, call_meta)
+		 VALUES ($1, $2, $3, '', $4::jsonb)
+		 RETURNING id, conversation_id, sender_id, kind, content, reply_to_id, edited_at, deleted_at, created_at`,
+		conversationID, senderID, model.CallRecordKind, string(payload),
+	).Scan(&msg.ID, &msg.ConversationID, &msg.SenderID, &msg.Kind, &msg.Content, &msg.ReplyToID, &msg.EditedAt, &msg.DeletedAt, &msg.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create call record message: %w", err)
 	}
 
 	if _, err := database.DB.Exec(
