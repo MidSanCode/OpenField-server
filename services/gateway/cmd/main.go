@@ -365,6 +365,7 @@ func main() {
 		// straight between peers. chat.call is a separate key so calls can be
 		// withdrawn from a group without touching the rest of chat.
 		{http.MethodPost, "/api/v1/calls", cfg.Services.Chat, authPermission, "chat.call"},
+		{http.MethodGet, "/api/v1/conversations/:id/call", cfg.Services.Chat, authPermission, "chat.call"},
 		{http.MethodGet, "/api/v1/calls/:id", cfg.Services.Chat, authPermission, "chat.call"},
 		{http.MethodPost, "/api/v1/calls/:id/answer", cfg.Services.Chat, authPermission, "chat.call"},
 		{http.MethodPost, "/api/v1/calls/:id/decline", cfg.Services.Chat, authPermission, "chat.call"},

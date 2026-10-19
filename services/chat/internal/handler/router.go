@@ -26,6 +26,7 @@ func RegisterRoutes(r *gin.Engine, convHandler *ConversationHandler, consentHand
 			convs.POST("/start", convHandler.StartPrivateChat)
 			convs.GET("/public", convHandler.ListPublicGroups)
 			convs.GET("/:id", convHandler.Get)
+			convs.GET("/:id/call", callHandler.GetActiveForConversation)
 			convs.GET("/:id/e2ee-keys", convHandler.GetE2EEKeys)
 			convs.POST("/:id/e2ee-keys", convHandler.PutE2EEKeys)
 			convs.POST("/:id/invite", convHandler.InviteToGroup)

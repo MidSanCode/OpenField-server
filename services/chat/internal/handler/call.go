@@ -172,6 +172,44 @@ func (h *CallHandler) Get(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"call": call})
 }
 
+// GetActiveForConversation reports the live call of a conversation, or null.
+//
+// Clients need this when they open a chat or reconnect: pushes are best-effort
+// and there is no event replay, so without a way to ask "is there a call here?"
+// a client that missed call.invited would never learn about it (and could not
+// even guess the call id to GET /calls/:id).
+func (h *CallHandler) GetActiveForConversation(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	convID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || convID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid conversation ID"})
+		return
+	}
+
+	isMember, err := h.convRepo.IsMember(convID, userID)
+	if err != nil {
+		logger.Log.Error("failed to check membership for active call", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load call"})
+		return
+	}
+	if !isMember {
+		c.JSON(http.StatusForbidden, gin.H{"error": "you are not a member of this conversation"})
+		return
+	}
+
+	call, err := h.callRepo.GetLiveForConversation(convID)
+	if err != nil {
+		logger.Log.Error("failed to load live call", "error", err, "conversation_id", convID)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load call"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"call": call})
+}
+
 // Answer accepts a ringing call. Only one device can win: the update is
 // conditional on the call still ringing, and the loser gets 409 with the current
 // state so its UI can stop ringing instead of pretending to be connected.

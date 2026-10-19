@@ -618,6 +618,7 @@ in [calls.md](calls.md).
 ```
 POST   /calls                        Body: { "conversation_id": 1, "mode": "audio" }  → 201
 GET    /calls/:id                                                                     → 200
+GET    /conversations/:id/call       live call of a conversation, or null             → 200
 POST   /calls/:id/answer                                                              → 200
 POST   /calls/:id/decline                                                             → 200
 POST   /calls/:id/hangup                                                              → 200
