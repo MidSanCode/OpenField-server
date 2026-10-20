@@ -660,6 +660,42 @@ func (r *ConversationRepository) PutE2EEKeys(conversationID int64, envelopes map
 	}
 	version++
 
+	// A rotation must reach every member who currently has a published public
+	// key. Without this, any member could publish a version addressed to a subset
+	// of the conversation and lock everyone else out of the new group key — a
+	// denial of service that looks exactly like a normal rotation. Members with
+	// no published key are excluded from the requirement: nobody can encrypt to
+	// them yet, so demanding an envelope for them would make rotation impossible.
+	targets := make([]int64, 0, len(envelopes))
+	for targetUserID := range envelopes {
+		targets = append(targets, targetUserID)
+	}
+	covered, err := tx.Query(
+		`SELECT m.user_id
+		   FROM conversation_members m
+		   JOIN users u ON u.id = m.user_id
+		  WHERE m.conversation_id = $1
+		    AND m.status = 'active'
+		    AND COALESCE(u.e2ee_public_key, '') <> ''
+		    AND NOT (m.user_id = ANY($2))`,
+		conversationID, pq.Array(targets),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("failed to check e2ee envelope coverage: %w", err)
+	}
+	missed := 0
+	for covered.Next() {
+		missed++
+	}
+	coveredErr := covered.Err()
+	covered.Close()
+	if coveredErr != nil {
+		return 0, fmt.Errorf("failed to read e2ee envelope coverage: %w", coveredErr)
+	}
+	if missed > 0 {
+		return 0, ErrIncompleteKeyRotation
+	}
+
 	for targetUserID, ciphertext := range envelopes {
 		// Every envelope must address a current member of THIS conversation.
 		// Without this check a member could store an envelope for an arbitrary

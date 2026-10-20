@@ -1340,10 +1340,21 @@ func (h *ConversationHandler) PutE2EEKeys(c *gin.Context) {
 	version, err := h.convRepo.PutE2EEKeys(convID, req.Envelopes)
 	if err != nil {
 		// The repository refuses an envelope addressed to someone who is not an
-		// active member of this conversation.
+		// active member of this conversation, and refuses a rotation that skips a
+		// member who has a published public key.
 		if errors.Is(err, repository.ErrForbidden) {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error": "every envelope must target an active member of this conversation",
+			})
+			return
+		}
+		if errors.Is(err, repository.ErrIncompleteKeyRotation) {
+			// A partial rotation is not a client bug to retry blindly: it either
+			// came from a stale member list or from someone trying to cut members
+			// off. Say which members were skipped so the client can refresh and
+			// redo a complete rotation.
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "every member with a published key must receive an envelope; refresh the member list and rotate again",
 			})
 			return
 		}

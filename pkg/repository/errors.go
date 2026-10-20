@@ -48,6 +48,11 @@ var (
 	// ErrTooManyAttachments reports more attachment ids than one message may
 	// carry, which otherwise let a single request fan out into unbounded rows.
 	ErrTooManyAttachments = errors.New("too many attachments")
+	// ErrIncompleteKeyRotation reports a group-key rotation whose envelopes do
+	// not reach every member that has a published public key. Any member could
+	// otherwise publish a version addressed to a subset and lock the rest out of
+	// the new group key, which reads as a normal rotation on the wire.
+	ErrIncompleteKeyRotation = errors.New("every member with a published key must receive an envelope")
 	// ErrAlreadyReported reports that the caller already has a pending (open)
 	// report against the same target; one open report per reporter+target is
 	// enforced by a partial unique index.

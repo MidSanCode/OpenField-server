@@ -129,10 +129,67 @@ func (r *CheckRepository) ValidateOwnedActive(checkID, userID int64) error {
 	return nil
 }
 
+// checkContextVisible reports whether viewerID may reach the check through the
+// object it travels with: the conversation of the message that carries it, or
+// the post it was attached to. A check that is attached to nothing is reachable
+// by id alone, which is the only handle it has.
+//
+// This is what makes a check inside a friends-only post or a private chat behave
+// like the thing it is attached to instead of like a bearer token: without it the
+// id, which is sequential and therefore guessable, was the whole authorization.
+func checkContextVisible(checkID, viewerID int64) (bool, error) {
+	// A check rides in at most one place, but the message link is a column on
+	// messages rather than one on checks. A deleted message therefore frees the
+	// check, and an unattached one stays reachable by id alone.
+	var postID, convID int64
+	err := database.DB.QueryRow(
+		`SELECT COALESCE(c.post_id, 0),
+		        COALESCE((SELECT m.conversation_id FROM messages m
+		                   WHERE m.check_id = c.id AND m.deleted_at IS NULL
+		                   ORDER BY m.id ASC LIMIT 1), 0)
+		   FROM checks c WHERE c.id = $1`,
+		checkID,
+	).Scan(&postID, &convID)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("failed to resolve check context: %w", err)
+	}
+	if convID > 0 {
+		// A check in a conversation is for that conversation's members, exactly
+		// like the message around it.
+		return NewConversationRepository().IsMember(convID, viewerID)
+	}
+	if postID > 0 {
+		post, err := NewPostRepository().GetByID(postID)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				return false, nil
+			}
+			return false, err
+		}
+		if post == nil {
+			return false, nil
+		}
+		return canViewPost(post, viewerID), nil
+	}
+	return true, nil
+}
+
 // GetByID loads a check with creator info, claims and viewer-specific fields.
 // An expired but unrefunded check is lazily refunded before being returned so
 // clients never observe stale "claimable" state.
 func (r *CheckRepository) GetByID(id, viewerID int64) (*model.Check, error) {
+	visible, err := checkContextVisible(id, viewerID)
+	if err != nil {
+		return nil, err
+	}
+	if !visible {
+		// NotFound, not Forbidden: telling the caller "this exists but is not for
+		// you" turns the sequential id into an existence oracle.
+		return nil, ErrNotFound
+	}
 	expired, err := r.refundIfExpired(id)
 	if err == nil && expired {
 		// fall through: re-read below reflects the refunded state.
@@ -221,6 +278,17 @@ func (r *CheckRepository) Claim(id, userID int64) (*model.CheckClaim, error) {
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to lock check: %w", err)
+	}
+
+	// The check row is locked, but whether the caller may have it at all depends
+	// on the object it was shared through; that read is intentionally outside the
+	// lock (it can only move in the safer direction while we hold the row).
+	visible, err := checkContextVisible(id, userID)
+	if err != nil {
+		return nil, err
+	}
+	if !visible {
+		return nil, ErrNotFound
 	}
 
 	claimedCount := int64(0)

@@ -19,7 +19,6 @@ func NewGroupAnnouncementRepository() *GroupAnnouncementRepository {
 const announcementCols = `a.id, a.conversation_id, a.creator_id, a.title, a.content, a.created_at, a.updated_at,
 		COALESCE(NULLIF(u.nickname, ''), u.username) AS creator_name`
 
-
 // Create inserts an announcement.
 func (r *GroupAnnouncementRepository) Create(convID, creatorID int64, title, content string) (*model.GroupAnnouncement, error) {
 	a := &model.GroupAnnouncement{}
@@ -142,9 +141,20 @@ func (r *GroupTodoRepository) SetDone(id, convID, actorID int64, done bool) erro
 	return nil
 }
 
-// Delete removes one todo (creator or managers; the handler checks role).
-func (r *GroupTodoRepository) Delete(id, convID int64) error {
-	res, err := database.DB.Exec("DELETE FROM group_todos WHERE id = $1 AND conversation_id = $2", id, convID)
+// Delete removes one todo. A plain member may only remove a todo they wrote;
+// canModerate (manager or owner) lifts that restriction.
+//
+// The ownership test is part of the DELETE rather than a read-then-delete: the
+// creator cannot change in between, and the affected-row count already answers
+// "missing" and "not yours" the same way, which is what the caller wants.
+func (r *GroupTodoRepository) Delete(id, convID, actorID int64, canModerate bool) error {
+	query := "DELETE FROM group_todos WHERE id = $1 AND conversation_id = $2"
+	args := []any{id, convID}
+	if !canModerate {
+		query += " AND creator_id = $3"
+		args = append(args, actorID)
+	}
+	res, err := database.DB.Exec(query, args...)
 	if err != nil {
 		return fmt.Errorf("failed to delete todo: %w", err)
 	}

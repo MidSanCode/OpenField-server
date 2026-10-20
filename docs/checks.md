@@ -52,11 +52,26 @@ Returns the check plus denormalized display fields: `claims` (user name/avatar
 + amount each), `claimed_total`, and viewer-specific `claimed_by_me` /
 `my_amount`.
 
+A check is reachable through the object it was shared in, not by knowing its id:
+
+- attached to a post → the caller must be able to see that post (public, login,
+  friends-only for mutual follows, private for its author, camp posts for camp
+  members);
+- sent as a chat message → the caller must be an active member of that
+  conversation;
+- attached to nothing → reachable by id, because the id is the only handle it has
+  and the creator has not shared it anywhere yet.
+
+Anything else answers `404`, the same as an id that does not exist, so the
+sequential ids cannot be used to enumerate live checks. This applies to both this
+endpoint and the claim below, including its claim list: the list is not readable
+by someone who could not claim.
+
 ### `POST /api/v1/checks/:id/claim`
 
 Pays the caller one share. Response `200` `{ "claim": { ... } }`.
-Errors: `404` unknown id, `409` already fully claimed / refunded / expired, or
-already claimed by this user.
+Errors: `404` unknown or not reachable by the caller, `409` already fully
+claimed / refunded / expired, or already claimed by this user.
 
 ## Attaching to posts
 

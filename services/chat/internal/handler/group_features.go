@@ -51,16 +51,11 @@ func (h *GroupExtrasHandler) requireMember(c *gin.Context, convID int64, manager
 		return 0, false
 	}
 	if manager {
-		member, err := h.convRepo.GetMember(convID, userID)
+		isManager, err := h.isManager(convID, userID)
 		if err != nil {
 			logger.Log.Error("failed to load membership", "error", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check role"})
 			return 0, false
-		}
-		isManager := member != nil && (member.Role == "owner" || member.Role == "admin")
-		conv, err := h.convRepo.GetByID(convID)
-		if err == nil && conv != nil && conv.OwnerID == userID {
-			isManager = true
 		}
 		if !isManager {
 			c.JSON(http.StatusForbidden, gin.H{"error": "group manager role required"})
@@ -68,6 +63,24 @@ func (h *GroupExtrasHandler) requireMember(c *gin.Context, convID int64, manager
 		}
 	}
 	return userID, true
+}
+
+// isManager reports whether the member may act as a group manager: the
+// conversation owner, or a member whose role says so. A lookup failure is
+// treated as "not a manager" by callers that only need to widen a permission.
+func (h *GroupExtrasHandler) isManager(convID, userID int64) (bool, error) {
+	member, err := h.convRepo.GetMember(convID, userID)
+	if err != nil {
+		return false, err
+	}
+	if member != nil && (member.Role == "owner" || member.Role == "admin") {
+		return true, nil
+	}
+	conv, err := h.convRepo.GetByID(convID)
+	if err != nil || conv == nil {
+		return false, nil
+	}
+	return conv.OwnerID == userID, nil
 }
 
 // ---- announcements ----
@@ -253,14 +266,25 @@ func (h *GroupExtrasHandler) DeleteTodo(c *gin.Context) {
 	if !ok {
 		return
 	}
-	_ = userID
 	todoID, err := strconv.ParseInt(c.Param("todo_id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid todo ID"})
 		return
 	}
-	if err := h.todoRepo.Delete(todoID, convID); err != nil {
-		if err == repository.ErrNotFound {
+	// The comment above was the only thing claiming "creator or managers": the
+	// check below it asked for plain membership and discarded the caller's id, so
+	// any member could delete anyone's todo. The ownership test now travels into
+	// the DELETE statement, and only a manager lifts it.
+	canModerate, err := h.isManager(convID, userID)
+	if err != nil {
+		logger.Log.Error("failed to check role", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check role"})
+		return
+	}
+	if err := h.todoRepo.Delete(todoID, convID, userID, canModerate); err != nil {
+		// A todo that exists but belongs to someone else reports the same 404 as
+		// one that does not exist, so ids cannot be probed.
+		if err == repository.ErrNotFound || err == repository.ErrForbidden {
 			c.JSON(http.StatusNotFound, gin.H{"error": "todo not found"})
 			return
 		}
