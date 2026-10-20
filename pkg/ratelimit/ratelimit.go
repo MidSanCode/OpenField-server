@@ -42,6 +42,11 @@ func New(maxFailures int, window, lockout time.Duration) *Limiter {
 	}
 }
 
+// sweepThreshold is the entry count above which Fail reclaims dead entries. It
+// is a ceiling rather than a timer so the limiter needs no background goroutine
+// and behaves identically under test.
+const sweepThreshold = 4096
+
 // Allow reports whether the given key may attempt a verification right now.
 // Expired window entries are pruned lazily.
 func (l *Limiter) Allow(key string) bool {
@@ -88,6 +93,30 @@ func (l *Limiter) Fail(key string) {
 	e.stamps = append(e.stamps, now)
 	if len(e.stamps) >= l.maxFailures {
 		e.lockedTo = now.Add(l.lockout)
+	}
+	// Keys are attacker-supplied (a submitted username, a PIN-verify user id that
+	// never authenticated). Without this the map only ever shrank on Reset, so a
+	// caller feeding fresh keys grew it for as long as the process lived.
+	if len(l.entries) > sweepThreshold {
+		l.sweepEntries(now)
+	}
+}
+
+// sweepEntries forgets entries that no longer carry information: a lockout that
+// has been served in full, or a key whose every failure has aged out of the
+// window. Caller must hold l.mu.
+func (l *Limiter) sweepEntries(now time.Time) {
+	for key, e := range l.entries {
+		if !e.lockedTo.IsZero() {
+			if !now.Before(e.lockedTo) {
+				delete(l.entries, key)
+			}
+			continue
+		}
+		l.prune(e, now)
+		if len(e.stamps) == 0 {
+			delete(l.entries, key)
+		}
 	}
 }
 

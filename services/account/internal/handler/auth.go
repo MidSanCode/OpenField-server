@@ -190,8 +190,11 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 	if user == nil {
+		// Only the source address is counted for an unknown username. The account
+		// budget is keyed on the submitted name, so counting it here let anyone
+		// burn ten wrong guesses against a name that need not exist and lock out
+		// whoever holds it — and grew the limiter map with every invented name.
 		loginIPLimiter.Fail(ip)
-		loginAccountLimiter.Fail(accountKey)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid username or password"})
 		return
 	}

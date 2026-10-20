@@ -3,6 +3,7 @@ package main
 import (
 	"net"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -86,10 +87,24 @@ func (rl *rateLimiter) middleware() gin.HandlerFunc {
 		entry.lastSeen = time.Now()
 		rl.mu.Unlock()
 
-		// Tokens refill continuously; a short reservation wait absorbs
-		// bursts without failing legitimate page loads.
-		if err := entry.limiter.Wait(c.Request.Context()); err != nil {
-			// Request cancelled while waiting — abort quietly.
+		// Reject over-budget requests instead of queueing them. Wait() parked the
+		// handler goroutine (and the connection and its file descriptor) until a
+		// token refilled, so a client that opened many connections in parallel
+		// could pile up blocked handlers. Other limiters in this codebase (login,
+		// PIN, checks) reject for the same reason, so this matches their
+		// semantics: 429 with a Retry-After the caller can honour.
+		if !entry.limiter.Allow() {
+			// Reserve only to learn how long the bucket needs to refill, then
+			// cancel: an uncancelled reservation would charge the rejected
+			// request for a token in the future and lengthen the outage.
+			reservation := entry.limiter.Reserve()
+			wait := reservation.Delay()
+			reservation.Cancel()
+			seconds := int(wait.Seconds() + 0.999)
+			if seconds < 1 {
+				seconds = 1
+			}
+			c.Header("Retry-After", strconv.Itoa(seconds))
 			c.AbortWithStatus(http.StatusTooManyRequests)
 			return
 		}
