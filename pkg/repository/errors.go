@@ -36,6 +36,18 @@ var (
 	// ErrMemberLimitReached reports that a group chat or camp is at its member
 	// ceiling and cannot accept another member.
 	ErrMemberLimitReached = errors.New("member limit reached")
+	// ErrInvalidReplyTarget reports a reply_to_id that does not name a message in
+	// the conversation being written to. Message ids are global and sequential,
+	// so an unbound id let a caller quote any other conversation's message and
+	// read its body back through the reply preview.
+	ErrInvalidReplyTarget = errors.New("invalid reply target")
+	// ErrAttachmentNotOwned reports an attachment id that does not exist or
+	// belongs to another user. Attaching it would publish someone else's file on
+	// the caller's message and mint a server-signed URL for it.
+	ErrAttachmentNotOwned = errors.New("attachment not found or not owned by you")
+	// ErrTooManyAttachments reports more attachment ids than one message may
+	// carry, which otherwise let a single request fan out into unbounded rows.
+	ErrTooManyAttachments = errors.New("too many attachments")
 	// ErrAlreadyReported reports that the caller already has a pending (open)
 	// report against the same target; one open report per reporter+target is
 	// enforced by a partial unique index.

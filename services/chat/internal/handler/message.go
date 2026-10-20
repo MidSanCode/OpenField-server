@@ -307,6 +307,17 @@ func (h *MessageHandler) Send(c *gin.Context) {
 
 	msg, err := h.msgRepo.Create(convID, userID, req.Content, req.ReplyToID, req.AttachmentIDs, req.Mentions, req.CheckID, req.BurnSeconds)
 	if err != nil {
+		switch {
+		case errors.Is(err, repository.ErrInvalidReplyTarget):
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid reply target"})
+			return
+		case errors.Is(err, repository.ErrAttachmentNotOwned):
+			c.JSON(http.StatusBadRequest, gin.H{"error": "attachment not found or not owned by you"})
+			return
+		case errors.Is(err, repository.ErrTooManyAttachments):
+			c.JSON(http.StatusBadRequest, gin.H{"error": "too many attachments (max 9 per message)"})
+			return
+		}
 		logger.Log.Error("failed to send message", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to send message"})
 		return
@@ -438,7 +449,10 @@ func (h *MessageHandler) Forward(c *gin.Context) {
 			// Mentions do not survive a forward: the @-ed users belong to the
 			// source conversation, and re-resolving them in the target would
 			// surprise-notify strangers.
-			msg, err := h.msgRepo.Create(targetID, userID, item.content, nil, item.attachmentIDs, nil, 0, 0)
+			// Attachments are not re-authorized here on purpose: forward re-links
+			// the rows the source message already carries, and those ids come
+			// from that stored message rather than from the request.
+			msg, err := h.msgRepo.CreateForward(targetID, userID, item.content, nil, item.attachmentIDs, nil, 0, 0)
 			if err != nil {
 				logger.Log.Error("failed to create forwarded message", "error", err, "conversation_id", targetID)
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to forward messages"})

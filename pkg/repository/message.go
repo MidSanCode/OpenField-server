@@ -56,6 +56,17 @@ func parseCallRecord(data []byte) (*model.CallRecord, error) {
 // message for burn-after-read; the countdown starts on the first recipient
 // read (see MarkBurnRead).
 func (r *MessageRepository) Create(conversationID, senderID int64, content string, replyToID *int64, attachmentIDs []int64, mentions []int64, checkID int64, burnSeconds int) (*model.Message, error) {
+	return r.create(conversationID, senderID, content, replyToID, attachmentIDs, mentions, checkID, burnSeconds, true)
+}
+
+// CreateForward stores a message that re-links attachments the forwarder does
+// not own. Those rows were authorized when the original message was sent, and
+// re-checking ownership here would make forwarding any message with a file fail.
+func (r *MessageRepository) CreateForward(conversationID, senderID int64, content string, replyToID *int64, attachmentIDs []int64, mentions []int64, checkID int64, burnSeconds int) (*model.Message, error) {
+	return r.create(conversationID, senderID, content, replyToID, attachmentIDs, mentions, checkID, burnSeconds, false)
+}
+
+func (r *MessageRepository) create(conversationID, senderID int64, content string, replyToID *int64, attachmentIDs []int64, mentions []int64, checkID int64, burnSeconds int, enforceAttachmentOwnership bool) (*model.Message, error) {
 	if mentions == nil {
 		mentions = []int64{}
 	}
@@ -73,6 +84,42 @@ func (r *MessageRepository) Create(conversationID, senderID int64, content strin
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal mentions: %w", err)
 	}
+	// A reply may only quote a message from the conversation it is written to.
+	// The preview is rendered from the quoted row, so accepting an id from
+	// another conversation let a caller enumerate global message ids and read
+	// back other people's messages one at a time.
+	if replyToID != nil && *replyToID > 0 {
+		var owner int64
+		err := database.DB.QueryRow(
+			`SELECT conversation_id FROM messages WHERE id = $1`, *replyToID,
+		).Scan(&owner)
+		if err == sql.ErrNoRows {
+			// Same answer for "does not exist" and "belongs elsewhere": telling
+			// them apart would confirm that a guessed id is real.
+			return nil, ErrInvalidReplyTarget
+		}
+		if err != nil {
+			return nil, fmt.Errorf("failed to verify reply target: %w", err)
+		}
+		if owner != conversationID {
+			return nil, ErrInvalidReplyTarget
+		}
+	}
+
+	attachments := attachmentIDs
+	if enforceAttachmentOwnership {
+		// Only the uploader may publish an attachment. Without this check an
+		// attachment id belonging to someone else could be attached to the
+		// caller's message, which then signs a URL for it (see
+		// signMessageAttachments) and exposes a file the caller never had.
+		attachments, err = r.ownedAttachments(senderID, attachmentIDs)
+		if err != nil {
+			return nil, err
+		}
+	} else if len(attachments) > maxMessageAttachments {
+		return nil, ErrTooManyAttachments
+	}
+
 	msg := &model.Message{}
 	if err := database.DB.QueryRow(
 		`INSERT INTO messages (conversation_id, sender_id, kind, content, reply_to_id, mentions, check_id, burn_seconds)
@@ -84,8 +131,8 @@ func (r *MessageRepository) Create(conversationID, senderID int64, content strin
 	}
 	msg.Mentions = append([]int64(nil), mentions...)
 
-	if len(attachmentIDs) > 0 {
-		for _, attID := range attachmentIDs {
+	if len(attachments) > 0 {
+		for _, attID := range attachments {
 			if _, err := database.DB.Exec(
 				"INSERT INTO message_attachments (message_id, attachment_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
 				msg.ID, attID,
@@ -520,6 +567,48 @@ func (r *MessageRepository) SweepBurned() ([]model.Message, error) {
 	return swept, nil
 }
 
+// maxMessageAttachments mirrors the post-side limit and keeps a single message
+// from fanning out into an unbounded number of link rows.
+const maxMessageAttachments = 9
+
+// ownedAttachments deduplicates attachmentIDs and returns them only when the
+// sender uploaded every one. A duplicate id is dropped rather than rejected:
+// the link insert tolerates a repeat, so counting it twice would refuse an
+// otherwise valid request.
+func (r *MessageRepository) ownedAttachments(senderID int64, attachmentIDs []int64) ([]int64, error) {
+	if len(attachmentIDs) == 0 {
+		return nil, nil
+	}
+	unique := make([]int64, 0, len(attachmentIDs))
+	seen := make(map[int64]struct{}, len(attachmentIDs))
+	for _, id := range attachmentIDs {
+		if id <= 0 {
+			return nil, ErrAttachmentNotOwned
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		unique = append(unique, id)
+	}
+	if len(unique) > maxMessageAttachments {
+		return nil, ErrTooManyAttachments
+	}
+	var owned int
+	if err := database.DB.QueryRow(
+		`SELECT COUNT(*) FROM attachments WHERE user_id = $1 AND id = ANY($2)`,
+		senderID, pq.Array(unique),
+	).Scan(&owned); err != nil {
+		return nil, fmt.Errorf("failed to verify attachments: %w", err)
+	}
+	if owned != len(unique) {
+		// One answer for "not yours" and "does not exist", so an id cannot be
+		// probed for existence.
+		return nil, ErrAttachmentNotOwned
+	}
+	return unique, nil
+}
+
 // populateReplyPreview fills ReplyToName/ReplyToContent for a single message
 // from the message it quotes (content is blanked if the quoted message was
 // soft-deleted).
@@ -532,8 +621,8 @@ func (r *MessageRepository) populateReplyPreview(msg *model.Message) error {
 		        COALESCE(NULLIF(u.nickname, ''), u.username)
 		 FROM messages m
 		 LEFT JOIN users u ON m.sender_id = u.id
-		 WHERE m.id = $1`,
-		*msg.ReplyToID,
+		 WHERE m.id = $1 AND m.conversation_id = $2`,
+		*msg.ReplyToID, msg.ConversationID,
 	).Scan(&msg.ReplyToContent, &msg.ReplyToName)
 	if err == sql.ErrNoRows {
 		return nil
@@ -545,9 +634,19 @@ func (r *MessageRepository) populateReplyPreview(msg *model.Message) error {
 func (r *MessageRepository) populateReplyPreviews(msgs []model.Message) error {
 	ids := make([]int64, 0, len(msgs))
 	seen := make(map[int64]bool)
+	// The batch may span several conversations (a merged or forwarded list), so
+	// the previews are constrained to the set of conversations it came from.
+	// Write-time validation already binds a reply to its conversation; this is
+	// the second half, so a row that predates that check cannot leak either.
+	convIDs := make([]int64, 0, 1)
+	seenConv := make(map[int64]bool)
 	for i := range msgs {
 		if msgs[i].ReplyToID == nil {
 			continue
+		}
+		if !seenConv[msgs[i].ConversationID] {
+			seenConv[msgs[i].ConversationID] = true
+			convIDs = append(convIDs, msgs[i].ConversationID)
 		}
 		id := *msgs[i].ReplyToID
 		if id <= 0 || seen[id] {
@@ -565,8 +664,8 @@ func (r *MessageRepository) populateReplyPreviews(msgs []model.Message) error {
 		        COALESCE(NULLIF(u.nickname, ''), u.username)
 		 FROM messages m
 		 LEFT JOIN users u ON m.sender_id = u.id
-		 WHERE m.id = ANY($1)`,
-		pq.Array(ids),
+		 WHERE m.id = ANY($1) AND m.conversation_id = ANY($2)`,
+		pq.Array(ids), pq.Array(convIDs),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to query reply previews: %w", err)
