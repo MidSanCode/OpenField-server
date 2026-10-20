@@ -381,16 +381,21 @@ func (h *AuthHandler) OIDCCallback(c *gin.Context) {
 
 	// Web sign-ins get redirected to the frontend callback page rather than
 	// the app-protocol deep link, which most browsers refuse to open.
+	//
+	// The state is echoed back on purpose: it is the nonce this server minted for
+	// this attempt, and the client compares it against the one it saw in the
+	// authorize URL. Without it a client cannot tell its own callback from a link
+	// someone else crafted around a token they legitimately obtained.
 	if flow == "web" && h.webRedirectURL != "" {
-		webLink := fmt.Sprintf("%s?access_token=%s&refresh_token=%s&expires_in=%d&refresh_expires_in=%d&username=%s&email=%s&avatar_url=%s&needs_registration=%t",
-			h.webRedirectURL, accessToken, refreshToken, h.accessExpiresIn(), h.refreshExpiresIn(), url.QueryEscape(user.Username), url.QueryEscape(user.Email), url.QueryEscape(user.AvatarURL), user.NeedsRegistration)
+		webLink := fmt.Sprintf("%s?access_token=%s&refresh_token=%s&expires_in=%d&refresh_expires_in=%d&username=%s&email=%s&avatar_url=%s&needs_registration=%t&state=%s",
+			h.webRedirectURL, accessToken, refreshToken, h.accessExpiresIn(), h.refreshExpiresIn(), url.QueryEscape(user.Username), url.QueryEscape(user.Email), url.QueryEscape(user.AvatarURL), user.NeedsRegistration, url.QueryEscape(state))
 		c.Redirect(http.StatusFound, webLink)
 		return
 	}
 
 	if h.appRedirectURL != "" {
-		appLink := fmt.Sprintf("%s?access_token=%s&refresh_token=%s&expires_in=%d&refresh_expires_in=%d&username=%s&email=%s&avatar_url=%s&needs_registration=%t",
-			h.appRedirectURL, accessToken, refreshToken, h.accessExpiresIn(), h.refreshExpiresIn(), url.QueryEscape(user.Username), url.QueryEscape(user.Email), url.QueryEscape(user.AvatarURL), user.NeedsRegistration)
+		appLink := fmt.Sprintf("%s?access_token=%s&refresh_token=%s&expires_in=%d&refresh_expires_in=%d&username=%s&email=%s&avatar_url=%s&needs_registration=%t&state=%s",
+			h.appRedirectURL, accessToken, refreshToken, h.accessExpiresIn(), h.refreshExpiresIn(), url.QueryEscape(user.Username), url.QueryEscape(user.Email), url.QueryEscape(user.AvatarURL), user.NeedsRegistration, url.QueryEscape(state))
 		if strings.HasPrefix(h.appRedirectURL, "openfield://") || !strings.HasPrefix(h.appRedirectURL, "http") {
 			c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(loginResultPage(appLink, accessToken, refreshToken)))
 			return
@@ -457,15 +462,16 @@ func (h *AuthHandler) redirectToPick(c *gin.Context, userInfo *auth.UserInfo, fl
 	logger.Log.Info("multi-account pick ticket issued", "provider", provider, "identity", userInfo.OAuth2ID, "flow", flow)
 
 	// Web sign-ins get redirected to the frontend callback page, which then
-	// navigates the SPA to the account picker route with the ticket.
+	// navigates the SPA to the account picker route with the ticket. The state is
+	// echoed for the same reason as the token redirect above.
 	if flow == "web" && h.webRedirectURL != "" {
-		webLink := fmt.Sprintf("%s?pick=%s", h.webRedirectURL, url.QueryEscape(ticket))
+		webLink := fmt.Sprintf("%s?pick=%s&state=%s", h.webRedirectURL, url.QueryEscape(ticket), url.QueryEscape(c.Query("state")))
 		c.Redirect(http.StatusFound, webLink)
 		return
 	}
 
 	if h.appRedirectURL != "" {
-		appLink := fmt.Sprintf("%s?pick=%s", h.appRedirectURL, url.QueryEscape(ticket))
+		appLink := fmt.Sprintf("%s?pick=%s&state=%s", h.appRedirectURL, url.QueryEscape(ticket), url.QueryEscape(c.Query("state")))
 		if strings.HasPrefix(h.appRedirectURL, "openfield://") || !strings.HasPrefix(h.appRedirectURL, "http") {
 			c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(pickResultPage(appLink)))
 			return
