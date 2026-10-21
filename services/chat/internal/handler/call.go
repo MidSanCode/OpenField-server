@@ -2,6 +2,9 @@ package handler
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha1"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -17,6 +20,14 @@ import (
 	"github.com/openfield/server/pkg/model"
 	"github.com/openfield/server/pkg/repository"
 )
+
+// maxGroupCallParticipants caps a mesh call's roster. Mesh means every pair of
+// participants negotiates its own peer connection, so the connection count is
+// N(N-1)/2 per participant's perspective (N-1 outgoing); 20 keeps that at 19
+// connections worst case, which a desktop-class machine handles and a phone
+// starts to feel. The cap is also a rate-limit on signalling: refusing loudly
+// beats ringing a megaconference the clients cannot sustain.
+const maxGroupCallParticipants = 20
 
 // CallHandler implements peer-to-peer voice/video call signalling.
 //
@@ -36,6 +47,10 @@ type CallHandler struct {
 	// from the call section of the config file.
 	iceServers []map[string]string
 	turnSet    bool
+	// turnSecret, when non-empty, switches TURN to per-user short-lived
+	// credentials (coturn static-auth-secret scheme) instead of the static
+	// username/credential pair in the config.
+	turnSecret string
 }
 
 // NewCallHandler creates a new CallHandler. A nil config is allowed and yields
@@ -50,6 +65,7 @@ func NewCallHandler(cfg *config.Config) *CallHandler {
 	if cfg != nil {
 		h.iceServers = cfg.Call.ICEServers()
 		h.turnSet = cfg.Call.HasTURN()
+		h.turnSecret = cfg.Call.TURNSecret
 	} else {
 		h.iceServers = config.CallConfig{}.ICEServers()
 	}
@@ -63,15 +79,58 @@ func NewCallHandler(cfg *config.Config) *CallHandler {
 // user filling in a settings field. A response without a TURN entry means calls
 // will fail between two peers that both sit behind a symmetric NAT — the client
 // is told so it can warn instead of leaving the user staring at "connecting".
+//
+// When the operator configured a turn_secret, the TURN entry carries a
+// per-user credential valid for TurnTTL and scoped to the requesting user: the
+// username is `<expiry-unix>:<user_id>` and the credential is the HMAC-SHA1 of
+// that username keyed by the secret, which is coturn's static-auth-secret wire
+// format. A leaked pair therefore authenticates only that user's relayed
+// traffic for an hour, unlike the static pair which every client ever issued
+// shares for as long as the operator leaves it in place.
 func (h *CallHandler) IceServers(c *gin.Context) {
 	servers := h.iceServers
 	if servers == nil {
 		servers = []map[string]string{}
 	}
+
+	ttl := 0
+	if h.turnSecret != "" {
+		userID, ok := middleware.GetUserID(c)
+		if !ok {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			return
+		}
+		// The username embeds the user id and the expiry; coturn derives the
+		// credential from the username, so the relay cannot tell one user from
+		// another but each client's credentials only ever relay that client.
+		var username, credential string
+		username, credential, ttl = h.turnCredentials(userID)
+		for i := range servers {
+			if servers[i]["urls"] == "" {
+				continue
+			}
+			servers[i]["username"] = username
+			servers[i]["credential"] = credential
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"ice_servers": servers,
 		"turn":        h.turnSet,
+		"ttl":         ttl,
 	})
+}
+
+// turnCredentials derives one coturn static-auth-secret credential for a user.
+// The username encodes the expiry so the relay and the server agree on when it
+// stops being valid without any server-side state.
+func (h *CallHandler) turnCredentials(userID int64) (username, credential string, ttl int) {
+	expiry := time.Now().Add(config.TurnTTL).Unix()
+	username = strconv.FormatInt(expiry, 10) + ":" + strconv.FormatInt(userID, 10)
+	mac := hmac.New(sha1.New, []byte(h.turnSecret))
+	mac.Write([]byte(username))
+	credential = base64.StdEncoding.EncodeToString(mac.Sum(nil))
+	return username, credential, int(config.TurnTTL.Seconds())
 }
 
 // callSignalTypes are the only signalling messages a client may relay. They are
@@ -90,13 +149,19 @@ type startCallRequest struct {
 type callSignalRequest struct {
 	Type    string          `json:"type"`
 	Payload json.RawMessage `json:"payload"`
+	// ToUserID targets one participant (mesh: each pair negotiates its own
+	// connection). Absent or 0 broadcasts to every other participant, which is
+	// what one-to-one clients send today.
+	ToUserID int64 `json:"to_user_id"`
 }
 
-// Start opens a call in a one-to-one conversation and rings the peer.
+// Start opens a call in a conversation and rings the other participants.
 //
-// Group conversations are rejected for now: a group call needs either a mesh
-// (one peer connection per pair) or an SFU, and neither is implemented. Refusing
-// loudly beats ringing a group that cannot be joined.
+// One-to-one conversations ring a single peer. Group conversations ring every
+// active non-bot member and are relayed as a mesh: each pair of participants
+// negotiates its own peer connection over the signalling relay, so the server
+// still never sees media (see docs/calls.md). A group roster is capped at
+// maxGroupCallParticipants because the mesh fan-out is quadratic.
 func (h *CallHandler) Start(c *gin.Context) {
 	userID, ok := middleware.GetUserID(c)
 	if !ok {
@@ -133,8 +198,8 @@ func (h *CallHandler) Start(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "conversation not found"})
 		return
 	}
-	if conv.Type != "private" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "calls are only supported in one-to-one conversations"})
+	if conv.Type != "private" && conv.Type != "group" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "calls are only supported in one-to-one and group conversations"})
 		return
 	}
 
@@ -157,13 +222,35 @@ func (h *CallHandler) Start(c *gin.Context) {
 		return
 	}
 
-	peerID, err := h.convRepo.GetPrivatePeer(req.ConversationID, userID)
-	if err != nil || peerID <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "could not resolve the other participant"})
-		return
+	var invitees []int64
+	if conv.Type == "private" {
+		peerID, err := h.convRepo.GetPrivatePeer(req.ConversationID, userID)
+		if err != nil || peerID <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "could not resolve the other participant"})
+			return
+		}
+		invitees = []int64{peerID}
+	} else {
+		invitees, err = h.groupCallInvitees(req.ConversationID, userID)
+		if err != nil {
+			logger.Log.Error("failed to list group members for call", "error", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to start call"})
+			return
+		}
+		if len(invitees) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "there is nobody else to call in this conversation"})
+			return
+		}
+		if len(invitees)+1 > maxGroupCallParticipants {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "group calls support at most 20 participants",
+				"limit": maxGroupCallParticipants,
+			})
+			return
+		}
 	}
 
-	call, err := h.callRepo.CreateRinging(req.ConversationID, userID, mode, []int64{peerID})
+	call, err := h.callRepo.CreateRinging(req.ConversationID, userID, mode, invitees)
 	if err != nil {
 		if errors.Is(err, repository.ErrCallAlreadyActive) {
 			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
@@ -174,15 +261,38 @@ func (h *CallHandler) Start(c *gin.Context) {
 		return
 	}
 
-	events.Publish(c.Request.Context(), events.CallInvited, []int64{peerID}, gin.H{
+	payload := gin.H{
 		"call_id":         call.ID,
 		"conversation_id": call.ConversationID,
 		"initiator_id":    userID,
 		"mode":            call.Mode,
 		"created_at":      call.CreatedAt,
-	})
+	}
+	if conv.Type == "group" {
+		// Mesh invitees need the whole roster up front to open a peer
+		// connection per pair without waiting for a GET round trip.
+		payload["participant_ids"] = invitees
+	}
+	events.Publish(c.Request.Context(), events.CallInvited, invitees, payload)
 
 	c.JSON(http.StatusCreated, gin.H{"call": call})
+}
+
+// groupCallInvitees returns the active non-bot members of a group conversation
+// other than the initiator. Bots are excluded because a bot has no media
+// endpoint: ringing it would produce a phone that can never pick up.
+func (h *CallHandler) groupCallInvitees(convID, initiatorID int64) ([]int64, error) {
+	members, err := h.convRepo.ListMembers(convID)
+	if err != nil {
+		return nil, err
+	}
+	invitees := make([]int64, 0, len(members))
+	for _, m := range members {
+		if m.Status == "active" && m.UserID != initiatorID && !repository.RequesterIsBot(m.UserID) {
+			invitees = append(invitees, m.UserID)
+		}
+	}
+	return invitees, nil
 }
 
 // Get returns the call state. Clients call it when they join a conversation,
@@ -275,12 +385,39 @@ func (h *CallHandler) Answer(c *gin.Context) {
 		return
 	}
 	if !answered {
-		call, err := h.callRepo.Get(callID)
+		current, err := h.callRepo.Get(callID)
 		if err != nil {
 			c.JSON(http.StatusConflict, gin.H{"error": "call is no longer ringing"})
 			return
 		}
-		c.JSON(http.StatusConflict, gin.H{"error": "call is no longer ringing", "call": call})
+		if current.State == model.CallStateEnded {
+			c.JSON(http.StatusConflict, gin.H{"error": "call has ended", "call": current})
+			return
+		}
+		// One-to-one: whoever won the race answers, the other device learns it
+		// lost from the 409 and stops ringing.
+		if !h.isGroupCall(current) {
+			c.JSON(http.StatusConflict, gin.H{"error": "call is no longer ringing", "call": current})
+			return
+		}
+		// Multi-party: joining an already-active call is the normal flow, not a
+		// lost race — every member answers for themselves and gets their own
+		// mesh edges.
+		if err := h.callRepo.SetParticipantState(callID, userID, model.CallParticipantAccepted); err != nil {
+			logger.Log.Error("failed to join group call", "error", err, "call_id", callID)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to answer call"})
+			return
+		}
+		h.publishToParticipants(c.Request.Context(), events.CallAccepted, callID, gin.H{
+			"call_id": callID,
+			"user_id": userID,
+		})
+		updated, err := h.callRepo.Get(callID)
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{"status": "answered"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"call": updated})
 		return
 	}
 
@@ -300,8 +437,9 @@ func (h *CallHandler) Answer(c *gin.Context) {
 }
 
 // Decline rejects a ringing call. In a one-to-one conversation a decline ends
-// the attempt outright; once group calls exist this becomes "leave the ringing
-// set" instead.
+// the attempt outright. In a multi-party call it just removes this ringer from
+// the ringing set — everyone else keeps ringing, and the sweeper cancels the
+// call if nobody ever picks up.
 func (h *CallHandler) Decline(c *gin.Context) {
 	userID, ok := middleware.GetUserID(c)
 	if !ok {
@@ -328,12 +466,19 @@ func (h *CallHandler) Decline(c *gin.Context) {
 		"user_id": userID,
 	})
 
-	h.endCall(c.Request.Context(), callID, "declined")
+	if !h.isGroupCall(call) {
+		h.endCall(c.Request.Context(), callID, "declined")
+	}
 	c.JSON(http.StatusOK, gin.H{"status": "declined"})
 }
 
 // Hangup ends the call from either side. While the call is still ringing this is
 // a cancel (the caller gave up); afterwards it ends the conversation.
+//
+// In a multi-party call a hangup only removes this participant: their mesh edges
+// are torn down, everyone else keeps talking, and the call ends once no accepted
+// participant is left. A hangup by the initiator while the call is still ringing
+// cancels the whole attempt, because there is nobody on the other end to talk to.
 func (h *CallHandler) Hangup(c *gin.Context) {
 	userID, ok := middleware.GetUserID(c)
 	if !ok {
@@ -355,6 +500,34 @@ func (h *CallHandler) Hangup(c *gin.Context) {
 	}
 	if err := h.callRepo.SetParticipantState(callID, userID, model.CallParticipantLeft); err != nil {
 		logger.Log.Warn("failed to mark call participant left", "error", err, "call_id", callID)
+	}
+
+	if h.isGroupCall(call) {
+		// The initiator cancelling a ringing attempt ends it for everyone:
+		// nobody has picked up, so there is nothing to keep ringing.
+		if call.State == model.CallStateRinging && call.InitiatorID == userID {
+			h.endCall(c.Request.Context(), callID, reason)
+			c.JSON(http.StatusOK, gin.H{"status": "ended"})
+			return
+		}
+		remaining, err := h.callRepo.AcceptedParticipants(callID)
+		if err != nil {
+			logger.Log.Error("failed to count remaining call participants", "error", err, "call_id", callID)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to leave call"})
+			return
+		}
+		if len(remaining) == 0 {
+			h.endCall(c.Request.Context(), callID, reason)
+			c.JSON(http.StatusOK, gin.H{"status": "ended"})
+			return
+		}
+		// Others are still connected: tell them to drop the edge to the leaver.
+		events.Publish(c.Request.Context(), events.CallParticipantLeft, remaining, gin.H{
+			"call_id": callID,
+			"user_id": userID,
+		})
+		c.JSON(http.StatusOK, gin.H{"status": "left"})
+		return
 	}
 
 	h.endCall(c.Request.Context(), callID, reason)
@@ -405,11 +578,34 @@ func (h *CallHandler) Signal(c *gin.Context) {
 		return
 	}
 
-	recipients, err := h.otherParticipants(callID, userID)
-	if err != nil {
-		logger.Log.Error("failed to list call participants", "error", err, "call_id", callID)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to relay signal"})
-		return
+	// A mesh call negotiates one connection per pair, so the sender names the
+	// target; a one-to-one client omits it and the signal goes to the single
+	// other participant, keeping the old contract intact.
+	var recipients []int64
+	var rerr error
+	if req.ToUserID > 0 {
+		if req.ToUserID == userID {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "you cannot signal yourself"})
+			return
+		}
+		ok, rerr := h.callRepo.IsParticipant(callID, req.ToUserID)
+		if rerr != nil {
+			logger.Log.Error("failed to check signal target", "error", rerr, "call_id", callID)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to relay signal"})
+			return
+		}
+		if !ok {
+			c.JSON(http.StatusForbidden, gin.H{"error": "target is not a participant of this call"})
+			return
+		}
+		recipients = []int64{req.ToUserID}
+	} else {
+		recipients, rerr = h.otherParticipants(callID, userID)
+		if rerr != nil {
+			logger.Log.Error("failed to list call participants", "error", rerr, "call_id", callID)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to relay signal"})
+			return
+		}
 	}
 	if len(recipients) == 0 {
 		c.JSON(http.StatusConflict, gin.H{"error": "no other participant to signal"})
@@ -419,6 +615,7 @@ func (h *CallHandler) Signal(c *gin.Context) {
 	events.Publish(c.Request.Context(), events.CallSignal, recipients, gin.H{
 		"call_id":      callID,
 		"from_user_id": userID,
+		"to_user_id":   req.ToUserID,
 		"type":         req.Type,
 		"payload":      req.Payload,
 	})
@@ -572,6 +769,14 @@ func (h *CallHandler) otherParticipants(callID, userID int64) ([]int64, error) {
 		}
 	}
 	return out, nil
+}
+
+// isGroupCall reports whether the call has more than two participants on the
+// roster. A call opened in a group conversation with exactly one other member
+// behaves exactly like a one-to-one call, so the roster size — not the
+// conversation type — is what decides.
+func (h *CallHandler) isGroupCall(call *model.CallSession) bool {
+	return call != nil && len(call.Participants) > 2
 }
 
 // loadCallForParticipant resolves the call and enforces that the requester is on

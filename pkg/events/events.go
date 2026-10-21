@@ -71,6 +71,11 @@ const (
 	CallInvited  = "call.invited"
 	CallAccepted = "call.accepted"
 	CallDeclined = "call.declined"
-	CallEnded    = "call.ended"
-	CallSignal   = "call.signal"
+	// CallParticipantLeft fires when one participant of a multi-party call hangs
+	// up while the call itself continues. One-to-one hangups end the call and
+	// emit CallEnded instead, so this event only reaches mesh call members who
+	// need to tear down the peer connection to the leaver.
+	CallParticipantLeft = "call.participant_left"
+	CallEnded          = "call.ended"
+	CallSignal         = "call.signal"
 )

@@ -7,7 +7,7 @@ OpenField 的通话是**点对点（P2P）**的：媒体流在两端之间直接
 
 服务端不解码、不转码、不转发媒体，因此**没有媒体带宽成本**，也不需要部署 SFU/MCU。代价是：没有 TURN 服务器时，部分网络环境（对称 NAT、企业防火墙）无法建连——TURN 的部署见第 9 节。
 
-> 当前范围：**一对一（`type = private`）会话内的通话**。群组通话需要 mesh 或 SFU，尚未实现，接口会明确拒绝（见 5.1）。
+> 当前范围：一对一（`type = private`）会话内，以及**群组（`type = group`）会话内**的通话。群组通话采用 **mesh**（两两建连）：服务端只多了一样东西——信令可以**指定对端**（`to_user_id`），媒体仍然不经过服务端，无需部署 SFU（见 5.6）。群组通话人数上限 20（`maxGroupCallParticipants`）。
 
 ---
 
@@ -114,11 +114,13 @@ POST /api/v1/calls
 
 | 状态码 | 含义 |
 |---|---|
-| `201` | 已发起，返回 `{"call": {...}}`，同时向对端推送 `call.invited` |
-| `400` | 参数错误；或会话不是 `private`（群组通话未实现）；或解析不出对端 |
+| `201` | 已发起，返回 `{"call": {...}}`，同时向被叫方推送 `call.invited`（群组通话额外携带 `participant_ids` 花名册） |
+| `400` | 参数错误；或会话类型不是 `private`/`group`；或群组里除了自己没有任何可呼叫成员；或群组人数超过 20；或解析不出对端 |
 | `403` | 不是该会话成员；或发起方是 bot 账号（bot 没有媒体端点，见 10） |
 | `404` | 会话不存在 |
 | `409` | 该会话已有进行中的通话 |
+
+群组通话的花名册 = 会话中**活跃（`status = active`）且非 bot** 的成员，发起人自己除外（bot 会被静默跳过，见 11）。
 
 ### 5.2 查询通话
 
@@ -144,7 +146,11 @@ POST /api/v1/calls/:id/answer
 |---|---|
 | `400` | 发起人试图接听自己的去电 |
 | `403` | 不是参与者 |
-| `409` | 已不再响铃（已被其它端接听 / 已拒接 / 已超时），响应体带当前 `call` |
+| `409` | 通话已结束 |
+
+一对一场景下，`409` 也用于"已不再响铃（已被其它端接听 / 已拒接 / 已超时）"，响应体带当前 `call`，让输掉抢接的端停止响铃。
+
+**群组（mesh）语义**：每个成员**各自接听**——第一个接听的人把通话从 `ringing` 推进到 `active`，之后其他人接听属于"加入进行中的通话"（正常流程，不是输掉抢接，返回 `200` 而不是 `409`）。每个加入者都要为花名册里的每个已接受成员建立自己的对等连接。
 
 ### 5.4 拒接
 
@@ -153,6 +159,8 @@ POST /api/v1/calls/:id/decline
 ```
 
 一对一场景下拒接即**结束整通电话**（`end_reason = declined`），并推送 `call.declined` 给发起人、`call.ended` 给全体。
+
+**群组（mesh）语义**：拒接只把**自己**移出响铃名单（标记 `declined`），通话继续对其他人响铃；如果一直没人接，由 sweeper 超时收尾。发起人仍会收到 `call.declined` 事件。
 
 ### 5.5 挂断
 
@@ -165,6 +173,12 @@ POST /api/v1/calls/:id/hangup
 
 `End()` 是条件更新（`WHERE state <> 'ended'`），所以 `call.ended` 事件**只会推送一次**。
 
+**群组（mesh）语义**：挂断只把自己标记为 `left` 并拆掉自己的对等连接——
+
+- 发起人在**振铃阶段**挂断 → 整通作废（`end_reason = cancelled`），因为另一端没人可聊；
+- 其他时候挂断 → 只要还有**任何已接受（`accepted`）**的参与者就继续通话，并向其余已接受者推送 `call.participant_left`（让它们拆掉通向挂断者的对等连接）；
+- 最后一个已接受者挂断 → 通话结束（`end_reason = hung_up`）。
+
 ### 5.6 信令中继
 
 ```
@@ -175,10 +189,15 @@ POST /api/v1/calls/:id/signal
 { "type": "offer", "payload": { "...": "SDP 或 candidate，原样透传" } }
 ```
 
+```json
+{ "type": "candidate", "to_user_id": 456, "payload": { "candidate": "..." } }
+```
+
 - `type` 只能是 `offer` / `answer` / `candidate`；`payload` 是**不透明**数据，服务端不解析、不校验结构。
+- `to_user_id` 可省略：省略时转发给**所有**其他参与者（一对一客户端的现有契约）；指定时只转发给该参与者（mesh 需要，每对连接单独协商）。目标必须是本通话的参与者，否则 `403`。
 - 上限 **6000 字节**（`repository.MaxSignalBytes`），超出返回 `413`。原因是 `pg_notify` 单条上限 8000 字节，事件信封还要占约 200 字节；与其让超长载荷在 `NOTIFY` 里静默丢失，不如在 API 层明确拒绝。音频 SDP 约 1 KB、单个 candidate 几百字节，正常流量远低于该上限。
 - **不落库**：candidate 交换频率高、通话结束后即无价值。
-- 转发给**其他参与者**，事件为 `call.signal`。无对端可投递时返回 `409`；通话已结束返回 `409`。
+- 转发事件为 `call.signal`。无对端可投递时返回 `409`；通话已结束返回 `409`。
 
 ### 5.7 查询会话当前通话
 
@@ -198,11 +217,12 @@ GET /api/v1/conversations/:id/call
 
 | 事件 | 接收者 | 载荷 |
 |---|---|---|
-| `call.invited` | 被叫方 | `call_id`, `conversation_id`, `initiator_id`, `mode`, `created_at` |
+| `call.invited` | 被叫方 | `call_id`, `conversation_id`, `initiator_id`, `mode`, `created_at`（群组通话另有 `participant_ids` 花名册） |
 | `call.accepted` | 全体参与者 | `call_id`, `user_id` |
 | `call.declined` | 发起人 | `call_id`, `user_id` |
+| `call.participant_left` | 其余已接受参与者 | `call_id`, `user_id`（群组 mesh 专用：有人挂断但通话继续，收件人应拆掉通向该用户的对等连接） |
 | `call.ended` | 全体参与者 | `call_id`, `conversation_id`, `end_reason`, `duration_seconds` |
-| `call.signal` | 其他参与者 | `call_id`, `from_user_id`, `type`, `payload` |
+| `call.signal` | 目标或全体其他参与者 | `call_id`, `from_user_id`, `to_user_id`, `type`, `payload` |
 
 **已知限制（多端）**：`Hub` 按 `user_id` 索引连接（`hub.go` 的 `byUser`），`Client` 不带设备标识，所以 `call.signal` 会投递到被叫**所有**设备。客户端必须按 `call_id` 过滤，并且只在真正接听的那台设备上处理协商数据。若要精确投递，需要给 WS 票据增加 `session_id` 并在 `Hub` 中增加按会话投递的能力——属于后续优化，不在本阶段。
 
@@ -259,13 +279,34 @@ Flutter 客户端（`openfield/`）已按下列流程接完：
 call:
   stun_urls: ["stun:stun.example.com:3478"]   # 省略则用内置公共 STUN 列表
   turn_url: "turn:turn.example.com:3478"
-  turn_username: "openfield"
-  turn_credential: "change-me"
+  turn_secret: "<coturn use-auth-secret 的共享密钥>"   # 推荐；与 turn_username/turn_credential 二选一
+  # turn_username: "openfield"                # 静态凭据（旧方式，见下）
+  # turn_credential: "change-me"
 ```
 
-环境变量同样生效：`CALL_STUN_URLS`（逗号分隔）、`CALL_TURN_URL`、`CALL_TURN_USERNAME`、`CALL_TURN_CREDENTIAL`。
+环境变量同样生效：`CALL_STUN_URLS`（逗号分隔）、`CALL_TURN_URL`、`CALL_TURN_USERNAME`、`CALL_TURN_CREDENTIAL`、`CALL_TURN_SECRET`。
 
-`GET /api/v1/calls/ice` 响应：
+### 9.1 按用户短期凭据（推荐）
+
+配置了 `turn_secret` 时，`GET /api/v1/calls/ice` 不再下发配置里的静态用户名密码，而是为**当前请求的用户**签发一对短期凭据（coturn 的 `use-auth-secret` / static-auth-secret 格式）：
+
+```json
+{
+  "ice_servers": [
+    {"urls": "stun:stun.l.google.com:19302"},
+    {"urls": "turn:turn.example.com:3478", "username": "1736000000:42", "credential": "7j...base64"}
+  ],
+  "turn": true,
+  "ttl": 3600
+}
+```
+
+- `username = "<过期unix时间戳>:<user_id>"`，`credential = base64(HMAC-SHA1(turn_secret, username))`，有效期 1 小时（`config.TurnTTL`）。coturn 按同一个密钥验签并检查时间戳，因此服务端不需要存任何会话状态。
+- 好处：**泄漏的凭据只对应一个用户、一小时**；而静态凭据是全系统共享的，任何一个客户端拿到就等于永久拿走了中继的钥匙。`ttl` 字段告诉客户端何时该重新拉取。
+- 客户端的接入方式不变：直接把 `ice_servers` 里的 `username`/`credential` 塞进 `RTCIceServer` 即可。**凭据过期后**（1 小时），客户端在通话建立阶段应重新 `GET /calls/ice` 再重协商，而不是一直拿过期凭据撞 NAT。
+- 未配置 `turn_secret` 时保持旧行为（静态凭据原样下发、无 `ttl` 字段），现有部署不受影响。
+
+### 9.2 静态凭据（旧方式）
 
 ```json
 {
@@ -282,7 +323,7 @@ call:
 部署 coturn 的要点：
 
 - 开放 `3478/udp`、`3478/tcp`、`5349/tls` 与中继端口段；
-- 生产**不要**用静态用户名密码，用 `use-auth-secret` 由服务端按 `user_id` + 过期时间签发短期凭证（当前配置只支持静态凭据，按用户签发是后续工作）；
+- 生产**不要**用静态用户名密码，配 `use-auth-secret`，把共享密钥填到本服务的 `call.turn_secret`，由服务端按 `user_id` + 过期时间签发短期凭证（见 9.1）；
 - 只有中继的流量计费，经验比例 10%～20%；
 - 媒体加密：P2P 下由 **DTLS-SRTP** 保证端到端加密，媒体不经过服务器。但**信令与元数据**（谁打给谁、时间、时长）对服务端可见，文档与产品文案不应声称"完全不可见"。
 
@@ -308,11 +349,10 @@ call:
 ## 11. 已知限制
 
 - **App 被杀死时收不到来电**：iOS 只有在 App 存活（前台或后台）时才能把来电投进 CallKit。要覆盖被杀死的情况需要 PushKit VoIP 推送，它要求 APNs VoIP 证书与付费开发者账号；服务端也需要新增 VoIP 推送通道。这是当前最大的缺口。
-- **群组通话未实现**：`type = group` 的会话直接返回 `400`。要支持需要 mesh（两两建连，上行带宽随人数线性增长）或 SFU（新增有状态媒体服务），是另一个量级的工作。
-- **bot 不能发起通话**：bot 没有媒体端点，发起的通话只会让对方无意义响铃，因此 `POST /calls` 对 bot 返回 `403`。反之，用户给 **bot** 打电话会正常响铃然后 45 秒后超时——目前不额外拦截，如需更友好的提示可加一条"对端是 bot"的预检。
+- **群组通话是 mesh**：两两建连，**上行**带宽随人数线性增长（每人多 N-1 份自己的上行流），人数上限 20。超过 20 人的群组建议用 SFU（新增有状态媒体服务，当前未实现）。mesh 不做"响铃/接通"的强一致：加入的成员各自协商，迟到的成员靠 `call.accepted` 事件 + `GET /calls/:id` 拉花名册补齐对等连接。
+- **bot 不能发起通话**：bot 没有媒体端点，发起的通话只会让对方无意义响铃，因此 `POST /calls` 对 bot 返回 `403`。反之，用户给 **bot** 打电话会正常响铃然后 45 秒后超时——目前不额外拦截，如需更友好的提示可加一条"对端是 bot"的预检。群组通话的 bot 成员会被**静默跳过**（不进花名册）。
 - **多端精确投递**：见第 6 节，`call.signal` 会投递到被叫所有设备，需要客户端按 `call_id` 过滤。
 - **无事件重放**：推送是尽力而为，客户端必须靠 `GET /conversations/:id/call` 与 `GET /calls/:id` 兜底对齐状态。重连后已接通但未重协商的通话无法恢复，客户端只在 `ringing` 时接管。
-- **TURN 凭据是静态的**：配置里只有一个用户名密码，所有用户共用。按用户签发短期凭证尚未实现。
 
 ## 12. 排障
 

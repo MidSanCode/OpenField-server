@@ -337,7 +337,19 @@ type CallConfig struct {
 	// TURNUsername and TURNCredential authenticate against TURNURL.
 	TURNUsername   string `yaml:"turn_username"`
 	TURNCredential string `yaml:"turn_credential"`
+	// TURNSecret switches the relay to per-user time-limited credentials
+	// (coturn's static-auth-secret scheme): when set, TURNUsername and
+	// TURNCredential above are ignored and every client gets a short-lived
+	// username/password pair derived from this shared secret. The static pair
+	// is a shared secret of its own, so it cannot be rotated per user and it
+	// leaks to every client that ever asked for ICE servers.
+	TURNSecret string `yaml:"turn_secret"`
 }
+
+// TurnTTL is how long a per-user TURN credential stays valid. The credential's
+// username carries the expiry, so a client that re-requests ICE servers when the
+// clock crosses the deadline always gets a fresh pair without extra state.
+const TurnTTL = time.Hour
 
 // Config holds all configuration for the server.
 type Config struct {
@@ -538,6 +550,9 @@ func (c *Config) overrideFromEnv() {
 	}
 	if v := os.Getenv("CALL_TURN_CREDENTIAL"); v != "" {
 		c.Call.TURNCredential = v
+	}
+	if v := os.Getenv("CALL_TURN_SECRET"); v != "" {
+		c.Call.TURNSecret = v
 	}
 }
 
