@@ -308,7 +308,10 @@ type Camp struct {
 	Announcement string `json:"announcement"`
 	MemberCount  int64  `json:"member_count"`
 	PostCount    int64  `json:"post_count"`
-	IsMember     bool   `json:"is_member"`
+	// IconURL is the camp's icon/avatar image URL; empty when the camp has no
+	// icon yet. Only the owner/creator may upload it.
+	IconURL  string `json:"icon_url,omitempty"`
+	IsMember bool   `json:"is_member"`
 	// MyRole is the caller's role in this camp: "owner", "admin", "member",
 	// or "" for non-members. Populated by GetByID with a non-zero userID.
 	MyRole    string    `json:"my_role,omitempty"`

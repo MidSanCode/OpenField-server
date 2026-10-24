@@ -1,8 +1,10 @@
 package handler
 
 import (
+	"bytes"
 	"database/sql"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -406,6 +408,94 @@ func (h *CampHandler) SetAnnouncement(c *gin.Context) {
 	camp, err := h.repo.GetByID(id, userID)
 	if err != nil || camp == nil {
 		c.JSON(http.StatusOK, gin.H{"status": "updated"})
+		return
+	}
+	c.JSON(http.StatusOK, camp)
+}
+
+// campIconMimeAllowed restricts camp icons to inert raster formats, mirroring
+// the avatar/banner allowlist in the account service.
+func campIconMimeAllowed(contentType string) bool {
+	switch storage.NormalizeMimeType(contentType) {
+	case "image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp":
+		return true
+	}
+	return false
+}
+
+// UploadIcon stores a camp icon image and points the camp at it. Owner/camp
+// admins only (same rule as the announcement). Multipart field "file".
+func (h *CampHandler) UploadIcon(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid camp ID"})
+		return
+	}
+	if h.store == nil || !h.store.Enabled() {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "storage not configured"})
+		return
+	}
+	// Reject early for non-managers before touching the upload.
+	if role, err := h.repo.GetRole(id, userID); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "camp not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check camp role"})
+		return
+	} else if role != model.CampRoleOwner && role != model.CampRoleAdmin {
+		c.JSON(http.StatusForbidden, gin.H{"error": "camp owner or admins only"})
+		return
+	}
+
+	file, header, err := c.Request.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing file field"})
+		return
+	}
+	defer file.Close()
+
+	contentType := storage.NormalizeMimeType(header.Header.Get("Content-Type"))
+	if contentType == "" {
+		contentType = "image/jpeg"
+	}
+	if !campIconMimeAllowed(contentType) {
+		c.JSON(http.StatusUnsupportedMediaType, gin.H{"error": "icon must be a PNG, JPEG, GIF or WebP image"})
+		return
+	}
+
+	data, err := io.ReadAll(file)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read image"})
+		return
+	}
+	// Confirm the bytes really are an image (the header is advisory).
+	if detected := http.DetectContentType(data); !campIconMimeAllowed(storage.NormalizeMimeType(detected)) {
+		c.JSON(http.StatusUnsupportedMediaType, gin.H{"error": "file does not look like an image"})
+		return
+	}
+
+	store := h.store.Default()
+	_, url, err := store.Upload(c.Request.Context(), userID, bytes.NewReader(data), int64(len(data)), contentType, header.Filename)
+	if err != nil {
+		logger.Log.Error("failed to upload camp icon", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upload icon"})
+		return
+	}
+
+	camp, err := h.repo.SetIcon(id, userID, url)
+	if err != nil {
+		if errors.Is(err, repository.ErrForbidden) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "camp owner or admins only"})
+			return
+		}
+		logger.Log.Error("failed to set camp icon", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to set camp icon"})
 		return
 	}
 	c.JSON(http.StatusOK, camp)

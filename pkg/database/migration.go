@@ -832,6 +832,16 @@ var versionedMigrations = []migration{
 			ALTER TABLE messages ADD COLUMN IF NOT EXISTS call_meta JSONB;
 		`,
 	},
+	{
+		// v36 adds an optional icon/avatar to a camp, so a camp can show an
+		// image in the directory and card view. Empty string = no icon. Only
+		// the owner/creator may set it (enforced in the handler).
+		version: 36,
+		name:    "camp-icon",
+		sql: `
+			ALTER TABLE camps ADD COLUMN IF NOT EXISTS icon_url TEXT NOT NULL DEFAULT '';
+		`,
+	},
 }
 
 // latestMigrationVersion returns the newest schema version the code knows

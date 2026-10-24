@@ -17,12 +17,12 @@ func NewCampRepository() *CampRepository {
 	return &CampRepository{}
 }
 
-const campCols = `c.id, c.name, c.description, c.creator_id, c.is_visible, c.direct_join, COALESCE(c.parent_camp_id, 0) AS parent_camp_id, c.member_post, c.member_pin, c.announcement,
+const campCols = `c.id, c.name, c.description, c.creator_id, c.is_visible, c.direct_join, COALESCE(c.parent_camp_id, 0) AS parent_camp_id, c.member_post, c.member_pin, c.announcement, c.icon_url,
 		(SELECT COUNT(*) FROM camp_members cm WHERE cm.camp_id = c.id) AS member_count,
 		(SELECT COUNT(*) FROM posts p WHERE p.camp_id = c.id) AS post_count,
 		c.created_at, c.updated_at`
 
-const campScan = `&c.ID, &c.Name, &c.Description, &c.CreatorID, &c.IsVisible, &c.DirectJoin, &c.ParentCampID, &c.MemberPost, &c.MemberPin, &c.Announcement,
+const campScan = `&c.ID, &c.Name, &c.Description, &c.CreatorID, &c.IsVisible, &c.DirectJoin, &c.ParentCampID, &c.MemberPost, &c.MemberPin, &c.Announcement, &c.IconURL,
 		&c.MemberCount, &c.PostCount, &c.CreatedAt, &c.UpdatedAt`
 
 // Create inserts a camp and adds the creator as its owner. memberPost/
@@ -330,6 +330,30 @@ func (r *CampRepository) SetAnnouncement(campID, actorID int64, announcement str
 		return ErrNotFound
 	}
 	return nil
+}
+
+// SetIcon sets a camp's icon URL (owner/camp-admins only, mirroring the
+// announcement permission). An empty string clears the icon. Returns the
+// refreshed camp so the caller can hand it back to the client.
+func (r *CampRepository) SetIcon(campID, actorID int64, iconURL string) (*model.Camp, error) {
+	role, err := r.GetRole(campID, actorID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check camp role: %w", err)
+	}
+	if role != model.CampRoleOwner && role != model.CampRoleAdmin {
+		return nil, ErrForbidden
+	}
+	res, err := database.DB.Exec(
+		"UPDATE camps SET icon_url = $2, updated_at = NOW() WHERE id = $1",
+		campID, iconURL,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to set camp icon: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, ErrNotFound
+	}
+	return r.GetByID(campID, actorID)
 }
 
 // Delete removes a camp (creator only). Subgroups of the camp are removed by

@@ -50,6 +50,7 @@ func RegisterRoutes(r *gin.Engine, postHandler *PostHandler, campHandler *CampHa
 			auth.POST("/camps/:id/subgroups", campHandler.CreateSubgroup)
 			auth.PUT("/camps/:id", campHandler.Update)
 			auth.PUT("/camps/:id/announcement", campHandler.SetAnnouncement)
+			auth.PUT("/camps/:id/icon", campHandler.UploadIcon)
 			auth.DELETE("/camps/:id", campHandler.Delete)
 			auth.POST("/camps/:id/join", campHandler.Join)
 			auth.DELETE("/camps/:id/members/me", campHandler.Leave)
