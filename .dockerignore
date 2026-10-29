@@ -1,0 +1,25 @@
+# Keep the build context small and never ship secrets or local state into it.
+.git
+.gitignore
+.github
+
+# Local configuration may contain real credentials.
+config/config.local.yaml
+*.local
+*.secret
+*.env
+
+# Local runtime state / build output.
+bin/
+dist/
+build/
+data/
+logs/
+db/
+redis/
+*.log
+*.exe
+
+# Docs and archives are not needed to compile a service.
+docs/
+*.zip

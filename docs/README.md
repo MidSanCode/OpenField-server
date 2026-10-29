@@ -175,6 +175,41 @@ For a full local stack use the launchers: `scripts/start.sh` (Linux/macOS, start
 six services) or `run.bat` (Windows, also starts the optional plugin service).
 Neither starts the Flask admin panel.
 
+## Docker images
+
+One image is built per service from the single root `Dockerfile`; the `SERVICE`
+build arg picks which `services/<name>/cmd` to compile.
+
+```bash
+docker build --build-arg SERVICE=gateway -t openfield-gateway .
+docker build --build-arg SERVICE=account -t openfield-account .
+
+docker run --rm -p 8080:8080 \
+  -v "$PWD/config/config.local.yaml:/etc/openfield/config.yaml:ro" \
+  openfield-gateway
+```
+
+The image reads `$OPENFIELD_CONFIG` (default `/etc/openfield/config.yaml`), so a
+config file must be mounted or the container exits on startup. Each service
+listens on the port taken from the config (`server.port` for the gateway, the
+matching `services.*` URL for everything else) — the defaults are gateway 8080,
+account 8081, storage 8082, chat 8083, posts 8084, push 8085, plugin 8086,
+translate 8087. `config/config.example.yaml` ships inside the image as a
+starting point.
+
+Images run as an unprivileged user (uid 10001). The plugin service stores its
+bundles in `/app/data/plugins` (`OPENFIELD_PLUGIN_DIR`); mount `/app/data` if
+they should survive a restart.
+
+`.github/workflows/docker.yml` builds and publishes every service image to
+Docker Hub on pushes to `master` and on `v*` tags (multi-arch `amd64`/`arm64`,
+plus SBOM and provenance), and only validates the build on pull requests. It
+discovers services from `services/*/cmd`, so a new service needs no workflow
+edit. Configure the `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` repository
+secrets; set the optional `DOCKERHUB_NAMESPACE` variable to publish under a
+different org than the account. Images are named
+`<namespace>/openfield-<service>`.
+
 ## API Documentation
 
 See [API.md](API.md) for the REST reference on the core resources; features added

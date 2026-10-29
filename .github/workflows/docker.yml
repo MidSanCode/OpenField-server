@@ -1,0 +1,207 @@
+name: Docker (build & push)
+
+# Builds one container image per server service and publishes them to Docker
+# Hub. Services are discovered from the tree (every services/<name>/cmd), so a
+# new service is picked up without editing this file.
+#
+# Required repository secrets:
+#   DOCKERHUB_USERNAME  Docker Hub account that owns the images
+#   DOCKERHUB_TOKEN     Docker Hub access token (Read & Write)
+# Optional repository variable:
+#   DOCKERHUB_NAMESPACE  publish under a different org/user than the account
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      services:
+        description: 'Only build these services (comma separated, empty = all)'
+        type: string
+        default: ''
+      platforms:
+        description: 'Target platforms'
+        type: choice
+        options:
+          - linux/amd64,linux/arm64
+          - linux/amd64
+          - linux/arm64
+        default: linux/amd64,linux/arm64
+      push:
+        description: 'Push the images to Docker Hub'
+        type: boolean
+        default: true
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: '1.25'
+
+jobs:
+  # Discovers the services to build and derives the version stamped into the
+  # images, so the matrix below needs no hand-maintained list.
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      services: ${{ steps.discover.outputs.services }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Discover services
+        id: discover
+        env:
+          ONLY: ${{ inputs.services }}
+        run: |
+          set -euo pipefail
+          list=""
+          if [ -n "${ONLY// /}" ]; then
+            # Explicit selection: validate every name has a buildable command.
+            list=$(printf '%s' "$ONLY" | tr ',' '\n' | tr -d ' ' | sed '/^$/d')
+          else
+            list=$(for d in services/*/cmd; do
+              [ -d "$d" ] && basename "$(dirname "$d")"
+            done | sort)
+          fi
+          if [ -z "$list" ]; then
+            echo 'no services found (expected services/<name>/cmd)' >&2
+            exit 1
+          fi
+          for s in $list; do
+            if [ ! -d "services/$s/cmd" ]; then
+              echo "service '$s' has no services/$s/cmd" >&2
+              exit 1
+            fi
+          done
+          echo "services: $(echo $list | tr '\n' ' ')"
+          echo "services=$(echo "$list" | jq -R -s -c 'split("\n") | map(select(length > 0))')" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve version
+        id: version
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            version="${GITHUB_REF_NAME}"
+          else
+            version="sha-$(git rev-parse --short HEAD)"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "version: $version"
+
+  docker:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJSON(needs.prepare.outputs.services) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve image settings
+        id: cfg
+        env:
+          NAMESPACE_VAR: ${{ vars.DOCKERHUB_NAMESPACE }}
+          NAMESPACE_SECRET: ${{ secrets.DOCKERHUB_USERNAME }}
+          SERVICE: ${{ matrix.service }}
+          PLATFORMS_INPUT: ${{ inputs.platforms }}
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_PUSH: ${{ inputs.push }}
+        run: |
+          set -euo pipefail
+          # Pull requests only validate the build: no credentials, no push.
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            push=false
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$DISPATCH_PUSH" != "true" ]; then
+            push=false
+          else
+            push=true
+          fi
+
+          namespace="${NAMESPACE_VAR:-$NAMESPACE_SECRET}"
+          if [ "$push" = "true" ] && [ -z "$namespace" ]; then
+            echo 'set the DOCKERHUB_USERNAME secret (or a DOCKERHUB_NAMESPACE variable)' >&2
+            exit 1
+          fi
+          # A PR build never pushes, so an empty namespace just needs a valid
+          # (unused) image reference to keep the metadata/build steps happy.
+          namespace="${namespace:-openfield-pr}"
+
+          # Default listen port per service, mirroring config services.* and
+          # server.port in config/config.example.yaml.
+          case "$SERVICE" in
+            gateway)   port=8080 ;;
+            account)   port=8081 ;;
+            storage)   port=8082 ;;
+            chat)      port=8083 ;;
+            posts)     port=8084 ;;
+            push)      port=8085 ;;
+            plugin)    port=8086 ;;
+            translate) port=8087 ;;
+            *)         port=8080 ;;
+          esac
+          {
+            echo "push=$push"
+            echo "image=${namespace,,}/openfield-${SERVICE}"
+            echo "port=$port"
+            echo "platforms=${PLATFORMS_INPUT:-linux/amd64,linux/arm64}"
+          } >> "$GITHUB_OUTPUT"
+
+      # arm64 images are cross-built; only spin up QEMU when actually needed.
+      # QEMU must be registered before the builder is created so buildx knows
+      # about the extra platform.
+      - uses: docker/setup-qemu-action@v3
+        if: contains(steps.cfg.outputs.platforms, 'arm64')
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        if: steps.cfg.outputs.push == 'true'
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.cfg.outputs.image }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-,format=short
+          labels: |
+            org.opencontainers.image.title=openfield-${{ matrix.service }}
+            org.opencontainers.image.description=OpenField server - ${{ matrix.service }} service
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Build and push ${{ matrix.service }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: ${{ steps.cfg.outputs.platforms }}
+          push: ${{ steps.cfg.outputs.push == 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            GO_VERSION=${{ env.GO_VERSION }}
+            SERVICE=${{ matrix.service }}
+            VERSION=${{ needs.prepare.outputs.version }}
+            PORT=${{ steps.cfg.outputs.port }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+          # Attestations are only produced for pushed images; PR builds just
+          # compile the Dockerfile and throw the result away.
+          provenance: ${{ steps.cfg.outputs.push == 'true' }}
+          sbom: ${{ steps.cfg.outputs.push == 'true' }}
