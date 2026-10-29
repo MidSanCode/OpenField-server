@@ -266,6 +266,32 @@ func (r *CallRepository) SetParticipantState(callID, userID int64, state string)
 	return nil
 }
 
+// AcceptedParticipants returns the user ids currently in the 'accepted' state,
+// i.e. the people actually connected to the call. A group hangup uses it to
+// decide whether the call can continue: no accepted participant left, no call.
+func (r *CallRepository) AcceptedParticipants(callID int64) ([]int64, error) {
+	rows, err := database.DB.Query(
+		`SELECT user_id FROM call_participants WHERE call_id = $1 AND state = 'accepted' ORDER BY user_id`,
+		callID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list accepted call participants: %w", err)
+	}
+	defer rows.Close()
+	ids := make([]int64, 0, 2)
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("failed to scan accepted call participant: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
 // End terminates a live call and records why. It returns false when the call was
 // already ended, so callers publish the "call ended" event exactly once.
 func (r *CallRepository) End(callID int64, reason string) (bool, error) {
